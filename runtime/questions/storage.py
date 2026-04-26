@@ -11,6 +11,7 @@ from uuid import uuid4
 from runtime.questions.generator import generate_questions
 from runtime.questions.model import question_to_dict
 from runtime.services.query_service import ReviewInput, RuleQueryService
+from runtime.review.clause_level import build_clause_level_result
 
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
@@ -68,9 +69,32 @@ def create_session(
     intake: dict[str, Any] | None = None,
     source: str = "upload",
 ) -> dict[str, Any]:
-    pre = service.analyze(ReviewInput(entity=entity, contract_type=contract_type, text=text, filename=filename))
+    bundle = build_clause_level_result(
+        service=service,
+        entity=str(entity),
+        contract_type=str(contract_type),
+        text=str(text),
+        filename=str(filename) if isinstance(filename, str) else None,
+        answers=None,
+        law_service=None,
+        ai_provider=None,
+        ai_model=None,
+        ai_timeout_sec=None,
+        ai_max_tokens=None,
+        ai_temperature=None,
+        max_clause_law_items=0,
+    )
+    pre = bundle.review
     detected_ids = [r.get("rule_id") for r in pre.get("matched_rules", []) if isinstance(r.get("rule_id"), str)]
-    qs = generate_questions(entity=entity, contract_type=contract_type, detected_rule_ids=detected_ids)
+    qs = generate_questions(
+        entity=entity,
+        contract_type=contract_type,
+        detected_rule_ids=detected_ids,
+        law_topics=None,
+        contract_text=text,
+        clause_results=bundle.clause_results,
+        max_questions=5,
+    )
 
     now = _utc_now_iso()
     session_id = uuid4().hex
@@ -111,9 +135,24 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
     contract_type = doc.get("contract_type", "all")
     filename = (doc.get("input") or {}).get("filename")
     answers = doc.get("answers") or {}
-    result = service.analyze(
-        ReviewInput(entity=entity, contract_type=contract_type, text=text, filename=filename, answers=answers)
+    bundle = build_clause_level_result(
+        service=service,
+        entity=str(entity),
+        contract_type=str(contract_type),
+        text=str(text),
+        filename=str(filename) if isinstance(filename, str) else None,
+        answers=answers if isinstance(answers, dict) else None,
+        law_service=None,
+        ai_provider=None,
+        ai_model=None,
+        ai_timeout_sec=None,
+        ai_max_tokens=None,
+        ai_temperature=None,
+        max_clause_law_items=0,
     )
+    result = dict(bundle.review)
+    result["clause_results"] = bundle.clause_results
+    result["clause_meta"] = bundle.meta
     doc["review_result"] = result
     doc["updated_at"] = _utc_now_iso()
     save_session(doc)

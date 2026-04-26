@@ -149,6 +149,26 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX IF NOT EXISTS idx_approval_handoff_request_id ON approval_handoff(request_id);
         """,
     ),
+    (
+        6,
+        """
+        CREATE TABLE IF NOT EXISTS review_clause_result (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          request_id TEXT NOT NULL,
+          clause_id TEXT NOT NULL,
+          clause_title TEXT,
+          original_text TEXT,
+          suggested_rewrite TEXT,
+          rewrite_reason TEXT,
+          approval_required INTEGER NOT NULL,
+          high_risk INTEGER NOT NULL,
+          result_json TEXT NOT NULL,
+          FOREIGN KEY (request_id) REFERENCES review_request(request_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_clause_request ON review_clause_result(request_id);
+        CREATE INDEX IF NOT EXISTS idx_review_clause_clause_id ON review_clause_result(request_id, clause_id);
+        """,
+    ),
 ]
 
 

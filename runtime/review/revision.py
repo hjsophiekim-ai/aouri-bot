@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from runtime.services.query_service import TRIGGER_MAP
+from runtime.review.rewrite_engine import propose_clause_specific_rewrite
 
 
 @dataclass(frozen=True)
@@ -30,21 +31,71 @@ SUGGESTION_BY_RULE_ID = {
     "RISK-006": "대리점 비용전가 항목을 상한/정산 기준/증빙/사전합의로 제한",
 }
 
+_WORD_XML_MARKERS = (
+    "<w:",
+    "</w:",
+    "w:rPr",
+    "w:pPr",
+    "w:ins",
+    "w:del",
+    "w:delText",
+    "<?xml",
+    "xmlns:w=",
+)
+
+
+def _contains_wordprocessingml_markers(text: str) -> bool:
+    s = text or ""
+    if not s:
+        return False
+    return any(m in s for m in _WORD_XML_MARKERS)
+
+
+def _clean_contract_text(text: str) -> str:
+    s = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    s = s.replace("\ufeff", "").replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
+    lines = []
+    for line in s.split("\n"):
+        l = line.strip()
+        if not l:
+            lines.append("")
+            continue
+        if _contains_wordprocessingml_markers(l):
+            continue
+        if re.match(r"^</?[A-Za-z0-9]+:[^>]+>$", l):
+            continue
+        if re.match(r"^<\?xml\b", l):
+            continue
+        lines.append(line)
+    s = "\n".join(lines)
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
+
+def _normalize_clause_id(raw: str) -> str:
+    s = re.sub(r"\s+", "", raw or "")
+    s = s.replace("의", "-")
+    s = re.sub(r"[^0-9\-]", "", s)
+    s = re.sub(r"\-+", "-", s).strip("-")
+    return s or "0"
+
 
 def split_into_clauses(text: str) -> list[ClauseChunk]:
-    s = (text or "").strip()
+    s = _clean_contract_text(text)
     if not s:
         return []
 
     lines = s.splitlines()
     idxs: list[int] = []
     titles: dict[int, str] = {}
+    ids: dict[int, str] = {}
 
     for i, line in enumerate(lines):
         l = line.strip()
         if not l:
             continue
-        m = re.match(r"^(제\s*\d+\s*조)\s*(?:\(([^)]{1,40})\))?\s*(.*)$", l)
+        m = re.match(r"^(제\s*\d+(?:\s*의\s*\d+)?\s*조)\s*(?:\(([^)]{1,80})\))?\s*(.*)$", l)
         if m:
             idxs.append(i)
             head = m.group(1)
@@ -52,18 +103,49 @@ def split_into_clauses(text: str) -> list[ClauseChunk]:
             rest = m.group(3) or ""
             title = " ".join(x for x in [head, name, rest] if x).strip()
             titles[i] = title
+            num = re.sub(r"[^\d의\s]", "", head)
+            ids[i] = "KR-" + _normalize_clause_id(num)
             continue
-        m2 = re.match(r"^(Article\s+\d+)\.?\s*(.*)$", l, flags=re.IGNORECASE)
+        m2 = re.match(r"^(Article\s+(?:\d{1,3}|[IVXLC]{1,10}))\.?\s*(.*)$", l, flags=re.IGNORECASE)
         if m2:
             idxs.append(i)
             titles[i] = (m2.group(1) + " " + (m2.group(2) or "")).strip()
+            ids[i] = "EN-" + re.sub(r"\s+", "-", m2.group(1).strip().upper())
+            continue
+        m3 = re.match(r"^(?:\(\s*(\d{1,3}(?:\.\d{1,3})*)\s*\)|(\d{1,3}(?:\.\d{1,3})*)\)|(\d{1,3}(?:\.\d{1,3})*)\.)\s*(.+)$", l)
+        if m3:
+            tail = (m3.group(4) or "").strip()
+            if 0 < len(tail) <= 160:
+                idxs.append(i)
+                num = m3.group(1) or m3.group(2) or m3.group(3) or ""
+                titles[i] = (f"{num}. {tail}".strip())
+                ids[i] = "N-" + num
+            continue
+        m4 = re.match(r"^([IVXLC]{1,10})\.\s*(.+)$", l)
+        if m4:
+            tail = (m4.group(2) or "").strip()
+            if 0 < len(tail) <= 160:
+                idxs.append(i)
+                titles[i] = (m4.group(1) + ". " + tail).strip()
+                ids[i] = "ROM-" + m4.group(1)
+            continue
+        m5 = re.match(r"^(?:\(\s*([가-하])\s*\)|([가-하])\)|([가-하])\.)\s*(.+)$", l)
+        if m5:
+            tail = (m5.group(4) or "").strip()
+            if 0 < len(tail) <= 160:
+                idxs.append(i)
+                k = m5.group(1) or m5.group(2) or m5.group(3) or ""
+                titles[i] = (f"{k}. {tail}".strip())
+                ids[i] = "KR-" + k
+            continue
 
     if not idxs:
         chunks = _chunk_by_paragraphs(s)
-        return [
-            ClauseChunk(clause_id=f"P-{i+1:03d}", title=f"문단 {i+1}", text=t)
-            for i, t in enumerate(chunks)
-        ]
+        out: list[ClauseChunk] = []
+        for i, t in enumerate(chunks):
+            cid = f"P-{i+1:03d}"
+            out.append(ClauseChunk(clause_id=cid, title=f"문단 {i+1}", text=t))
+        return out
 
     idxs = sorted(set(idxs))
     idxs.append(len(lines))
@@ -71,22 +153,35 @@ def split_into_clauses(text: str) -> list[ClauseChunk]:
     for j in range(len(idxs) - 1):
         start = idxs[j]
         end = idxs[j + 1]
-        block = "\n".join(lines[start:end]).strip()
+        block = _clean_contract_text("\n".join(lines[start:end]).strip())
         if not block:
             continue
-        cid = f"C-{j+1:03d}"
-        out.append(ClauseChunk(clause_id=cid, title=titles.get(start, cid), text=block))
+        cid = ids.get(start) or f"C-{j+1:03d}"
+        title = titles.get(start, cid)
+        if len(block) > 2200:
+            subs = _chunk_by_paragraphs(block)
+            for k, sub in enumerate(subs):
+                sub_id = f"{cid}.{k+1}" if len(subs) > 1 else cid
+                out.append(ClauseChunk(clause_id=sub_id, title=title, text=sub))
+        else:
+            out.append(ClauseChunk(clause_id=cid, title=title, text=block))
     return out
 
 
 def _chunk_by_paragraphs(text: str) -> list[str]:
     parts = re.split(r"\n\s*\n", text)
-    out = []
+    out: list[str] = []
     for p in parts:
         p = p.strip()
         if not p:
             continue
-        out.append(p)
+        if len(p) <= 1800:
+            out.append(p)
+            continue
+        cur = p
+        while cur:
+            out.append(cur[:1800].strip())
+            cur = cur[1800:].strip()
     return out
 
 
@@ -178,7 +273,9 @@ def suggest_revisions(
         seen = set()
         replacement_texts = [x for x in replacement_texts if not (x in seen or seen.add(x))]
 
-        recommended_rewrite = replacement_texts[0] if replacement_texts else None
+        proposal = propose_clause_specific_rewrite(clause_text=c.text, applied_rules=applied_rules)
+        recommended_rewrite = proposal.suggested_rewrite if proposal else None
+        rewrite_reason = proposal.rewrite_reason if proposal else None
 
         items.append(
             {
@@ -191,6 +288,7 @@ def suggest_revisions(
                 "suggested_direction": suggestion_dirs,
                 "fallback_text": replacement_texts,
                 "recommended_rewrite": recommended_rewrite,
+                "rewrite_reason": rewrite_reason,
                 "high_risk": high_risk,
                 "approval_required": approval_required,
             }

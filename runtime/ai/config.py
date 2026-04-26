@@ -39,8 +39,9 @@ def _coerce_int(v: Any, default: int) -> int:
 
 
 def load_ai_config() -> AIConfig:
+    dotenv_disabled = (os.getenv("AOURIBOT_DOTENV_DISABLED") or "").strip().lower() in ("1", "true", "yes")
     existing = os.getenv("OPENAI_API_KEY")
-    if existing is None or str(existing).strip() == "":
+    if not dotenv_disabled and (existing is None or str(existing).strip() == ""):
         load_dotenv(
             resolve_dotenv_paths(cwd=Path.cwd(), repo_root=REPO_ROOT),
             override=False,

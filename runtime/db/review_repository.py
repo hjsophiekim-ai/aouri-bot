@@ -91,6 +91,9 @@ class ReviewRepository:
             if isinstance(review_result.get("approval_required_matches"), list)
             else []
         )
+        clause_results = (
+            review_result.get("clause_results") if isinstance(review_result.get("clause_results"), list) else []
+        )
 
         high_risk_count = 0
         approval_required_count = len(approval_required_matches)
@@ -141,6 +144,24 @@ class ReviewRepository:
                     severity,
                     f"matched rule: {rid} (risk={risk}, status={r.get('rule_status')})",
                     rid,
+                )
+            )
+
+        clause_rows: list[tuple] = []
+        for cr in clause_results:
+            if not isinstance(cr, dict):
+                continue
+            clause_rows.append(
+                (
+                    request_id,
+                    str(cr.get("clause_id") or ""),
+                    str(cr.get("clause_title") or ""),
+                    str(cr.get("original_text") or ""),
+                    str(cr.get("suggested_rewrite") or ""),
+                    str(cr.get("rewrite_reason") or ""),
+                    1 if cr.get("approval_required") else 0,
+                    1 if cr.get("high_risk") else 0,
+                    json.dumps(cr, ensure_ascii=False),
                 )
             )
 
@@ -198,6 +219,16 @@ class ReviewRepository:
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     issues,
+                )
+            if clause_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO review_clause_result(
+                      request_id, clause_id, clause_title, original_text, suggested_rewrite, rewrite_reason,
+                      approval_required, high_risk, result_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    clause_rows,
                 )
 
             if int(high_risk_count) > 0 or int(approval_required_count) > 0:
@@ -383,6 +414,16 @@ class ReviewRepository:
                 """,
                 (request_id,),
             ).fetchall()
+            clause_rows = conn.execute(
+                """
+                SELECT clause_id, clause_title, original_text, suggested_rewrite, rewrite_reason,
+                       approval_required, high_risk, result_json
+                FROM review_clause_result
+                WHERE request_id = ?
+                ORDER BY approval_required DESC, high_risk DESC, clause_id ASC
+                """,
+                (request_id,),
+            ).fetchall()
 
             raw_obj = json.loads(res["raw_json"]) if res and res["raw_json"] else {}
             summary_obj = json.loads(res["summary_json"]) if res and res["summary_json"] else {}
@@ -398,6 +439,7 @@ class ReviewRepository:
                 },
                 "applied_rules": [dict(r) for r in applied],
                 "issues": [dict(r) for r in issues],
+                "clauses": [dict(r) for r in clause_rows],
                 "rules_version": dict(rules_version) if rules_version else None,
             }
 

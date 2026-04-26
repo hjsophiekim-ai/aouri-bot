@@ -119,7 +119,14 @@ UPLOAD_HTML = """<!doctype html>
       const res2 = await fetch(`/api/question_sessions/${sessionId}/review`, { method: 'POST' });
       const review = await res2.json();
 
-      document.getElementById('out').innerText = JSON.stringify({ saved_session: saved, review }, null, 2);
+      const res3 = await fetch('/api/revision/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ session_id: sessionId })
+      });
+      const revision = await res3.json();
+
+      document.getElementById('out').innerText = JSON.stringify({ saved_session: saved, review, revision }, null, 2);
     }
   </script>
 </body>

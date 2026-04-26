@@ -4,7 +4,7 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from xml.etree import ElementTree as ET
 
 
 @dataclass
@@ -13,6 +13,8 @@ class TextExtractionResult:
     text: str
     method: str
     error: str | None = None
+    raw_markup_text: str | None = None
+    meta: dict | None = None
 
 
 def _norm_text(s: str) -> str:
@@ -20,6 +22,35 @@ def _norm_text(s: str) -> str:
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
+
+
+_WORD_XML_MARKERS = (
+    "<w:",
+    "</w:",
+    "w:rPr",
+    "w:pPr",
+    "w:ins",
+    "w:del",
+    "w:delText",
+    "<?xml",
+    "xmlns:w=",
+)
+
+
+def _contains_wordprocessingml_markers(text: str) -> bool:
+    s = text or ""
+    if not s:
+        return False
+    return any(m in s for m in _WORD_XML_MARKERS)
+
+
+def _strip_zero_width_and_ctrl(text: str) -> str:
+    if not text:
+        return ""
+    s = text.replace("\u200b", "").replace("\u200c", "").replace("\u200d", "").replace("\ufeff", "")
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
+    return s
+
 
 
 def extract_text_from_file(file_path: Path) -> TextExtractionResult:
@@ -30,20 +61,38 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
             raw = file_path.read_text(encoding="utf-8")
         except Exception:
             raw = file_path.read_text(encoding="utf-8", errors="replace")
-        text = _norm_text(raw)
+        text = _norm_text(_strip_zero_width_and_ctrl(raw))
         if len(text) < min_len:
             return TextExtractionResult(False, "", "txt_read", "extracted text too short")
         return TextExtractionResult(True, text, "txt_read", None)
 
     if ext == ".docx":
         try:
-            text = extract_text_from_docx(file_path)
-            text = _norm_text(text)
+            extracted = extract_text_from_docx(file_path)
+            text = _norm_text(_strip_zero_width_and_ctrl(extracted["text"]))
+            raw_markup_text = extracted.get("raw_markup_text")
+            meta = extracted.get("meta")
+            if _contains_wordprocessingml_markers(text):
+                return TextExtractionResult(
+                    False,
+                    "",
+                    "docx_xml_parser",
+                    "WordprocessingML markers detected in extracted text",
+                    raw_markup_text=raw_markup_text,
+                    meta=meta,
+                )
             if len(text) < min_len:
-                return TextExtractionResult(False, "", "docx_zip_xml", "extracted text too short")
-            return TextExtractionResult(True, text, "docx_zip_xml", None)
+                return TextExtractionResult(
+                    False,
+                    "",
+                    "docx_xml_parser",
+                    "extracted text too short",
+                    raw_markup_text=raw_markup_text,
+                    meta=meta,
+                )
+            return TextExtractionResult(True, text, "docx_xml_parser", None, raw_markup_text=raw_markup_text, meta=meta)
         except Exception as exc:
-            return TextExtractionResult(False, "", "docx_zip_xml", str(exc))
+            return TextExtractionResult(False, "", "docx_xml_parser", str(exc))
 
     if ext == ".pdf":
         return TextExtractionResult(
@@ -56,7 +105,8 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
     return TextExtractionResult(False, "", "unsupported", f"unsupported extension: {ext}")
 
 
-def extract_text_from_docx(file_path: Path) -> str:
+def extract_text_from_docx(file_path: Path) -> dict[str, object]:
+    track_changes_policy = "final"
     parts = ["word/document.xml"]
     with zipfile.ZipFile(file_path, "r") as z:
         names = z.namelist()
@@ -69,21 +119,79 @@ def extract_text_from_docx(file_path: Path) -> str:
                 parts.append(n)
 
         texts: list[str] = []
+        raw_parts: list[str] = []
+        has_track_changes = False
         for part in parts:
             if part not in names:
                 continue
             xml_bytes = z.read(part)
-            texts.extend(_extract_w_t_text(xml_bytes))
-        return " ".join(t for t in texts if t)
+            piece = _extract_visible_text_from_word_xml(xml_bytes, track_changes_policy=track_changes_policy)
+            texts.extend(piece["texts"])
+            raw_parts.append(piece["raw_markup_text"])
+            has_track_changes = has_track_changes or bool(piece["has_track_changes"])
+        return {
+            "text": "\n".join([t for t in texts if t]).strip(),
+            "raw_markup_text": "\n".join([p for p in raw_parts if p]).strip()[:20000] or None,
+            "meta": {
+                "has_track_changes": has_track_changes,
+                "track_changes_policy": track_changes_policy,
+                "parts_included": parts,
+            },
+        }
 
 
-def _extract_w_t_text(xml_bytes: bytes) -> list[str]:
-    s = xml_bytes.decode("utf-8", errors="replace")
-    matches = re.findall(r"<w:t[^>]*>(.*?)</w:t>", s, flags=re.DOTALL)
-    out = []
-    for m in matches:
-        t = re.sub(r"\s+", " ", m).strip()
-        if t:
-            out.append(t)
-    return out
+def _extract_visible_text_from_word_xml(
+    xml_bytes: bytes,
+    *,
+    track_changes_policy: str,
+) -> dict[str, object]:
+    raw_markup_text = xml_bytes.decode("utf-8", errors="replace")
+    has_track_changes = ("<w:ins" in raw_markup_text) or ("<w:del" in raw_markup_text) or ("<w:delText" in raw_markup_text)
+    if track_changes_policy not in ("final", "original"):
+        raise ValueError(f"unsupported track_changes_policy: {track_changes_policy}")
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception as exc:
+        raise ValueError("invalid WordprocessingML XML") from exc
+
+    w_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    ns = {"w": w_ns}
+
+    def _include_text(*, in_del: bool, in_ins: bool) -> bool:
+        if track_changes_policy == "final":
+            return not in_del
+        return not in_ins
+
+    def walk(node: ET.Element, *, in_del: bool, in_ins: bool, out: list[str]) -> None:
+        tag = node.tag
+        if tag == f"{{{w_ns}}}del":
+            in_del = True
+        elif tag == f"{{{w_ns}}}ins":
+            in_ins = True
+
+        if tag == f"{{{w_ns}}}t" or tag == f"{{{w_ns}}}delText":
+            txt = node.text or ""
+            if txt and _include_text(in_del=in_del, in_ins=in_ins):
+                out.append(txt)
+        elif tag == f"{{{w_ns}}}tab":
+            out.append("\t")
+        elif tag == f"{{{w_ns}}}br" or tag == f"{{{w_ns}}}cr":
+            out.append("\n")
+        elif tag == f"{{{w_ns}}}noBreakHyphen":
+            out.append("-")
+
+        for ch in list(node):
+            walk(ch, in_del=in_del, in_ins=in_ins, out=out)
+
+    paras: list[str] = []
+    for p in root.findall(".//w:p", ns):
+        buf: list[str] = []
+        walk(p, in_del=False, in_ins=False, out=buf)
+        joined = "".join(buf)
+        joined = _strip_zero_width_and_ctrl(joined)
+        joined = joined.replace("\t", " ")
+        joined = re.sub(r"[ \t]+", " ", joined).strip()
+        if joined:
+            paras.append(joined)
+    return {"texts": paras, "has_track_changes": has_track_changes, "raw_markup_text": raw_markup_text[:20000]}
 

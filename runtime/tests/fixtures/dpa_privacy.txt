@@ -1,0 +1,7 @@
+개인정보 처리위탁 계약(DPA)
+
+Article 1 (Purpose) This Agreement governs the processing of personal information by Processor on behalf of Controller.
+Article 2 (Security) Processor shall implement appropriate technical and organizational measures.
+Article 3 (Sub-processing) Processor may appoint sub-processors without prior written consent of Controller.
+Article 4 (Liability) Processor shall be liable without limitation for any damages.
+Article 5 (Termination) Controller may terminate immediately without notice.

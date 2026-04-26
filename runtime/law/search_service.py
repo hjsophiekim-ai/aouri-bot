@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -55,14 +56,23 @@ class LawSearchService:
 
         max_items = min(int(max_per_type), 3)
         out = {"enabled": True, "queries": queries, "results": {}, "errors": []}
-        out["results"]["laws"] = self._search_target("law", queries, max_items=max_items)
-        out["results"]["precedents"] = self._search_target("prec", queries, max_items=max_items)
-        out["results"]["interpretations"] = self._search_target("expc", queries, max_items=max_items)
+        context_text = str(text or "")
+        out["results"]["laws"] = self._search_target("law", queries, context_text=context_text, matched_rules=matched_rules or [], max_items=max_items)
+        out["results"]["precedents"] = self._search_target("prec", queries, context_text=context_text, matched_rules=matched_rules or [], max_items=max_items)
+        out["results"]["interpretations"] = self._search_target("expc", queries, context_text=context_text, matched_rules=matched_rules or [], max_items=max_items)
         out["results"]["admin_rules"] = []
         out["results"]["local_ordinances"] = []
         return out
 
-    def _search_target(self, target: str, queries: list[str], *, max_items: int) -> list[dict[str, Any]]:
+    def _search_target(
+        self,
+        target: str,
+        queries: list[str],
+        *,
+        context_text: str,
+        matched_rules: list[dict[str, Any]],
+        max_items: int,
+    ) -> list[dict[str, Any]]:
         collected: list[LawReference] = []
         errors: list[str] = []
 
@@ -88,6 +98,13 @@ class LawSearchService:
             if key not in uniq:
                 uniq[key] = r
 
+        reranked = _rerank_and_filter_references(
+            references=list(uniq.values()),
+            context_text=str(context_text or ""),
+            matched_rules=matched_rules,
+            max_items=max_items,
+        )
+
         return [
             {
                 "source_query": r.source,
@@ -97,7 +114,7 @@ class LawSearchService:
                 "identifiers": r.identifiers,
                 "drf_detail_url": r.drf_detail_url,
             }
-            for r in list(uniq.values())[:max_items]
+            for r in reranked[:max_items]
         ] + ([] if not errors else [{"error": "; ".join(errors)}])
 
     def _cached_search(self, *, target: str, query: str, page: int, display: int, fmt: str) -> dict[str, Any]:
@@ -155,15 +172,82 @@ def _derive_topics(*, entity: str, contract_type: str, text: str, matched_rules:
     for r in matched_rules:
         rid = str(r.get("rule_id") or "")
         if rid in ("RISK-006", "ACT-009"):
-            out.append("대리점법")
+            out.extend(["대리점법", "판매장려금", "판촉비", "반품", "광고비"])
         if rid in ("RISK-005", "ACT-008", "RISK-004", "ACT-007"):
-            out.append("하도급법")
+            out.extend(["하도급법", "단가", "감액", "기술자료"])
         if rid in ("RISK-003", "ACT-010"):
             out.extend(["산업안전보건법", "중대재해처벌법"])
+        if rid in ("RISK-001", "RISK-002"):
+            out.extend(["손해배상", "책임 제한", "면책"])
 
     if entity:
         out.append(str(entity))
     return out
+
+
+def _tokenize(text: str) -> set[str]:
+    s = (text or "").lower()
+    s = re.sub(r"[^0-9a-z가-힣]+", " ", s)
+    parts = [p.strip() for p in s.split() if p.strip()]
+    stop = {"및", "또는", "등", "에", "의", "을", "를", "이", "가", "은", "는", "and", "or", "the", "a", "an", "to", "of"}
+    return {p for p in parts if p not in stop and len(p) >= 2}
+
+
+def _rule_terms(matched_rules: list[dict[str, Any]]) -> set[str]:
+    out: set[str] = set()
+    for r in matched_rules:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("rule_id")
+        if isinstance(rid, str) and rid:
+            out.add(rid.lower())
+        mks = r.get("matched_keywords")
+        if isinstance(mks, list):
+            for x in mks:
+                if isinstance(x, str) and x.strip():
+                    out.add(x.strip().lower())
+    return out
+
+
+def _is_noise_title(title: str) -> bool:
+    t = (title or "").strip()
+    if not t:
+        return True
+    bad = ["입법예고", "조례안", "광고", "홍보", "채용", "공고", "보도자료", "안내"]
+    return any(b in t for b in bad)
+
+
+def _score_reference(ref: LawReference, *, context_terms: set[str]) -> int:
+    title_terms = _tokenize(ref.title)
+    snippet_terms = _tokenize(ref.snippet or "")
+    overlap = context_terms.intersection(title_terms.union(snippet_terms))
+    score = len(overlap)
+    if ref.target == "law":
+        score += 2
+    if ref.target == "prec":
+        score += 1
+    return score
+
+
+def _rerank_and_filter_references(
+    *,
+    references: list[LawReference],
+    context_text: str,
+    matched_rules: list[dict[str, Any]],
+    max_items: int,
+) -> list[LawReference]:
+    ctx = context_text or ""
+    context_terms = _tokenize(ctx).union(_rule_terms(matched_rules))
+    scored: list[tuple[int, LawReference]] = []
+    for r in references:
+        if _is_noise_title(r.title):
+            continue
+        score = _score_reference(r, context_terms=context_terms)
+        if score <= 1:
+            continue
+        scored.append((score, r))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in scored[: max(1, int(max_items))]]
 
 
 def _extract_references_from_json(

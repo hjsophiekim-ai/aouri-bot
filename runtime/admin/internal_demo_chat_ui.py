@@ -150,6 +150,15 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     .bubble.bot { background: rgba(255,255,255,0.9); }
     .bubble.me { background: var(--primarySoft); border-color: rgba(31,122,224,0.25); }
     .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+    .clauseCard { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: rgba(255,255,255,0.9); margin-bottom: 10px; }
+    .clauseHead { display:flex; align-items:center; justify-content:space-between; gap: 10px; }
+    .clauseTitle { font-weight: 900; }
+    .clauseTag { font-size: 12px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--muted); }
+    .clauseBody { margin-top: 8px; display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .clauseBox { border: 1px solid rgba(216,236,255,0.6); border-radius: 12px; padding: 10px; background: #fff; }
+    .clauseBox .label { margin: 0 0 6px 0; }
+    .rewrite { color: var(--danger); font-weight: 900; text-decoration: underline; }
+    .lawList { margin-top: 8px; color: var(--muted); font-size: 12px; }
 
     .composer {
       padding: 12px 14px;
@@ -169,6 +178,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     @media (max-width: 820px) {
       .grid { grid-template-columns: 1fr; }
       .bubble { max-width: 100%; }
+      .clauseBody { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -265,9 +275,15 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             <div class="h1" style="font-size:18px; margin-top:0;" id="conclusionTitle">-</div>
             <div class="sub" id="conclusionBody">-</div>
             <div class="meta" id="recommendedAction">-</div>
+            <div class="meta" id="docxStatus">수정본: 미생성</div>
+
+            <div style="margin-top:12px;">
+              <div class="badge" style="margin-bottom:8px;">조항별 수정 제안</div>
+              <div id="clauseList"></div>
+            </div>
 
             <div class="row" style="margin-top:12px; justify-content:flex-end;">
-              <button class="btn btnSecondary" id="btnConfirmRevision" onclick="confirmRevision()">수정 제안 확정</button>
+              <button class="btn btnPrimary" id="btnConfirmRevision" onclick="confirmRevision()">최종 수정본 다운로드(.docx)</button>
               <button class="btn btnSecondary" id="btnConfirmDraft" onclick="confirmDraft()">초안 작성 확정</button>
             </div>
             <div class="meta" id="confirmNote"></div>
@@ -325,7 +341,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       chat.scrollTop = chat.scrollHeight;
     }
 
-    let ctx = { entity:'', contract_type:'', text:'', filename:null, session_id:null };
+    let ctx = { entity:'', contract_type:'', text:'', filename:null, session_id:null, extraction_preview:null };
     let questions = [];
     let qIndex = 0;
     let answers = {};
@@ -369,6 +385,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           ctx.session_id = data.question_session_id || null;
           ctx.filename = data.filename || file.name;
           questions = data.questions || [];
+          ctx.extraction_preview = (data.extraction && data.extraction.preview) ? data.extraction.preview : null;
           if (!text) {
             ctx.text = '(업로드 기반: 텍스트는 서버에서 추출되어 질문/검토에 사용됩니다)';
           }
@@ -442,18 +459,36 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       try {
         addMsg('bot', '좋아요. 이제 검토 결과를 정리해볼게요.');
 
-        const analyzePayload = {
-          entity: ctx.entity || 'all',
-          contract_type: ctx.contract_type || 'all',
-          filename: ctx.filename || 'demo.txt',
-          text: (ctx.text && ctx.text.startsWith('(업로드 기반')) ? '' : (ctx.text || ''),
-          answers: answers
-        };
-        const res1 = await fetch('/api/review/analyze', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(analyzePayload) });
-        reviewResult = await res1.json();
+        if (ctx.session_id) {
+          await fetch(`/api/question_sessions/${encodeURIComponent(ctx.session_id)}/answers`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ answers })
+          });
+          const res1 = await fetch(`/api/question_sessions/${encodeURIComponent(ctx.session_id)}/review`, { method:'POST' });
+          const reviewWrap = await res1.json();
+          reviewResult = (reviewWrap && reviewWrap.review) ? reviewWrap.review : reviewWrap;
 
-        const res2 = await fetch('/api/revision/suggest_text', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(analyzePayload) });
-        revisionResult = await res2.json();
+          const res2 = await fetch('/api/revision/suggest', {
+            method:'POST',
+            headers: { 'Content-Type':'application/json; charset=utf-8' },
+            body: JSON.stringify({ session_id: ctx.session_id })
+          });
+          revisionResult = await res2.json();
+        } else {
+          const analyzePayload = {
+            entity: ctx.entity || 'all',
+            contract_type: ctx.contract_type || 'all',
+            filename: ctx.filename || 'demo.txt',
+            text: (ctx.text || ''),
+            answers: answers
+          };
+          const res1 = await fetch('/api/review/analyze', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(analyzePayload) });
+          reviewResult = await res1.json();
+
+          const res2 = await fetch('/api/revision/suggest_text', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(analyzePayload) });
+          revisionResult = await res2.json();
+        }
 
         const res3 = await fetch(`/api/draft/suggest?contract_type=${encodeURIComponent(ctx.contract_type || '')}`);
         draftSuggest = await res3.json();
@@ -469,6 +504,74 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       const out = [];
       for (const x of (arr || []).slice(0, n)) out.push('- ' + x);
       return out.join('\\n');
+    }
+
+    function pickLawTitles(relatedLaws) {
+      const out = [];
+      const results = relatedLaws && relatedLaws.results ? relatedLaws.results : null;
+      if (!results) return out;
+      for (const k of ['laws','precedents','interpretations']) {
+        const arr = results[k];
+        if (!Array.isArray(arr)) continue;
+        for (const it of arr.slice(0, 3)) {
+          if (it && it.title) out.push(it.title);
+        }
+      }
+      return out.slice(0, 6);
+    }
+
+    function renderClauseList(items) {
+      const root = document.getElementById('clauseList');
+      root.innerHTML = '';
+      if (!Array.isArray(items) || items.length === 0) {
+        root.innerHTML = '<div class="meta">조항별 수정 제안이 없습니다.</div>';
+        return;
+      }
+      for (const it of items.slice(0, 12)) {
+        const card = document.createElement('div');
+        card.className = 'clauseCard';
+        const head = document.createElement('div');
+        head.className = 'clauseHead';
+        const title = document.createElement('div');
+        title.className = 'clauseTitle';
+        title.innerText = `${it.clause_id || ''} ${it.clause_title || ''}`.trim() || '조항';
+        const tag = document.createElement('div');
+        tag.className = 'clauseTag';
+        const appr = !!it.approval_required;
+        const high = !!it.high_risk;
+        tag.innerText = appr ? '승인 필요' : (high ? '고위험' : '검토');
+        head.appendChild(title);
+        head.appendChild(tag);
+        card.appendChild(head);
+
+        const body = document.createElement('div');
+        body.className = 'clauseBody';
+        const left = document.createElement('div');
+        left.className = 'clauseBox';
+        left.innerHTML = `<div class="label">원문</div><div>${escapeHtml((it.original_text || '').slice(0, 320))}${(it.original_text || '').length > 320 ? '…' : ''}</div>`;
+        const right = document.createElement('div');
+        right.className = 'clauseBox';
+        const rw = (it.suggested_rewrite || '');
+        right.innerHTML = `<div class="label">추천 수정문안</div><div class="rewrite">${escapeHtml((rw || '').slice(0, 320))}${(rw || '').length > 320 ? '…' : ''}</div>`;
+        body.appendChild(left);
+        body.appendChild(right);
+        card.appendChild(body);
+
+        const reason = document.createElement('div');
+        reason.className = 'lawList';
+        const rr = (it.rewrite_reason || '');
+        reason.innerText = rr ? ('수정 이유: ' + rr.slice(0, 220) + (rr.length > 220 ? '…' : '')) : '수정 이유: (없음)';
+        card.appendChild(reason);
+
+        const laws = pickLawTitles(it.related_laws);
+        if (laws.length > 0) {
+          const lawDiv = document.createElement('div');
+          lawDiv.className = 'lawList';
+          lawDiv.innerText = '관련 법령/판례: ' + laws.join(', ');
+          card.appendChild(lawDiv);
+        }
+        root.appendChild(card);
+      }
     }
 
     function buildResult() {
@@ -524,16 +627,24 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       }
       document.getElementById('detailIssues').innerText = JSON.stringify(issuesOut, null, 2);
       document.getElementById('detailRules').innerText = JSON.stringify(matched.slice(0, 80), null, 2);
-      document.getElementById('detailLaw').innerText = JSON.stringify(reviewResult && reviewResult.law_search ? reviewResult.law_search : null, null, 2);
-      document.getElementById('detailRevision').innerText = JSON.stringify(revisionResult && revisionResult.revision ? revisionResult.revision : revisionResult, null, 2);
+      document.getElementById('detailLaw').innerText = JSON.stringify(revisionResult && revisionResult.clause_results ? revisionResult.clause_results.slice(0, 5).map(x => ({ clause_id: x.clause_id, clause_title: x.clause_title, related_laws: x.related_laws })) : null, null, 2);
+      document.getElementById('detailRevision').innerText = JSON.stringify(revisionResult && revisionResult.clause_results ? revisionResult.clause_results.slice(0, 8).map(x => ({ clause_id: x.clause_id, clause_title: x.clause_title, suggested_rewrite: x.suggested_rewrite, rewrite_reason: x.rewrite_reason })) : (revisionResult && revisionResult.revision ? revisionResult.revision : revisionResult), null, 2);
       document.getElementById('detailDraft').innerText = JSON.stringify(draftSuggest, null, 2);
 
       document.getElementById('confirmNote').innerText = '';
       const btnRev = document.getElementById('btnConfirmRevision');
       const btnDraft = document.getElementById('btnConfirmDraft');
       const rec = document.getElementById('recommendedAction');
+      const docxStatus = document.getElementById('docxStatus');
+      const meta = (revisionResult && revisionResult.meta) ? revisionResult.meta : (reviewResult && reviewResult.clause_meta ? reviewResult.clause_meta : null);
 
-      btnRev.disabled = false;
+      if (meta && meta.docx_allowed === false) {
+        btnRev.disabled = true;
+        docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
+      } else {
+        btnRev.disabled = false;
+        docxStatus.innerText = '수정본: 다운로드 가능';
+      }
       btnDraft.dataset.templateId = (suggested.length > 0 ? suggested[0] : '');
       btnDraft.disabled = (suggested.length === 0);
 
@@ -542,14 +653,45 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         btnDraft.className = 'btn btnPrimary';
         btnRev.className = 'btn btnSecondary';
       } else {
-        rec.innerText = '대표 추천 액션: 수정 제안 확정';
+        rec.innerText = '대표 추천 액션: 최종 수정본 다운로드';
         btnRev.className = 'btn btnPrimary';
         btnDraft.className = 'btn btnSecondary';
       }
+
+      const items = (revisionResult && Array.isArray(revisionResult.clause_results)) ? revisionResult.clause_results
+                  : ((reviewResult && Array.isArray(reviewResult.clause_results)) ? reviewResult.clause_results : []);
+      renderClauseList(items);
     }
 
     async function confirmRevision() {
-      document.getElementById('confirmNote').innerText = '수정 제안을 확정했어요. (데모) 필요하면 상세 보기에서 조항별 제안을 확인해 주세요.';
+      document.getElementById('confirmNote').innerText = '수정본 파일(.docx)을 생성하는 중입니다...';
+      try {
+        let payload = null;
+        if (ctx.session_id) {
+          payload = { session_id: ctx.session_id };
+        } else if (revisionResult && revisionResult.clause_results) {
+          payload = { input: { entity: ctx.entity || 'all', contract_type: ctx.contract_type || 'all', filename: ctx.filename || 'demo.txt' }, clause_results: revisionResult.clause_results };
+        } else {
+          document.getElementById('confirmNote').innerText = '수정본 생성에 필요한 데이터가 없습니다.';
+          return;
+        }
+        const res = await fetch('/api/revision/download_docx', { method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
+        if (!res.ok) {
+          document.getElementById('confirmNote').innerText = '수정본 생성 실패';
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'aouribot_revision.docx';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        document.getElementById('confirmNote').innerText = '수정본 파일 다운로드를 시작했어요.';
+        document.getElementById('docxStatus').innerText = '수정본: 생성 완료';
+      } catch (e) {
+        document.getElementById('confirmNote').innerText = '수정본 생성 실패';
+      }
     }
 
     async function confirmDraft() {

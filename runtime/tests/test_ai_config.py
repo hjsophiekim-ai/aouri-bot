@@ -13,6 +13,7 @@ class AIConfigTest(unittest.TestCase):
         try:
             if "OPENAI_API_KEY" in os.environ:
                 del os.environ["OPENAI_API_KEY"]
+            os.environ["AOURIBOT_DOTENV_DISABLED"] = "1"
             os.environ["OPENAI_MODEL"] = "gpt-4.1-mini"
             os.environ["OPENAI_TIMEOUT"] = "3"
             os.environ["OPENAI_MAX_TOKENS"] = "123"
