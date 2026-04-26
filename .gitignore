@@ -54,6 +54,9 @@ pids
 aouri-bot/runtime/data/
 aouri-bot/runtime/data/**
 
+# Nested app repository (tracked separately)
+aouri-bot/
+
 # Temporary files
 .tmp/
 temp/
