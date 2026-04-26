@@ -60,6 +60,16 @@ def build_clause_level_result(
     max_clause_law_items: int = 2,
     max_ai_clauses: int = 6,
 ) -> ClauseLevelResult:
+    def _derive_review_posture(*, contract_type: str, text: str) -> str:
+        ct = (contract_type or "").lower()
+        t = (text or "").lower()
+        if any(k in ct for k in ("구매", "purchase", "물품공급", "장비", "설치", "시운전")):
+            return "buyer_favorable"
+        if any(k in t for k in ("장비", "설치", "시운전", "납품", "검수")) and any(k in ct for k in ("물품공급", "구매", "매매", "supply", "purchase")):
+            return "buyer_favorable"
+        return "neutral"
+
+    review_posture = _derive_review_posture(contract_type=str(contract_type), text=str(text))
     review = service.analyze(
         ReviewInput(
             entity=entity,
@@ -70,7 +80,7 @@ def build_clause_level_result(
         )
     )
     clauses = split_into_clauses(text)
-    revision = suggest_revisions(clauses, review.get("matched_rules", []))
+    revision = suggest_revisions(clauses, review.get("matched_rules", []), posture=review_posture)
 
     rule_by_id: dict[str, dict[str, Any]] = {}
     for r in review.get("matched_rules", []) if isinstance(review.get("matched_rules"), list) else []:
@@ -290,6 +300,7 @@ def build_clause_level_result(
         warnings.append("word_xml_markers_detected_block")
 
     meta = {
+        "review_posture": review_posture,
         "text_length": text_len,
         "text_sha256": sha256((text or "").encode("utf-8", errors="replace")).hexdigest() if text else None,
         "clause_count": clause_count,

@@ -27,6 +27,18 @@ CONTRACT_TYPE_RULES = [
     ("NDA/비밀유지", [r"\bNDA\b", r"Non[- ]Disclosure", r"비밀유지", r"confidentiality"]),
     ("개인정보/처리위탁(DPA)", [r"개인정보", r"처리위탁", r"privacy", r"data processing", r"\bDPA\b"]),
     ("임대차/전대차", [r"임대차", r"전대차", r"\blease\b", r"\bsublease\b"]),
+    (
+        "장비공급/설치/시운전",
+        [
+            r"장비\s*(공급|구매|납품)",
+            r"설치",
+            r"시운전",
+            r"검수",
+            r"\bequipment\b",
+            r"\binstallation\b",
+            r"\bcommissioning\b",
+        ],
+    ),
     ("물품공급/구매/매매", [r"물품공급", r"구매", r"매매", r"\bsupply\b", r"\bpurchase\b", r"\bsales contract\b"]),
     ("대리점/위탁/유통", [r"대리점", r"위탁", r"위탁거래", r"\bdealer\b", r"\bdistributor\b", r"\bconsignment\b"]),
     ("용역/자문/SOW", [r"용역", r"자문", r"컨설팅", r"\bSOW\b", r"Statement of Work", r"\bengagement\b", r"\bservice agreement\b"]),

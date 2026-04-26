@@ -202,6 +202,8 @@ def _extract_trigger_keywords(rule: dict[str, Any]) -> list[str]:
 def suggest_revisions(
     clauses: list[ClauseChunk],
     matched_rules: list[dict[str, Any]],
+    *,
+    posture: str = "neutral",
 ) -> dict[str, Any]:
     matched_by_id: dict[str, dict[str, Any]] = {}
     for r in matched_rules:
@@ -273,7 +275,7 @@ def suggest_revisions(
         seen = set()
         replacement_texts = [x for x in replacement_texts if not (x in seen or seen.add(x))]
 
-        proposal = propose_clause_specific_rewrite(clause_text=c.text, applied_rules=applied_rules)
+        proposal = propose_clause_specific_rewrite(clause_text=c.text, applied_rules=applied_rules, posture=posture)
         recommended_rewrite = proposal.suggested_rewrite if proposal else None
         rewrite_reason = proposal.rewrite_reason if proposal else None
 

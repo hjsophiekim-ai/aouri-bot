@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from runtime.law.cache import JsonFileCache
 from runtime.law.config import LawApiConfig
 from runtime.law.drf_client import LawApiError, LawDrfClient
-from runtime.law.priority_rules import get_priority_topics
+from runtime.law.priority_rules import get_priority_topics_with_context
 
 
 @dataclass(frozen=True)
@@ -144,7 +144,7 @@ class LawSearchService:
 def _derive_topics(*, entity: str, contract_type: str, text: str, matched_rules: list[dict[str, Any]]) -> list[str]:
     t = (contract_type or "").strip()
     out: list[str] = []
-    out.extend(get_priority_topics(entity))
+    out.extend(get_priority_topics_with_context(entity=entity, contract_type=contract_type, text=text))
 
     if "대리점" in t or "유통" in t or "위탁" in t:
         out.extend(["대리점법", "공정거래"])

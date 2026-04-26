@@ -224,6 +224,7 @@ def propose_clause_specific_rewrite(
     *,
     clause_text: str,
     applied_rules: list[dict[str, Any]],
+    posture: str = "neutral",
 ) -> RewriteProposal | None:
     text = _norm_ws(clause_text)
     if not text:
@@ -271,7 +272,10 @@ def propose_clause_specific_rewrite(
 
     return RewriteProposal(
         suggested_rewrite=_norm_ws(out_text),
-        rewrite_reason=" / ".join(merged_reasons)[:900],
+        rewrite_reason=(
+            ("구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else "")
+            + " / ".join(merged_reasons)
+        )[:900],
         reason_codes=merged_reason_codes,
     )
 

@@ -30,3 +30,13 @@ def get_priority_topics(entity: str) -> list[str]:
             return list(ENTITY_PRIORITY_TOPICS[k])
     return []
 
+
+def get_priority_topics_with_context(*, entity: str, contract_type: str, text: str) -> list[str]:
+    topics = get_priority_topics(entity)
+    ct = contract_type or ""
+    t = text or ""
+    dealer_hint = any(k in ct for k in ("대리점", "유통", "위탁")) or any(k in t for k in ("대리점", "위탁판매", "판매장려금", "판촉", "리베이트"))
+    if not dealer_hint and "대리점법" in topics:
+        topics = [x for x in topics if x != "대리점법"]
+    return topics
+
