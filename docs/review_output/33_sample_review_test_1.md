@@ -1,0 +1,1163 @@
+# 샘플 계약 텍스트 검토 테스트(1건)
+
+## 테스트 조건
+- 법인: 퍼시스
+- 계약유형: 물품공급/구매계약
+- 포함 문구: 무제한 책임, 일방 면책, 기술자료 제출, 불리한 해지
+
+## 1) 실제 request payload
+```json
+{
+  "entity": "퍼시스",
+  "contract_type": "물품공급/구매/매매",
+  "filename": "sample_supply_clause.txt",
+  "text": "제10조(손해배상) 당사는 본 계약과 관련하여 발생하는 모든 손해에 대하여 손해배상 책임을 부담하며, 책임 한도는 없이(without limitation) 제한되지 않는다.\n제11조(면책) 상대방은 어떠한 경우에도 당사에 대하여 책임을 부담하지 아니하며, 당사는 상대방을 면책하고(indemnify) 모든 청구로부터 보호한다.\n제12조(기술자료 제출) 당사는 상대방의 요청 시 기술자료, 원가자료, 설계도면 및 소스코드 등 일체 자료를 즉시 제출하여야 한다.\n제13조(해지) 상대방은 사전 통지 없이 언제든지 본 계약을 즉시 해지할 수 있으며, 해지 시 이미 납품된 물품 대금도 지급하지 않을 수 있다.",
+  "persist": false
+}
+```
+
+## 2) 실제 response payload
+- 응답시간: 0.0044s
+```json
+{
+  "input": {
+    "entity": "퍼시스",
+    "contract_type": "물품공급/구매/매매",
+    "filename": "sample_supply_clause.txt"
+  },
+  "question_answers": {},
+  "derived_context": {
+    "additional_contract_types": [],
+    "expanded_rule_count": 0
+  },
+  "summary": {
+    "applicable_rule_count": 29,
+    "matched_rule_count": 7,
+    "checklist_rule_count": 15,
+    "approval_required_match_count": 6,
+    "backlog_reference_count": 6
+  },
+  "matched_rules": [
+    {
+      "rule_id": "ACT-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "대금/지급/정산",
+      "rule_level": "pattern",
+      "title": "정산식·차감사유·증빙 필수화",
+      "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "185/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "Compensation / payment"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "정산식(계산기준/정산주기/환불/공제) 명시",
+        "공제/상계 사유는 제한적으로 열거",
+        "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:actual_contracts",
+        "clause:payment",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "RISK-001",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "책임제한/한도",
+      "rule_level": "risk",
+      "title": "무제한 책임(또는 사실상 무한대) 탐지",
+      "description": "무제한 책임 또는 'without limitation' 등 사실상 무한대 책임 구조는 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "10/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "INCLUDING WITHOUT LIMITATION"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "총액 cap 설정(예: 계약대금/연간대금/보험한도)",
+        "간접손해/특별손해 제외",
+        "고의/중과실 등 예외를 제한적으로 규정"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:unlimited_liability",
+        "approval_required",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "RISK-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "risk",
+      "title": "일방 면책/일방 배상(후보) 탐지",
+      "description": "일방 면책 또는 일방 배상(indemnity) 구조는 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "20/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "Client will indemnify ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "상호성 확보(각자 귀책 범위 내 상호 배상)",
+        "제3자 청구 방어 절차(통지/방어권/합의권) 규정",
+        "보험(PL/배상책임)과 연동"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:one_sided_indemnity",
+        "approval_required",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "RISK-004",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "대리점/위탁/유통",
+        "라이선스/로열티"
+      ],
+      "clause_type": "기술자료/자료요구",
+      "rule_level": "risk",
+      "title": "기술자료/원가자료/도면/소스코드 요구 탐지",
+      "description": "기술자료 요구는 목적·범위·보유기간·반환/폐기 의무 및 목적 외 사용금지까지 명확히 해야 한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "5/207",
+        "example_files": [
+          "☆ 일룸 LG전자 상품 위수탁거래계약서 검토(법무팀).docx"
+        ],
+        "example_phrase": "조사, 자료제출 등 요청"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "요구 목적/정당성 확인",
+        "제공 범위 최소화 및 비밀유지·목적 외 사용금지 명시",
+        "반환/폐기 및 제3자 제공 제한"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:technical_data_request",
+        "approval_required",
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-005",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "책임제한/한도",
+      "rule_level": "pattern_approval",
+      "title": "무제한 책임 트리거(승인 필요)",
+      "description": "unlimited liability/without limitation 트리거가 있으면 무제한 책임 후보로 보고 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "unlimited liability / without limitation"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "책임 cap 및 간접손해 제외 협상",
+        "예외(고의/중과실 등) 최소화"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:unlimited_liability",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-006",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "pattern_approval",
+      "title": "일방 배상/면책 트리거(승인 필요)",
+      "description": "indemnify/hold harmless/면책 트리거가 있으면 일방 배상/면책 후보로 보고 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "indemnify / hold harmless / 면책"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "상호화(각자 귀책 범위) 또는 범위 축소",
+        "방어 절차(통지/방어권/합의권) 규정"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-007",
+      "entity": "fursys_group",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기술자료/자료요구",
+      "rule_level": "pattern_approval",
+      "title": "기술자료/자료제출 트리거(승인 필요)",
+      "description": "기술자료/자료제출 트리거가 있으면 기술자료 요구 후보로 보고 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_phrase": "기술자료 / 자료제출"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "제공 목적/범위/보유기간 제한",
+        "반환/폐기·목적 외 사용금지·재제공 금지"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:technical_data",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    }
+  ],
+  "checklist_rules": [
+    {
+      "rule_id": "STD-001",
+      "entity": "all",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "대리점/위탁/유통",
+        "임대차/전대차",
+        "NDA/비밀유지",
+        "개인정보/처리위탁"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "standard_contract",
+      "title": "손해배상/면책 조항 기본 점검",
+      "description": "표준계약서에 포함된 손해배상/면책/배상 구조를 기준으로, 배상범위·상호성·면책요건을 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "대금 또는 손해배상금 등을 지급하여야 할 자가 지급시기에 지급하지 않을 경우 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "배상 범위(직접/간접/특별손해) 구분 확인",
+        "상호성(일방 배상/면책 여부) 확인",
+        "면책 사유(불가항력/상대 귀책/제3자 행위)와 절차(통지/방어) 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "해지/종료",
+      "rule_level": "standard_contract",
+      "title": "해지/종료 및 종료 후 의무 점검",
+      "description": "표준계약서 기준으로 해지사유·정산·반환의무·종료 후 비밀유지/지재권 처리 등을 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "계약의 해제·해지 또는 원사업자의 요구가 있는 경우 ... 반환"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "해지 사유/치유기간(기간, 통지 방식) 확인",
+        "종료 후 의무(정산, 반환/파기, 사용중지) 명시 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:termination",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기간/갱신",
+      "rule_level": "standard_contract",
+      "title": "기간/갱신 구조 점검",
+      "description": "계약기간과 자동갱신/연장 조건을 확인하고, 종료/갱신 시 변경·정산·반환 처리까지 확인한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "계약기간 : [ ]년 [ ]월 [ ]일부터 [ ]년 [ ]월 [ ]일까지"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "시작/종료일 및 갱신 조건(자동갱신 여부, 통지기한) 확인",
+        "갱신 시 단가/범위 변경 절차 명시 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:term",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-004",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "standard_contract",
+      "title": "분쟁해결/관할 기본 점검",
+      "description": "분쟁해결 절차(협의/조정/중재/소송)와 재판관할을 확인하고, 다국가 거래 시 집행가능성까지 고려한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "분쟁이 해결되지 않은 경우 ... 법원에 소를 제기하거나 ... 중재"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "준거법 및 관할 지정 확인",
+        "중재 선택 시 기관/규칙/언어/장소 확인",
+        "해외 법인/해외 상대방이면 판결/중재 집행 가능성 점검"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:dispute",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-005",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW"
+      ],
+      "clause_type": "양도/하도급/재위탁",
+      "rule_level": "standard_contract",
+      "title": "재위탁/하도급 구조 점검",
+      "description": "하도급/재위탁 가능성이 있으면 서면교부·재위탁 제한·검수·대금지급 구조를 우선 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "설비 ... 양도 또는 대여 및 관리 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "재위탁/하도급 허용 범위 및 사전동의 요건 확인",
+        "하도급법 해당 가능성 있으면 서면교부/단가/대금지급/검수 기준 필수 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "source:standard_contract",
+        "clause:subcontract",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-006",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "바로스(물류/설치)"
+      ],
+      "clause_type": "안전/산안법/중대재해",
+      "rule_level": "standard_contract",
+      "title": "안전관리 조항 기본 점검",
+      "description": "생산공장·물류·설치·현장작업이 연결되는 계약은 안전·보건·사고대응 조항을 핵심 조항으로 보고 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "생산성 및 안전성 등을 위하여 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "안전보건 책임 분담(출입통제/작업허가/보호구/위험성평가) 확인",
+        "사고 발생 시 즉시 통보/조사 협조/대외 커뮤니케이션 통제 체계 확인",
+        "안전책임의 일방 전가 문구는 실효성/평판 리스크 관점에서 재검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:바로스",
+        "source:standard_contract",
+        "clause:safety",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "C-001",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "대금/지급/정산",
+      "rule_level": "clause_standard",
+      "title": "지급기일·정산기준·공제사유·증빙 점검",
+      "description": "지급기일/정산기준/공제사유/증빙 제출 요구를 표준 체크리스트로 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "185/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "지급기일 및 지연이자/지체상금 정합성 확인",
+        "정산기준(환불/공제/상계) 명확화",
+        "증빙 요구는 목적/범위를 제한"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:payment",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "목적/범위",
+      "rule_level": "clause_standard",
+      "title": "업무범위·산출물·제외사항 명확화",
+      "description": "업무 범위가 모호하면 책임 범위가 확대되므로 산출물, 제외 범위, 전제조건을 명시한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "183/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "산출물 정의 및 검수 기준을 연결",
+        "제외 범위/고객 제공자료/전제조건 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:scope",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기간/갱신",
+      "rule_level": "clause_standard",
+      "title": "기간·갱신·중도해지 조건 점검",
+      "description": "기간과 갱신, 중도해지 조건을 명확히 하여 분쟁을 예방한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "182/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "계약기간/자동갱신 여부/통지기한 확인",
+        "중도해지 시 정산 및 비용처리 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:term",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-004",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "해지/종료",
+      "rule_level": "clause_standard",
+      "title": "해지사유·치유기간·종료 후 의무 점검",
+      "description": "해지사유, 시정(치유)기간, 종료 후 반환/파기/사용중지 의무를 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "182/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "치유기간/통지 방식/효력 발생 시점 확인",
+        "종료 후 비밀유지/지재권/자료 반환·폐기 처리 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:termination",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-006",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "clause_standard",
+      "title": "준거법·관할·중재·집행 가능성 점검",
+      "description": "준거법/관할/중재 조항을 확인하고, 해외 거래일수록 집행가능성을 함께 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "163/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "관할 또는 중재 선택의 적합성 확인",
+        "해외 집행 및 비용/기간 리스크 고지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:dispute",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-007",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "clause_standard",
+      "title": "배상범위·상호성·면책요건 점검",
+      "description": "손해배상 및 면책 조항은 일방성/범위 과다 여부를 점검하고 책임제한과 함께 정합성을 맞춘다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "154/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "상호성(일방 배상/면책 여부) 확인",
+        "제3자 청구 방어 절차(통지/방어권/합의권) 확인",
+        "책임제한(cap)과 모순 여부 점검"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-015",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "바로스(물류/설치)"
+      ],
+      "clause_type": "안전/산안법/중대재해",
+      "rule_level": "clause_standard",
+      "title": "안전책임 분담·사고보고·중지권 점검",
+      "description": "현장작업이 수반되면 안전조항은 필수이며, 실행가능한 책임 분담과 사고대응 체계를 확인한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "49/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "도급/용역/위탁 시 안전관리 책임 분담 명확화",
+        "작업중지권, 위험성평가, 교육/보호구 의무 확인",
+        "사고 시 통보/조사협조/대외 커뮤니케이션 통제"
+      ],
+      "approval_required": false,
+      "tags": [
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:바로스",
+        "clause:safety",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-016",
+      "entity": "all",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "물품공급/구매/매매",
+        "라이선스/로열티",
+        "용역/자문/SOW"
+      ],
+      "clause_type": "독점/경업",
+      "rule_level": "clause_exception",
+      "title": "독점/경업 조항(범위·기간·지역·대가 균형)",
+      "description": "독점/경업은 사업전략상 필요할 수 있으나, 범위·기간·지역·대가의 균형을 맞춰 과도한 제한을 방지한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "46/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "범위/기간/지역을 최소화",
+        "대가 또는 정당화 사유를 문서화",
+        "해지/종료 후 지속기간 제한"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:exclusivity",
+        "exception_possible",
+        "confirmed"
+      ],
+      "rule_status": "exception_possible"
+    },
+    {
+      "rule_id": "C-017",
+      "entity": "fursys_group",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기술자료/자료요구",
+      "rule_level": "clause_approval",
+      "title": "기술자료 요구 조항(승인 필요)",
+      "description": "기술자료 요구는 제공 범위·목적·반환/폐기·목적 외 사용금지 구조를 갖추지 않으면 승인 필요로 승격한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "40/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "요구 범위 최소화 및 비밀유지·목적 외 사용금지 명시",
+        "반환/폐기·접근통제·재제공 금지 확인"
+      ],
+      "approval_required": true,
+      "tags": [
+        "clause:technical_data",
+        "approval_required",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    }
+  ],
+  "approval_required_matches": [
+    {
+      "rule_id": "RISK-001",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "책임제한/한도",
+      "rule_level": "risk",
+      "title": "무제한 책임(또는 사실상 무한대) 탐지",
+      "description": "무제한 책임 또는 'without limitation' 등 사실상 무한대 책임 구조는 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "10/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "INCLUDING WITHOUT LIMITATION"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "총액 cap 설정(예: 계약대금/연간대금/보험한도)",
+        "간접손해/특별손해 제외",
+        "고의/중과실 등 예외를 제한적으로 규정"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:unlimited_liability",
+        "approval_required",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "RISK-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "risk",
+      "title": "일방 면책/일방 배상(후보) 탐지",
+      "description": "일방 면책 또는 일방 배상(indemnity) 구조는 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "20/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "Client will indemnify ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "상호성 확보(각자 귀책 범위 내 상호 배상)",
+        "제3자 청구 방어 절차(통지/방어권/합의권) 규정",
+        "보험(PL/배상책임)과 연동"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:one_sided_indemnity",
+        "approval_required",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "RISK-004",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "대리점/위탁/유통",
+        "라이선스/로열티"
+      ],
+      "clause_type": "기술자료/자료요구",
+      "rule_level": "risk",
+      "title": "기술자료/원가자료/도면/소스코드 요구 탐지",
+      "description": "기술자료 요구는 목적·범위·보유기간·반환/폐기 의무 및 목적 외 사용금지까지 명확히 해야 한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "5/207",
+        "example_files": [
+          "☆ 일룸 LG전자 상품 위수탁거래계약서 검토(법무팀).docx"
+        ],
+        "example_phrase": "조사, 자료제출 등 요청"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "요구 목적/정당성 확인",
+        "제공 범위 최소화 및 비밀유지·목적 외 사용금지 명시",
+        "반환/폐기 및 제3자 제공 제한"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:technical_data_request",
+        "approval_required",
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-005",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "책임제한/한도",
+      "rule_level": "pattern_approval",
+      "title": "무제한 책임 트리거(승인 필요)",
+      "description": "unlimited liability/without limitation 트리거가 있으면 무제한 책임 후보로 보고 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "unlimited liability / without limitation"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "책임 cap 및 간접손해 제외 협상",
+        "예외(고의/중과실 등) 최소화"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:unlimited_liability",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-006",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "pattern_approval",
+      "title": "일방 배상/면책 트리거(승인 필요)",
+      "description": "indemnify/hold harmless/면책 트리거가 있으면 일방 배상/면책 후보로 보고 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "indemnify / hold harmless / 면책"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "상호화(각자 귀책 범위) 또는 범위 축소",
+        "방어 절차(통지/방어권/합의권) 규정"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-007",
+      "entity": "fursys_group",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기술자료/자료요구",
+      "rule_level": "pattern_approval",
+      "title": "기술자료/자료제출 트리거(승인 필요)",
+      "description": "기술자료/자료제출 트리거가 있으면 기술자료 요구 후보로 보고 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_phrase": "기술자료 / 자료제출"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "제공 목적/범위/보유기간 제한",
+        "반환/폐기·목적 외 사용금지·재제공 금지"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:technical_data",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    }
+  ],
+  "backlog_reference_only": [
+    {
+      "rule_id": "BL-001",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "ESTIMATED/UNCONFIRMED/FAILED 문서군",
+      "description": "본문이 확인되지 않아 확정 rule로 승격 금지. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "108건 (UNCONFIRMED 61 + FAILED 47)"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "추후 본문 추출 성공 시에만 rule 승격 검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-002",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "OCR 필요 PDF",
+      "description": "PDF 텍스트 레이어가 없어 OCR 없이는 본문 확인 불가. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "5건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "OCR 파이프라인 확보 후 본문 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "ocr_needed",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-003",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "미지원 포맷(hwp 등)",
+      "description": "현 파이프라인에서 미지원 포맷으로 본문 확인 불가. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "5건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "포맷 변환 파이프라인 구축 후 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "unsupported_format",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-004",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "기타 추출 실패(손상/인코딩/구조 이슈 등)",
+      "description": "기타 사유로 본문 추출 실패. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "34건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "파일 상태/인코딩/손상 여부 확인 후 재처리"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "extraction_failed",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-005",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "추출 텍스트 너무 짧음",
+      "description": "추출 텍스트가 불충분하여 본문 확인으로 보기 어려움. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "3건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "원문 확인 또는 재추출 후에만 승격 검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "text_too_short",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-006",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "Office 변환 미시도(legacy doc/xls 등)",
+      "description": "정책상 이번 단계에서는 Office COM 변환을 미시도. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "example_phrase": "Office conversion not attempted (EnableOffice not set)"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "추후 변환 정책 확정 후 본문 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "office_not_attempted",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    }
+  ],
+  "policy_note": "판정에는 confirmed 계열 rule만 사용하며, backlog는 참고용으로만 표시한다."
+}
+```
+
+## 3) 적용된 rule(매칭된 rule)
+```json
+[
+  {
+    "rule_id": "ACT-003",
+    "title": "정산식·차감사유·증빙 필수화",
+    "rule_status": "confirmed_pattern",
+    "risk_level": "MEDIUM",
+    "approval_required": false
+  },
+  {
+    "rule_id": "RISK-001",
+    "title": "무제한 책임(또는 사실상 무한대) 탐지",
+    "rule_status": "approval_required",
+    "risk_level": "HIGH",
+    "approval_required": true
+  },
+  {
+    "rule_id": "RISK-002",
+    "title": "일방 면책/일방 배상(후보) 탐지",
+    "rule_status": "approval_required",
+    "risk_level": "HIGH",
+    "approval_required": true
+  },
+  {
+    "rule_id": "RISK-004",
+    "title": "기술자료/원가자료/도면/소스코드 요구 탐지",
+    "rule_status": "approval_required",
+    "risk_level": "HIGH",
+    "approval_required": true
+  },
+  {
+    "rule_id": "ACT-005",
+    "title": "무제한 책임 트리거(승인 필요)",
+    "rule_status": "approval_required",
+    "risk_level": "HIGH",
+    "approval_required": true
+  },
+  {
+    "rule_id": "ACT-006",
+    "title": "일방 배상/면책 트리거(승인 필요)",
+    "rule_status": "approval_required",
+    "risk_level": "HIGH",
+    "approval_required": true
+  },
+  {
+    "rule_id": "ACT-007",
+    "title": "기술자료/자료제출 트리거(승인 필요)",
+    "rule_status": "approval_required",
+    "risk_level": "HIGH",
+    "approval_required": true
+  }
+]
+```
+
+## 4) high risk / approval required 결과
+
+- high_risk: True
+- approval_required: True
+
+## 5) 결과 해석
+
+- 입력 문구에 무제한 책임/면책/기술자료/해지 키워드가 포함되어 trigger rule이 매칭되었다.
+- 매칭된 rule 중 risk_level이 HIGH(또는 동급)인 항목이 있으면 high_risk로 판단했다.
+- 매칭된 rule 중 rule_status=approval_required 또는 approval_required=true가 있으면 approval_required로 판단했다.

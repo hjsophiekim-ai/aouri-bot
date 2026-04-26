@@ -1,0 +1,68 @@
+﻿{
+    "ResultsByType":  {
+                          ".xls":  {
+                                       "Success":  0,
+                                       "Failed":  2,
+                                       "States":  {
+                                                      "UNSUPPORTED_FORMAT":  2
+                                                  },
+                                       "Total":  2
+                                   },
+                          ".xlsx":  {
+                                        "Success":  0,
+                                        "Failed":  4,
+                                        "States":  {
+                                                       "UNSUPPORTED_FORMAT":  4
+                                                   },
+                                        "Total":  4
+                                    },
+                          ".pdf":  {
+                                       "Success":  0,
+                                       "Failed":  5,
+                                       "States":  {
+                                                      "INVALID_FORMAT":  5
+                                                  },
+                                       "Total":  5
+                                   },
+                          ".hwp":  {
+                                       "Success":  0,
+                                       "Failed":  5,
+                                       "States":  {
+                                                      "UNSUPPORTED_FORMAT":  5
+                                                  },
+                                       "Total":  5
+                                   },
+                          ".doc":  {
+                                       "Success":  0,
+                                       "Failed":  22,
+                                       "States":  {
+                                                      "CONVERTIBLE":  22
+                                                  },
+                                       "Total":  22
+                                   },
+                          ".docx":  {
+                                        "Success":  0,
+                                        "Failed":  270,
+                                        "States":  {
+                                                       "FAILED":  270
+                                                   },
+                                        "Total":  270
+                                    },
+                          ".txt":  {
+                                       "Success":  0,
+                                       "Failed":  7,
+                                       "States":  {
+                                                      "UNSUPPORTED_FORMAT":  7
+                                                  },
+                                       "Total":  7
+                                   }
+                      },
+    "ProcessedFiles":  315,
+    "TotalFiles":  315,
+    "FailureReasons":  {
+                           "XML Parsing Error":  264,
+                           "File Structure Error":  6
+                       },
+    "SuccessfulExtractions":  0,
+    "SuccessRate":  0
+}

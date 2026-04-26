@@ -10,9 +10,15 @@ out/
 # Environment variables
 .env
 .env.local
+.env.*.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Secrets
+secrets.json
+*.pem
+*.key
 
 # IDE files
 .vscode/
@@ -29,16 +35,48 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+venv/
+.venv/
+
 # Runtime data
 pids
 *.pid
 *.seed
 *.pid.lock
 
+# App runtime local data (do not commit)
+aouri-bot/runtime/data/
+aouri-bot/runtime/data/**
+
 # Temporary files
 .tmp/
 temp/
 *.tmp
+
+# Local contract/source artifacts (do not commit)
+docs/Contract/
+docs/Contract/**
+docs/review_output/02_extracted_texts/
+docs/review_output/temp_extract_*/
+docs/review_output/extracted_*.txt
+docs/review_output/simple_extracted_*.txt
+docs/review_output/*extraction*.csv
+docs/review_output/*_log.csv
+docs/review_output/*.log
+docs/review_output/*.jsonl
+
+# Local binaries at repo root (do not commit)
+/*.docx
+/*.pdf
+
+# Binaries in docs (do not commit)
+docs/**/*.pdf
 
 # Large binary files that should be handled by Git LFS
 *.node
