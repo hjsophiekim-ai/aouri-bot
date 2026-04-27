@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 from typing import Any
 
 from runtime.ai.http_openai_compatible_provider import build_messages
@@ -31,6 +32,23 @@ def _try_json(content: str) -> Any | None:
     try:
         return json.loads(content)
     except Exception:
+        s = (content or "").strip()
+        if not s:
+            return None
+        for a, b in (("[", "]"), ("{", "}")):
+            i = s.find(a)
+            j = s.rfind(b)
+            if i >= 0 and j > i:
+                frag = s[i : j + 1].strip()
+                try:
+                    return json.loads(frag)
+                except Exception:
+                    try:
+                        obj = ast.literal_eval(frag)
+                        if isinstance(obj, (list, dict)):
+                            return obj
+                    except Exception:
+                        continue
         return None
 
 
@@ -107,6 +125,90 @@ def polish_questions(
             out.append(q)
     meta = {"ok": True, "usage": (resp.usage.__dict__ if resp.usage else None)}
     return out, meta
+
+
+def prioritize_questions(
+    *,
+    provider: AIProvider,
+    model: str,
+    questions: list[dict[str, Any]],
+    entity: str,
+    contract_type: str,
+    contract_text: str,
+    clause_headings: list[str] | None,
+    timeout_sec: float,
+    max_tokens: int,
+    temperature: float,
+    max_questions: int = 5,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    if not questions:
+        return questions, None
+    mq = max(1, min(int(max_questions), 8))
+    system = (
+        "너는 계약서 검토를 위한 질문 우선순위 산정 엔진이다. "
+        "계약서 원문(요약)과 후보 질문을 보고, '빠졌거나 애매한 조항'을 해소하는 질문을 최우선으로 선택하라. "
+        "계약서에 이미 명확히 기재된 내용은 되묻지 않도록 우선순위를 낮춰라. "
+        "출력은 JSON 배열만, 각 원소는 question_id/score/reason만 포함하라. "
+        f"배열 순서는 우선순위(높은 점수) 순이며, 최대 {mq}개만 반환하라."
+    )
+    user = json.dumps(
+        {
+            "entity": entity,
+            "contract_type": contract_type,
+            "contract_excerpt": str(contract_text or "")[:2400],
+            "clause_headings": (clause_headings or [])[:20],
+            "candidates": [
+                {
+                    "question_id": q.get("question_id"),
+                    "title": q.get("title"),
+                    "description": q.get("description"),
+                    "tags": q.get("tags") if isinstance(q.get("tags"), list) else [],
+                    "related_rule_ids": q.get("related_rule_ids") if isinstance(q.get("related_rule_ids"), list) else [],
+                }
+                for q in questions[:12]
+            ],
+        },
+        ensure_ascii=False,
+    )
+    req = _build_request(
+        model=model,
+        system=system,
+        user=user,
+        timeout_sec=timeout_sec,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    try:
+        resp = provider.complete(req)
+    except Exception as exc:
+        return questions, {"error": sanitize_error_message(str(exc))}
+
+    obj = _try_json(resp.content)
+    if not isinstance(obj, list):
+        return questions, {"error": "invalid AI response (expected JSON array)"}
+
+    picked: list[tuple[int, str]] = []
+    for it in obj:
+        if not isinstance(it, dict):
+            continue
+        qid = it.get("question_id")
+        if not isinstance(qid, str) or not qid:
+            continue
+        try:
+            score = int(it.get("score", 0))
+        except Exception:
+            score = 0
+        picked.append((score, qid))
+    if not picked:
+        return questions, {"error": "empty prioritization result"}
+
+    order = [qid for _, qid in sorted(picked, key=lambda x: x[0], reverse=True)]
+    by_id = {str(q.get("question_id")): q for q in questions if isinstance(q, dict) and isinstance(q.get("question_id"), str)}
+    out = [by_id[qid] for qid in order if qid in by_id]
+    if not out:
+        out = questions
+    meta = {"ok": True, "usage": (resp.usage.__dict__ if resp.usage else None)}
+    return out[:mq], meta
 
 
 def polish_revision(

@@ -535,6 +535,406 @@
           "clause:safety",
           "confirmed"
         ]
+      },
+      {
+        "rule_id": "APP-001",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "IP/산출물/소스코드",
+        "rule_level": "pattern",
+        "title": "산출물/소스코드/IP 귀속 및 사용권 점검",
+        "description": "개발 산출물·소스코드·저작권(IP) 귀속과 이용범위(복제/수정/2차저작물/배포/재사용) 및 대금 지급과의 연계 조건을 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "산출물/소스코드/저작권"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "산출물·소스코드·저작권 귀속(양도/이용허락) 구조 확인",
+          "검수/대금 지급 완료 전후 권리 이전 조건 명확화",
+          "제3자 권리침해에 대한 보증·배상(방어권/승인 절차 포함) 확인"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:산출물",
+          "trigger:소스코드",
+          "trigger:저작권",
+          "trigger:IP",
+          "clause:appdev_ip",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-002",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW",
+          "라이선스/로열티"
+        ],
+        "clause_type": "오픈소스/라이선스",
+        "rule_level": "pattern",
+        "title": "오픈소스 사용/라이선스 위반 리스크 점검",
+        "description": "오픈소스/서드파티 컴포넌트 사용 고지, 라이선스 준수, 소스 공개 의무, 위반 시 책임 및 치료(대체/제거) 의무를 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "open source / GPL / license"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "오픈소스 목록(SBOM) 제공 및 변경 시 사전 고지",
+          "카피레프트(GPL 등) 사용 제한 및 준수 책임 귀속",
+          "라이선스 위반 시 시정(대체/제거) 및 손해배상 구조 확인"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:오픈소스",
+          "trigger:open source",
+          "trigger:GPL",
+          "trigger:라이선스",
+          "trigger:license",
+          "clause:appdev_oss",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-003",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "범위/사양/SOW",
+        "rule_level": "pattern",
+        "title": "개발 범위/사양(SOW) 불명확 리스크 점검",
+        "description": "요구사항/기능범위/사양/SOW가 불명확하면 일정·대금·검수 분쟁으로 확대되므로 산출물 기준과 변경관리(추가비용/일정) 구조를 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "요구사항/사양/SOW"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "요구사항/사양/산출물 정의 및 버전 관리",
+          "변경요청 절차(요청서/평가/견적/승인)와 비용·일정 반영",
+          "범위 외 요청에 대한 거절/추가 합의 원칙 명시"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:개발",
+          "trigger:요구사항",
+          "trigger:사양",
+          "trigger:SOW",
+          "trigger:Statement of Work",
+          "trigger:범위",
+          "clause:appdev_sow",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-004",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "검수/인수",
+        "rule_level": "pattern",
+        "title": "검수 기준/기간/간주검수 및 재검수 점검",
+        "description": "검수 기준/기간/재검수 및 간주검수는 대금지급·책임 전환의 핵심이므로 명확한 기준과 절차를 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "검수/인수/간주검수"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "검수 기준(테스트 시나리오/성능 기준/결함 등급) 명시",
+          "검수 기간 및 재검수 절차(수정기한/재검수 횟수) 명시",
+          "간주검수는 통지·자료 제공·대응기간 요건을 엄격히 설정"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:검수",
+          "trigger:인수",
+          "trigger:간주검수",
+          "trigger:재검수",
+          "clause:appdev_acceptance",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-005",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "지연/마일스톤/지체",
+        "rule_level": "pattern",
+        "title": "마일스톤 지연/지연손해금(지체상금) 점검",
+        "description": "마일스톤/납기 지연은 사업리스크로 연결되므로 지연손해금, 지연 사유(상대/당사 제공자료), 일정 조정 및 해지권을 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "마일스톤/지체상금"
+        },
+        "risk_level": "MEDIUM",
+        "review_action": [
+          "마일스톤 산출물 및 일정(달력일/영업일) 명확화",
+          "지체상금 상한 및 면책(당사 귀책/자료 미제공 등) 조건 구체화",
+          "중대한 지연 시 단계별 시정요구 및 해지/대체조치 권리 확보"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:마일스톤",
+          "trigger:지체상금",
+          "trigger:지연손해금",
+          "trigger:지체",
+          "trigger:납기",
+          "clause:appdev_delay",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-006",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW",
+          "라이선스/로열티"
+        ],
+        "clause_type": "유지보수/SLA/장애",
+        "rule_level": "pattern",
+        "title": "하자보수/유지보수/SLA 및 장애 대응 점검",
+        "description": "하자보수·유지보수·SLA는 운영단계 리스크를 좌우하므로 보수 범위, 응답/복구 시간, 업데이트 정책, 장애 대응 절차를 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "유지보수/SLA/장애"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "하자/결함 정의 및 보수 범위(무상/유상) 구분",
+          "SLA(가용성/응답/복구시간) 및 위반 시 크레딧/해지권",
+          "장애 대응(티켓/통지/에스컬레이션)과 로그/분석 협력"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:유지보수",
+          "trigger:SLA",
+          "trigger:가용성",
+          "trigger:장애",
+          "trigger:복구",
+          "clause:appdev_sla",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-007",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "개인정보/처리위탁(DPA)",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "보안/개인정보/침해사고",
+        "rule_level": "pattern",
+        "title": "보안사고/개인정보 유출 책임 및 통지/대응 점검",
+        "description": "보안사고/개인정보 유출은 통지·협력·손해배상·재발방지까지 연결되므로 책임 귀속 및 사고 대응 절차를 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "보안사고/침해/개인정보 유출"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "침해사고 통지 기한 및 조사/시정 협력 의무",
+          "개인정보 처리위탁/국외이전/재위탁 통제 여부",
+          "보안조치 기준(접근통제/암호화/로그) 및 위반 시 책임"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:보안",
+          "trigger:침해",
+          "trigger:사고",
+          "trigger:개인정보",
+          "trigger:유출",
+          "clause:appdev_security",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-008",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW",
+          "라이선스/로열티"
+        ],
+        "clause_type": "제3자 솔루션/권리침해",
+        "rule_level": "pattern",
+        "title": "제3자 솔루션/라이브러리 사용 및 권리침해 보증 점검",
+        "description": "제3자 솔루션/클라우드/라이브러리 사용 시 권한/라이선스 확보 및 권리침해 보증·배상 구조를 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "제3자 솔루션/라이브러리/API"
+        },
+        "risk_level": "MEDIUM",
+        "review_action": [
+          "제3자 컴포넌트 사용 고지 및 라이선스 비용/책임 귀속",
+          "권리침해 주장 시 방어·대체·환불 등 치료책 구조",
+          "당사 승인 없이 핵심 솔루션 변경 금지"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:제3자",
+          "trigger:솔루션",
+          "trigger:라이브러리",
+          "trigger:API",
+          "trigger:cloud",
+          "clause:appdev_thirdparty",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-009",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "재위탁/하도급 개발",
+        "rule_level": "pattern",
+        "title": "재위탁/하도급 개발 제한 및 승인 점검",
+        "description": "재위탁(하도급) 개발은 품질/보안/IP 리스크로 연결되므로 사전 승인, 책임 귀속, 보안/비밀유지 흐름을 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "재위탁/하도급/외주"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "재위탁 사전 서면 승인 및 하위수탁자 관리 의무",
+          "재위탁자 행위에 대한 상대방의 연대 책임",
+          "보안/비밀유지/개인정보 의무의 하위전가 및 감사권"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:재위탁",
+          "trigger:하도급",
+          "trigger:외주",
+          "trigger:협력업체",
+          "trigger:subcontract",
+          "clause:appdev_subcontract",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-010",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "개인정보/처리위탁(DPA)",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "데이터 이전/반환/삭제",
+        "rule_level": "pattern",
+        "title": "데이터 이전/반환/삭제 및 로그/백업 처리 점검",
+        "description": "서비스 종료/이관 시 데이터 반환·삭제·백업·로그 보관 및 개인정보 파기 의무를 점검한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "데이터 반환/삭제/파기"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "종료 시 데이터 반환 포맷/기한/비용 및 협력 범위",
+          "개인정보 파기/삭제 및 백업/로그 처리 기준",
+          "삭제 완료 확인 및 증적 제공 여부"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:데이터",
+          "trigger:반환",
+          "trigger:삭제",
+          "trigger:파기",
+          "trigger:이관",
+          "clause:appdev_data",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-011",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "용역/자문/SOW"
+        ],
+        "clause_type": "종료/인수인계/전환",
+        "rule_level": "pattern",
+        "title": "계약 종료 시 인수인계/소스코드 이전/전환 협력 점검",
+        "description": "종료 시 인수인계, 소스코드/문서/계정 이전, 전환 협력 범위가 불명확하면 서비스 중단 리스크가 크다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "인수인계/전환/소스코드 이전"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "인수인계 산출물 목록(소스코드/문서/설정/계정) 명시",
+          "전환 지원 기간/요율 및 종료 후 협력 의무",
+          "보관 중인 데이터/비밀정보 반환·파기 연동"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:인수인계",
+          "trigger:전환",
+          "trigger:migration",
+          "trigger:소스코드",
+          "trigger:계약 종료",
+          "clause:appdev_handover",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "APP-012",
+        "entity": "all",
+        "contract_type": [
+          "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+          "라이선스/로열티"
+        ],
+        "clause_type": "성능보장/가용성",
+        "rule_level": "pattern",
+        "title": "성능보장/가용성/서비스 수준 점검",
+        "description": "성능보장 및 가용성(SLA) 약정은 정의/측정/예외/위반 시 구제수단이 없으면 실효성이 떨어져 분쟁이 발생한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "app_dev_rules_pack",
+          "example_phrase": "가용성/성능/SLA"
+        },
+        "risk_level": "MEDIUM",
+        "review_action": [
+          "서비스 수준 정의(가용성/응답시간) 및 측정 방식",
+          "예외(점검/불가항력/당사 귀책)와 사전 통지",
+          "위반 시 크레딧/감액/해지권 등 구제수단"
+        ],
+        "approval_required": false,
+        "tags": [
+          "trigger:성능",
+          "trigger:가용성",
+          "trigger:서비스 수준",
+          "trigger:SLA",
+          "trigger:응답시간",
+          "clause:appdev_performance",
+          "confirmed"
+        ]
       }
     ],
     "exception_possible": [

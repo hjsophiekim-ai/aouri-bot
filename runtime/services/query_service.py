@@ -62,6 +62,32 @@ class RuleQueryService:
 
     def _derive_contract_types_from_text(self, text: str) -> list[str]:
         out: list[str] = []
+        if self._any_keyword(
+            text,
+            [
+                "앱 개발",
+                "소프트웨어 개발",
+                "시스템 개발",
+                "개발 용역",
+                "IT 용역",
+                "SI",
+                "유지보수",
+                "maintenance",
+                "SaaS",
+                "API 연동",
+                "API integration",
+                "소스코드",
+                "source code",
+                "산출물",
+                "SLA",
+                "오픈소스",
+                "opensource",
+                "open source",
+                "라이선스",
+                "license",
+            ],
+        ):
+            out.append("앱개발/소프트웨어개발/SI/유지보수/SaaS")
         if self._any_keyword(text, TRIGGER_MAP.get("ACT-009", []) + TRIGGER_MAP.get("RISK-006", [])):
             out.append("대리점/위탁/유통")
         if self._any_keyword(text, TRIGGER_MAP.get("ACT-008", []) + TRIGGER_MAP.get("RISK-005", [])):

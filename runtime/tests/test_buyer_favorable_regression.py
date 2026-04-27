@@ -33,6 +33,9 @@ class BuyerFavorableRegressionTest(unittest.TestCase):
             ai_temperature=None,
         )
         self.assertEqual(bundle.meta.get("review_posture"), "buyer_favorable")
+        pr = bundle.meta.get("party_role") if isinstance(bundle.meta, dict) else None
+        self.assertTrue(isinstance(pr, dict))
+        self.assertTrue(pr.get("our_role") in ("buyer", "ordering_party", "neutral", "unknown"))
 
     def test_favorable_safety_clause_not_unnecessarily_rewritten(self) -> None:
         text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
@@ -83,11 +86,13 @@ class BuyerFavorableRegressionTest(unittest.TestCase):
         self.assertTrue(any_strengthened)
 
     def test_dealer_act_not_inferred_for_lg_purchase_installation(self) -> None:
-        from runtime.law.search_service import _derive_topics
+        from runtime.law.search_service import _derive_queries
 
         text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
-        topics = _derive_topics(entity="퍼시스", contract_type="장비공급/설치/시운전", text=text, matched_rules=[])
-        self.assertFalse(any("대리점법" == t for t in topics))
+        qobjs = _derive_queries(entity="퍼시스", contract_type="장비공급/설치/시운전", text=text, matched_rules=[], scope="contract")
+        qs = [q.get("query") for q in qobjs if isinstance(q.get("query"), str)]
+        self.assertFalse(any("대리점법" == t for t in qs))
+        self.assertTrue(any("민법" in t for t in qs))
 
     def test_redline_docx_has_mixed_color_runs(self) -> None:
         text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
@@ -105,7 +110,7 @@ class BuyerFavorableRegressionTest(unittest.TestCase):
             ai_max_tokens=None,
             ai_temperature=None,
         )
-        original_clauses = [{"clause_id": c.clause_id, "clause_title": c.title, "text": c.text} for c in bundle.clauses]
+        original_clauses = [{"clause_id": c.clause_id, "article_number": c.article_number, "clause_title": c.title, "text": c.text} for c in bundle.clauses]
         b = build_revision_docx(
             entity="퍼시스",
             contract_type="장비공급/설치/시운전",

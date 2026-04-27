@@ -41,6 +41,53 @@ def _top_keywords(text: str, keywords: list[str], *, limit: int = 3) -> list[str
     return out
 
 
+def _find_any(text: str, keywords: list[str]) -> list[int]:
+    t = (text or "").lower()
+    idxs: list[int] = []
+    for k in keywords:
+        kk = (k or "").lower()
+        if not kk:
+            continue
+        start = 0
+        while True:
+            i = t.find(kk, start)
+            if i < 0:
+                break
+            idxs.append(i)
+            start = i + max(1, len(kk))
+            if len(idxs) >= 30:
+                return idxs
+    return idxs
+
+
+def _topic_state(
+    text: str,
+    *,
+    anchors: list[str],
+    clear_terms: list[str],
+    ambiguity_terms: list[str],
+    window: int = 140,
+) -> str:
+    t = text or ""
+    if not _has_any(t, anchors):
+        return "missing"
+    idxs = _find_any(t, anchors)
+    amb = False
+    clr = False
+    low = t.lower()
+    for i in idxs[:12]:
+        s = low[max(0, i - window) : min(len(low), i + window)]
+        if any(a.lower() in s for a in ambiguity_terms):
+            amb = True
+        if any(c.lower() in s for c in clear_terms):
+            clr = True
+    if amb:
+        return "ambiguous"
+    if clr:
+        return "clear"
+    return "ambiguous"
+
+
 def generate_questions(
     entity: str,
     contract_type: str,
@@ -65,14 +112,301 @@ def generate_questions(
     privacy_controls_present = _has_any(text, ["재위탁", "파기", "보관기간", "침해", "사고 통지", "보안조치"])
     dealer_present = _has_any(text, ["대리점", "유통", "위탁", "위탁판매", "위수탁"])
     dealer_cost_present = _has_any(text, ["판촉", "판매장려금", "광고비", "반품", "리베이트", "수수료", "비용 전가", "비용전가"])
+    if dealer_cost_present:
+        dealer_present = True
+    dealer_cost_details_present = _has_any(text, ["상한", "정산", "증빙", "사전 서면", "서면 합의", "서면합의"])
     onsite_present = _has_any(text, ["설치", "시공", "현장", "작업", "공사", "물류센터"])
     safety_present = _has_any(text, ["산업안전", "중대재해", "안전관리", "보호구", "작업중지"])
+    inspection_present = _has_any(text, ["검수", "검사", "시운전", "성능시험", "인수", "재검수"])
+    subcontract_present = _has_any(text, ["재위탁", "하도급", "협력업체", "외주"])
+    subcontract_approval_present = _has_any(text, ["사전 승인", "사전승인", "서면 승인", "서면승인", "승인"])
+    app_dev_present = (
+        _has_any(
+            ctype,
+            ["앱개발", "소프트웨어개발", "SI", "유지보수", "SaaS", "API"],
+        )
+        or _has_any(
+            text,
+            ["앱 개발", "소프트웨어 개발", "시스템 개발", "개발 용역", "SaaS", "API 연동", "소스코드", "산출물", "SLA"],
+        )
+    )
+    ambiguity_markers = [
+        "별도 협의",
+        "추후 협의",
+        "상호 협의",
+        "협의한다",
+        "협의하여",
+        "별도로 정한다",
+        "추후 정한다",
+        "to be agreed",
+        "tbd",
+        "to be determined",
+        "mutual agreement",
+    ]
+    ip_state = _topic_state(
+        text,
+        anchors=["산출물", "저작권", "지식재산", "ip", "프로그램", "source code", "소스코드"],
+        clear_terms=["귀속", "양도", "이전", "소유", "ownership", "assign", "license", "이용허락", "사용권"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    source_delivery_state = _topic_state(
+        text,
+        anchors=["소스코드", "source code", "repository", "git"],
+        clear_terms=["인도", "제공", "납품", "전달", "이관", "에스크로", "escrow", "저장소"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    maintenance_state = _topic_state(
+        text,
+        anchors=["유지보수", "maintenance", "운영", "하자보수"],
+        clear_terms=["기간", "개월", "년", "범위", "무상", "유상", "요율", "응답", "복구", "지원시간", "SLA"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    acceptance_state = _topic_state(
+        text,
+        anchors=["검수", "인수", "acceptance", "테스트", "간주검수", "재검수"],
+        clear_terms=["기준", "기간", "영업일", "재검수", "테스트 시나리오", "결함", "합격"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    sla_state = _topic_state(
+        text,
+        anchors=["SLA", "가용성", "uptime", "응답시간", "복구시간", "장애", "서비스 수준"],
+        clear_terms=["%", "시간", "분", "rto", "rpo", "등급", "레벨", "크레딧", "감액"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    privacy_state = _topic_state(
+        text,
+        anchors=["개인정보", "privacy", "dpa", "처리위탁", "수탁", "위탁", "국외이전", "재위탁"],
+        clear_terms=["재위탁", "파기", "보관", "국외", "암호화", "접근통제", "침해사고", "통지", "대응"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    oss_state = _topic_state(
+        text,
+        anchors=["오픈소스", "open source", "gpl", "mit", "apache", "라이선스", "license", "third party", "서드파티"],
+        clear_terms=["목록", "sbom", "고지", "준수", "위반", "카피레프트", "공개", "copyleft"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    subcontract_state = _topic_state(
+        text,
+        anchors=["재위탁", "하도급", "외주", "협력업체", "subcontract"],
+        clear_terms=["사전", "서면", "승인", "책임", "연대", "관리", "동일한 의무"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    security_state = _topic_state(
+        text,
+        anchors=["보안", "침해", "유출", "사고", "취약점", "암호화", "로그", "incident"],
+        clear_terms=["통지", "조사", "시정", "재발방지", "손해배상", "비용", "협력"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    exit_state = _topic_state(
+        text,
+        anchors=["종료", "해지", "인수인계", "전환", "migration", "데이터", "반환", "삭제", "파기", "소스코드"],
+        clear_terms=["반환", "삭제", "파기", "포맷", "기한", "확인", "증적", "지원", "이관"],
+        ambiguity_terms=ambiguity_markers,
+    )
+    security_hint = _has_any(text, ["보안", "침해", "유출", "사고", "취약점", "암호화", "로그", "incident"])
+    data_subject_hint = _has_any(text, ["회원", "이용자", "고객", "로그인", "계정", "배송", "결제", "주문", "사용자"])
 
     if max_questions < 1:
         max_questions = 1
     max_questions = min(int(max_questions), 8)
 
-    if dealer_present and ("RISK-006" in detected or "RISK-006" in clause_rule_ids or dealer_cost_present):
+    if app_dev_present and ip_state != "clear":
+        candidates.append(
+            (
+                96 if ip_state == "missing" else 94,
+                Question(
+                    question_id="Q-AD-001-ip-ownership",
+                    title="개발 산출물/소스코드/저작권(IP) 귀속(양도/이용허락) 구조가 계약서에 명확히 적혀 있나요?",
+                    description="앱/소프트웨어 개발계약의 핵심 쟁점으로, 산출물·소스코드 귀속 및 이용범위(수정/배포/재사용)와 제3자 권리침해 보증·시정 구조가 빠지면 분쟁이 커질 수 있다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_ip_ownership_terms"],
+                    related_rule_ids=["APP-001"],
+                ),
+            )
+        )
+
+    if app_dev_present and oss_state != "clear":
+        candidates.append(
+            (
+                93 if oss_state == "missing" else 92,
+                Question(
+                    question_id="Q-AD-002-oss",
+                    title="오픈소스/서드파티 라이브러리 사용 고지(SBOM)와 라이선스 준수/위반 시 시정·배상 구조가 계약서에 포함돼 있나요?",
+                    description="오픈소스 라이선스 위반은 소스 공개 의무 등 치명적 리스크로 이어질 수 있어, 사용 제한/고지/준수/치료책(대체·제거) 구조를 명확히 해야 한다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_oss_controls"],
+                    related_rule_ids=["APP-002"],
+                ),
+            )
+        )
+
+    if app_dev_present and _has_any(text, ["개발", "요구사항", "사양", "SOW", "범위"]) and _topic_state(
+        text,
+        anchors=["요구사항", "사양", "SOW", "범위", "기능명세", "변경요청", "change request"],
+        clear_terms=["별지", "요청서", "승인", "견적", "영향분석", "일정", "비용"],
+        ambiguity_terms=ambiguity_markers,
+    ) != "clear":
+        candidates.append(
+            (
+                92,
+                Question(
+                    question_id="Q-AD-003-sow",
+                    title="개발 범위/요구사항/사양(SOW)과 변경관리(추가비용·일정 반영) 절차가 계약서에 명확히 정의돼 있나요?",
+                    description="범위·사양이 모호하면 일정 지연/추가비용/검수 분쟁으로 확대될 수 있어, 별지 SOW와 변경요청 승인 프로세스를 명확히 해야 한다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_sow_change_control"],
+                    related_rule_ids=["APP-003"],
+                ),
+            )
+        )
+
+    if app_dev_present and acceptance_state != "clear":
+        candidates.append(
+            (
+                92 if acceptance_state == "missing" else 90,
+                Question(
+                    question_id="Q-AD-004-acceptance",
+                    title="검수 기준과 검수 기간(재검수/간주검수 포함)이 계약서에 명확히 정해져 있나요?",
+                    description="검수 기준/기간/재검수/간주검수는 대금지급·책임전환의 핵심이라, 요건이 약하면 분쟁이 커질 수 있다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_acceptance_terms"],
+                    related_rule_ids=["APP-004"],
+                ),
+            )
+        )
+
+    if app_dev_present and sla_state != "clear" and _has_any(text, ["SLA", "가용성", "응답시간", "복구시간", "장애", "서비스 수준", "uptime", "유지보수"]):
+        candidates.append(
+            (
+                89,
+                Question(
+                    question_id="Q-AD-005-sla",
+                    title="장애 대응 시간/가용성 등 SLA(서비스 수준)를 계약서에 명시할 필요가 있나요?",
+                    description="SLA가 모호하면 장애 대응 및 대금 감액/크레딧/해지 등 구제수단이 작동하지 않아 운영 리스크가 커질 수 있다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_sla_terms"],
+                    related_rule_ids=["APP-006", "APP-012"],
+                ),
+            )
+        )
+
+    if app_dev_present and privacy_state != "clear" and (data_subject_hint or _has_any(text, ["개인정보", "privacy", "dpa", "처리위탁", "수탁", "위탁"])):
+        candidates.append(
+            (
+                88,
+                Question(
+                    question_id="Q-AD-006-privacy-processing",
+                    title="개인정보 처리/위탁(DPA) 여부와 재위탁·파기·사고 통지 등 통제조항이 계약서에 충분히 포함돼 있나요?",
+                    description="앱/서비스 운영은 개인정보 이슈로 연결될 수 있어, 처리위탁 여부와 통제(재위탁/파기/통지/보안조치)를 계약서 또는 부속합의로 확정해야 한다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:privacy", "priority:high", "reason_code:missing_privacy_processing_terms"],
+                    related_rule_ids=["APP-007", "APP-010"],
+                ),
+            )
+        )
+
+    if app_dev_present and source_delivery_state != "clear":
+        candidates.append(
+            (
+                87 if source_delivery_state == "missing" else 86,
+                Question(
+                    question_id="Q-AD-007-source-delivery",
+                    title="소스코드 인도(저장소 이전/접근권 포함)가 계약 범위에 포함되어야 하나요?",
+                    description="소스코드 인도 여부는 종료·전환 리스크와 직결되므로, 인도 범위(저장소/빌드스크립트/환경설정)와 시점을 명확히 해야 한다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_source_code_delivery_terms"],
+                    related_rule_ids=["APP-001", "APP-011"],
+                ),
+            )
+        )
+
+    if app_dev_present and maintenance_state != "clear":
+        candidates.append(
+            (
+                86 if maintenance_state == "missing" else 84,
+                Question(
+                    question_id="Q-AD-008-maintenance-scope",
+                    title="유지보수 범위와 기간(무상/유상, 지원시간, 업데이트 정책)이 계약서에 명확히 정해져 있나요?",
+                    description="유지보수 조항이 포괄적이거나 기간/범위가 불명확하면 운영 단계에서 추가비용/책임 분쟁이 발생할 수 있다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_maintenance_terms"],
+                    related_rule_ids=["APP-006"],
+                ),
+            )
+        )
+
+    if app_dev_present and subcontract_present and not subcontract_approval_present:
+        candidates.append(
+            (
+                85,
+                Question(
+                    question_id="Q-AD-009-subcontract",
+                    title="재위탁(외주/하도급) 개발을 허용한다면 사전 서면 승인과 책임 귀속(보안/IP 포함)이 명확한가요?",
+                    description="재위탁은 품질·보안·IP 리스크를 증폭시키므로, 사전 승인과 하위수탁자 관리/연대책임 구조가 필요하다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_subcontract_controls"],
+                    related_rule_ids=["APP-009"],
+                ),
+            )
+        )
+
+    if app_dev_present and security_state != "clear" and (privacy_state != "missing" or security_hint):
+        candidates.append(
+            (
+                84,
+                Question(
+                    question_id="Q-AD-010-security-incident",
+                    title="보안사고/개인정보 유출 발생 시 통지·조사·시정·재발방지 및 비용/손해배상 책임 구조가 계약서에 명확히 있나요?",
+                    description="침해사고는 통지·협력·비용 부담·재위탁 통제까지 계약에 담겨야 실제 대응이 가능하다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:security", "priority:high", "reason_code:missing_security_incident_procedure"],
+                    related_rule_ids=["APP-007"],
+                ),
+            )
+        )
+
+    if app_dev_present and exit_state != "clear":
+        candidates.append(
+            (
+                83 if exit_state == "missing" else 82,
+                Question(
+                    question_id="Q-AD-011-exit-handover",
+                    title="계약 종료 시 데이터/소스코드 반환·삭제 및 인수인계/전환 지원이 계약서에 명확히 포함되어야 하나요?",
+                    description="종료/전환 조항이 약하면 서비스 중단과 개인정보 리스크가 커질 수 있어, 반환 포맷/기한/삭제 확인 및 전환 지원 범위를 명확히 해야 한다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:appdev", "priority:high", "reason_code:missing_exit_handover_terms"],
+                    related_rule_ids=["APP-010", "APP-011"],
+                ),
+            )
+        )
+
+    if (
+        dealer_present
+        and ("RISK-006" in detected or "RISK-006" in clause_rule_ids or dealer_cost_present)
+        and not dealer_cost_details_present
+    ):
         kws = _top_keywords(text, ["판촉비", "판매장려금", "광고비", "반품", "리베이트", "수수료", "위탁판매", "비용전가"], limit=3)
         suffix = f" (근거 키워드: {', '.join(kws)})" if kws else ""
         candidates.append(
@@ -133,6 +467,56 @@ def generate_questions(
         )
 
     if privacy_present and not privacy_controls_present:
+        candidates.append(
+            (
+                85,
+                Question(
+                    question_id="Q-CA-006-privacy-controls",
+                    title="개인정보 처리/위탁이 있다면 재위탁, 보관기간, 파기, 침해사고 통지, 보안조치 기준이 계약서에 명확히 포함되어 있나요?",
+                    description="개인정보 관련 통제 조항이 빠져 있으면 DPA/보안 부속 합의가 필요할 수 있다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:privacy", "priority:high", "reason_code:missing_privacy_controls"],
+                    related_rule_ids=[],
+                ),
+            )
+        )
+
+    if onsite_present and not inspection_present:
+        candidates.append(
+            (
+                84,
+                Question(
+                    question_id="Q-CA-007-inspection-acceptance",
+                    title="납품/설치/시운전의 검수 기준(재검수 포함)과 인수 시점이 계약서에 명확히 적혀 있나요?",
+                    description="검수 기준/절차/재검수/인수 시점이 불명확하면 성능 미달·지연·대금 지급과 연계되어 분쟁이 커질 수 있다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:inspection", "priority:high", "reason_code:missing_inspection_terms"],
+                    related_rule_ids=[],
+                ),
+            )
+        )
+
+    if onsite_present and (not subcontract_present or (subcontract_present and not subcontract_approval_present)):
+        candidates.append(
+            (
+                83,
+                Question(
+                    question_id="Q-CA-008-subcontract-approval",
+                    title="설치/시공/시운전을 협력업체에 재위탁(하도급)할 수 있다면, 사전 서면 승인과 안전·품질 책임 귀속이 명확한가요?",
+                    description="현장 작업은 재위탁 관리가 핵심이며, 승인/책임/보험/사고 통지 체계가 없으면 당사 리스크가 커질 수 있다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:safety", "priority:high", "reason_code:missing_subcontract_controls"],
+                    related_rule_ids=["ACT-010"],
+                ),
+            )
+        )
+
         candidates.append(
             (
                 80,

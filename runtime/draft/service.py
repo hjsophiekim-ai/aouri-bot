@@ -46,6 +46,29 @@ DEFAULT_TEMPLATE_HINTS: list[dict[str, object]] = [
         "template_ids": ["비밀유지서약서_당사가 정보를 제공한 경우.docx"],
     },
     {
+        "contract_type_keywords": [
+            "앱 개발",
+            "소프트웨어 개발",
+            "시스템 개발",
+            "개발용역",
+            "IT 용역",
+            "SI",
+            "유지보수",
+            "라이선스",
+            "SaaS",
+            "API 연동",
+            "소스코드",
+            "산출물",
+        ],
+        "template_ids": [
+            "영문 디자인용역 계약서.docx",
+            "표준 개인정보처리위탁 계약서.docx",
+            "비밀유지서약서_당사가 정보를 제공한 경우.docx",
+            "사내 표준 해외 디자이너 라이선스 계약서_수정_250311.docx",
+            "영문 로열티 계약서.docx",
+        ],
+    },
+    {
         "contract_type_keywords": ["대리점", "유통", "위탁"],
         "template_ids": ["사내표준 재판매대리점 약정서.docx"],
     },
@@ -80,6 +103,47 @@ def suggest_template_ids(contract_type: str) -> list[str]:
             for tid in tids:
                 if isinstance(tid, str) and tid not in hits:
                     hits.append(tid)
+    app_dev = any(
+        k in ct
+        for k in (
+            "앱 개발",
+            "소프트웨어 개발",
+            "시스템 개발",
+            "SI",
+            "유지보수",
+            "SaaS",
+            "API 연동",
+            "개발용역",
+            "IT 용역",
+            "소스코드",
+            "산출물",
+        )
+    )
+    if app_dev:
+        available = [t.template_id for t in list_standard_templates() if t.supported]
+
+        def pick(keys: list[str]) -> str | None:
+            ks = [k.lower() for k in keys if isinstance(k, str) and k.strip()]
+            for tid in available:
+                name = (tid or "").lower()
+                if any(k in name for k in ks):
+                    return tid
+            return None
+
+        for tid in [
+            pick(["용역", "service", "컨설팅", "consulting", "engagement", "디자인"]),
+            pick(["개인정보", "privacy", "dpa", "처리위탁"]),
+            pick(["라이선스", "license", "로열티", "royalty"]),
+            pick(["비밀", "nda", "confidential"]),
+        ]:
+            if isinstance(tid, str) and tid and tid not in hits:
+                hits.append(tid)
+
+    if not hits:
+        available = [t.template_id for t in list_standard_templates() if t.supported]
+        if available:
+            hits.append(available[0])
+
     return hits
 
 
@@ -134,6 +198,6 @@ def generate_draft_text(
         "template": {"template_id": template_id, "filename": p.name},
         "draft_text": draft_text,
         "suggestions": suggestions,
-        "note": "MVP: LLM 없이 템플릿 텍스트 + 룰 기반 체크/제안만 제공한다. DOC(HWP/PDF) 템플릿은 제외.",
+        "note": "템플릿 기반 초안 + 룰 기반 체크/제안을 제공하며, AI 활성화 시 문구 보강이 적용될 수 있다. DOC(HWP/PDF) 템플릿은 제외.",
     }
 

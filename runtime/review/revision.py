@@ -1,18 +1,13 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from runtime.services.query_service import TRIGGER_MAP
+from runtime.review.clause_extraction import ClauseChunk, extract_clauses
 from runtime.review.rewrite_engine import propose_clause_specific_rewrite
-
-
-@dataclass(frozen=True)
-class ClauseChunk:
-    clause_id: str
-    title: str
-    text: str
+from runtime.review.party_role import PartyRole
+from runtime.review.word_markers import contains_wordprocessingml_markers
 
 
 REPLACEMENT_TEXT_BY_RULE_ID = {
@@ -31,158 +26,13 @@ SUGGESTION_BY_RULE_ID = {
     "RISK-006": "대리점 비용전가 항목을 상한/정산 기준/증빙/사전합의로 제한",
 }
 
-_WORD_XML_MARKERS = (
-    "<w:",
-    "</w:",
-    "w:rPr",
-    "w:pPr",
-    "w:ins",
-    "w:del",
-    "w:delText",
-    "<?xml",
-    "xmlns:w=",
-)
-
-
 def _contains_wordprocessingml_markers(text: str) -> bool:
-    s = text or ""
-    if not s:
-        return False
-    return any(m in s for m in _WORD_XML_MARKERS)
-
-
-def _clean_contract_text(text: str) -> str:
-    s = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-    s = s.replace("\ufeff", "").replace("\u200b", "").replace("\u200c", "").replace("\u200d", "")
-    lines = []
-    for line in s.split("\n"):
-        l = line.strip()
-        if not l:
-            lines.append("")
-            continue
-        if _contains_wordprocessingml_markers(l):
-            continue
-        if re.match(r"^</?[A-Za-z0-9]+:[^>]+>$", l):
-            continue
-        if re.match(r"^<\?xml\b", l):
-            continue
-        lines.append(line)
-    s = "\n".join(lines)
-    s = re.sub(r"[ \t]+", " ", s)
-    s = re.sub(r"\n{3,}", "\n\n", s)
-    return s.strip()
-
-
-def _normalize_clause_id(raw: str) -> str:
-    s = re.sub(r"\s+", "", raw or "")
-    s = s.replace("의", "-")
-    s = re.sub(r"[^0-9\-]", "", s)
-    s = re.sub(r"\-+", "-", s).strip("-")
-    return s or "0"
+    return contains_wordprocessingml_markers(text)
 
 
 def split_into_clauses(text: str) -> list[ClauseChunk]:
-    s = _clean_contract_text(text)
-    if not s:
-        return []
-
-    lines = s.splitlines()
-    idxs: list[int] = []
-    titles: dict[int, str] = {}
-    ids: dict[int, str] = {}
-
-    for i, line in enumerate(lines):
-        l = line.strip()
-        if not l:
-            continue
-        m = re.match(r"^(제\s*\d+(?:\s*의\s*\d+)?\s*조)\s*(?:\(([^)]{1,80})\))?\s*(.*)$", l)
-        if m:
-            idxs.append(i)
-            head = m.group(1)
-            name = m.group(2) or ""
-            rest = m.group(3) or ""
-            title = " ".join(x for x in [head, name, rest] if x).strip()
-            titles[i] = title
-            num = re.sub(r"[^\d의\s]", "", head)
-            ids[i] = "KR-" + _normalize_clause_id(num)
-            continue
-        m2 = re.match(r"^(Article\s+(?:\d{1,3}|[IVXLC]{1,10}))\.?\s*(.*)$", l, flags=re.IGNORECASE)
-        if m2:
-            idxs.append(i)
-            titles[i] = (m2.group(1) + " " + (m2.group(2) or "")).strip()
-            ids[i] = "EN-" + re.sub(r"\s+", "-", m2.group(1).strip().upper())
-            continue
-        m3 = re.match(r"^(?:\(\s*(\d{1,3}(?:\.\d{1,3})*)\s*\)|(\d{1,3}(?:\.\d{1,3})*)\)|(\d{1,3}(?:\.\d{1,3})*)\.)\s*(.+)$", l)
-        if m3:
-            tail = (m3.group(4) or "").strip()
-            if 0 < len(tail) <= 160:
-                idxs.append(i)
-                num = m3.group(1) or m3.group(2) or m3.group(3) or ""
-                titles[i] = (f"{num}. {tail}".strip())
-                ids[i] = "N-" + num
-            continue
-        m4 = re.match(r"^([IVXLC]{1,10})\.\s*(.+)$", l)
-        if m4:
-            tail = (m4.group(2) or "").strip()
-            if 0 < len(tail) <= 160:
-                idxs.append(i)
-                titles[i] = (m4.group(1) + ". " + tail).strip()
-                ids[i] = "ROM-" + m4.group(1)
-            continue
-        m5 = re.match(r"^(?:\(\s*([가-하])\s*\)|([가-하])\)|([가-하])\.)\s*(.+)$", l)
-        if m5:
-            tail = (m5.group(4) or "").strip()
-            if 0 < len(tail) <= 160:
-                idxs.append(i)
-                k = m5.group(1) or m5.group(2) or m5.group(3) or ""
-                titles[i] = (f"{k}. {tail}".strip())
-                ids[i] = "KR-" + k
-            continue
-
-    if not idxs:
-        chunks = _chunk_by_paragraphs(s)
-        out: list[ClauseChunk] = []
-        for i, t in enumerate(chunks):
-            cid = f"P-{i+1:03d}"
-            out.append(ClauseChunk(clause_id=cid, title=f"문단 {i+1}", text=t))
-        return out
-
-    idxs = sorted(set(idxs))
-    idxs.append(len(lines))
-    out: list[ClauseChunk] = []
-    for j in range(len(idxs) - 1):
-        start = idxs[j]
-        end = idxs[j + 1]
-        block = _clean_contract_text("\n".join(lines[start:end]).strip())
-        if not block:
-            continue
-        cid = ids.get(start) or f"C-{j+1:03d}"
-        title = titles.get(start, cid)
-        if len(block) > 2200:
-            subs = _chunk_by_paragraphs(block)
-            for k, sub in enumerate(subs):
-                sub_id = f"{cid}.{k+1}" if len(subs) > 1 else cid
-                out.append(ClauseChunk(clause_id=sub_id, title=title, text=sub))
-        else:
-            out.append(ClauseChunk(clause_id=cid, title=title, text=block))
-    return out
-
-
-def _chunk_by_paragraphs(text: str) -> list[str]:
-    parts = re.split(r"\n\s*\n", text)
-    out: list[str] = []
-    for p in parts:
-        p = p.strip()
-        if not p:
-            continue
-        if len(p) <= 1800:
-            out.append(p)
-            continue
-        cur = p
-        while cur:
-            out.append(cur[:1800].strip())
-            cur = cur[1800:].strip()
-    return out
+    clauses, _ = extract_clauses(text)
+    return clauses
 
 
 def _extract_trigger_keywords(rule: dict[str, Any]) -> list[str]:
@@ -204,6 +54,7 @@ def suggest_revisions(
     matched_rules: list[dict[str, Any]],
     *,
     posture: str = "neutral",
+    party: PartyRole | None = None,
 ) -> dict[str, Any]:
     matched_by_id: dict[str, dict[str, Any]] = {}
     for r in matched_rules:
@@ -275,13 +126,20 @@ def suggest_revisions(
         seen = set()
         replacement_texts = [x for x in replacement_texts if not (x in seen or seen.add(x))]
 
-        proposal = propose_clause_specific_rewrite(clause_text=c.text, applied_rules=applied_rules, posture=posture)
+        proposal = propose_clause_specific_rewrite(clause_text=c.text, applied_rules=applied_rules, posture=posture, party=party)
         recommended_rewrite = proposal.suggested_rewrite if proposal else None
         rewrite_reason = proposal.rewrite_reason if proposal else None
+        unfavorable_to_us = _infer_unfavorable_to_us(
+            clause_text=str(c.text or ""),
+            applied_rules=applied_rules,
+            posture=str(posture or "neutral"),
+            party=party,
+        )
 
         items.append(
             {
                 "clause_id": c.clause_id,
+                "article_number": c.article_number,
                 "clause_title": c.title,
                 "original_clause": c.text,
                 "detected_issues": clause_issues,
@@ -293,6 +151,7 @@ def suggest_revisions(
                 "rewrite_reason": rewrite_reason,
                 "high_risk": high_risk,
                 "approval_required": approval_required,
+                "unfavorable_to_us": unfavorable_to_us,
             }
         )
 
@@ -302,6 +161,34 @@ def suggest_revisions(
         "high_risk_clause_count": sum(1 for it in items if it["high_risk"]),
         "approval_required_clause_count": sum(1 for it in items if it["approval_required"]),
         "recommended_rewrite_clause_count": sum(1 for it in items if it.get("recommended_rewrite")),
+        "unfavorable_to_us_clause_count": sum(1 for it in items if bool(it.get("unfavorable_to_us"))),
     }
     return {"summary": summary, "items": items}
+
+
+def _infer_unfavorable_to_us(
+    *,
+    clause_text: str,
+    applied_rules: list[dict[str, Any]],
+    posture: str,
+    party: PartyRole | None,
+) -> bool:
+    if posture not in ("buyer_favorable", "seller_favorable", "neutral"):
+        posture = "neutral"
+    if posture == "neutral":
+        return True
+
+    t = (clause_text or "")
+    rids = {str(ar.get("rule_id") or "") for ar in applied_rules if isinstance(ar, dict)}
+    if posture == "buyer_favorable":
+        if any(r in rids for r in ("RISK-001", "RISK-002", "RISK-004", "RISK-005", "RISK-006", "RISK-003", "ACT-010")):
+            return True
+        if ("보증" in t or "하자" in t or "품질" in t) and ("을" in t and ("보증" in t or "하자" in t)):
+            return False
+        return True
+    if posture == "seller_favorable":
+        if any(r in rids for r in ("RISK-001", "RISK-002")):
+            return False
+        return True
+    return True
 

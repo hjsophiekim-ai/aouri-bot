@@ -37,7 +37,8 @@ ENTITY_KEYWORDS = [
 
 CONTRACT_TYPE_KEYWORDS = [
     ("NDA/비밀유지", ["nda", "비밀유지", "confidential"]),
-    ("개인정보/처리위탁(DPA)", ["개인정보", "처리위탁", "dpa", "privacy", "personal data"]),
+    ("앱개발/소프트웨어개발/SI/유지보수/SaaS", ["앱 개발", "소프트웨어 개발", "시스템 개발", "개발용역", "it 용역", "si", "유지보수", "saas", "api 연동", "source code", "산출물", "sla"]),
+    ("개인정보/처리위탁(DPA)", ["처리위탁", "dpa", "data processing", "personal data processing", "수탁", "위탁"]),
     ("임대차/전대차", ["임대차", "전대차", "lease", "rental"]),
     ("물품공급/구매/매매", ["공급", "구매", "매매", "purchase", "supply", "sales"]),
     ("대리점/위탁/유통", ["대리점", "유통", "위탁", "dealer", "distributor", "consignment"]),

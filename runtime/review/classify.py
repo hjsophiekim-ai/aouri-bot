@@ -25,7 +25,37 @@ ENTITY_RULES = [
 
 CONTRACT_TYPE_RULES = [
     ("NDA/비밀유지", [r"\bNDA\b", r"Non[- ]Disclosure", r"비밀유지", r"confidentiality"]),
-    ("개인정보/처리위탁(DPA)", [r"개인정보", r"처리위탁", r"privacy", r"data processing", r"\bDPA\b"]),
+    (
+        "앱개발/소프트웨어개발/SI/유지보수/SaaS",
+        [
+            r"앱\s*개발",
+            r"소프트웨어\s*개발",
+            r"시스템\s*개발",
+            r"개발\s*용역",
+            r"IT\s*용역",
+            r"\bSI\b",
+            r"유지\s*보수",
+            r"\bmaintenance\b",
+            r"\bSaaS\b",
+            r"\bAPI\b\s*(연동|integration)",
+            r"소스\s*코드",
+            r"산출물",
+            r"소프트웨어\s*개발\s*계약",
+            r"프로그램\s*개발",
+        ],
+    ),
+    (
+        "개인정보/처리위탁(DPA)",
+        [
+            r"처리위탁",
+            r"개인정보.*(처리위탁|수탁|위탁)",
+            r"\bDPA\b",
+            r"data processing",
+            r"data processor",
+            r"personal data processing",
+            r"privacy.*data processing",
+        ],
+    ),
     ("임대차/전대차", [r"임대차", r"전대차", r"\blease\b", r"\bsublease\b"]),
     (
         "장비공급/설치/시운전",

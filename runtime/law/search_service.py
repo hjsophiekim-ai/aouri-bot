@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
+import time
 
 from runtime.law.cache import JsonFileCache
 from runtime.law.config import LawApiConfig
@@ -19,6 +20,8 @@ class LawReference:
     snippet: str | None
     identifiers: dict[str, str]
     drf_detail_url: str | None
+    reason_code: str | None = None
+    relevance_score: int | None = None
 
 
 class LawSearchService:
@@ -28,7 +31,7 @@ class LawSearchService:
         self._client = LawDrfClient(
             api_key=str(cfg.api_key or ""),
             base_url=cfg.base_url,
-            timeout_sec=min(float(cfg.timeout_sec), 3.0),
+            timeout_sec=min(float(cfg.timeout_sec), 1.5),
             retry_count=0,
         )
 
@@ -39,7 +42,9 @@ class LawSearchService:
         contract_type: str,
         text: str,
         matched_rules: list[dict[str, Any]] | None,
+        scope: str = "contract",
         max_per_type: int = 3,
+        time_budget_sec: float = 1.5,
     ) -> dict[str, Any]:
         if not self._cfg.enabled or not self._cfg.api_key:
             return {
@@ -50,16 +55,56 @@ class LawSearchService:
                 "errors": [],
             }
 
-        topics = _derive_topics(entity=entity, contract_type=contract_type, text=text, matched_rules=matched_rules or [])
-        queries_all = list(dict.fromkeys([t for t in topics if isinstance(t, str) and t.strip()]))
-        queries = queries_all[:3]
+        if scope not in ("contract", "clause"):
+            scope = "contract"
+        qobjs = _derive_queries(
+            entity=entity,
+            contract_type=contract_type,
+            text=text,
+            matched_rules=matched_rules or [],
+            scope=scope,
+        )
+        queries = [q["query"] for q in qobjs if isinstance(q.get("query"), str) and q["query"].strip()]
+        profile = _infer_contract_profile(contract_type=str(contract_type or ""), text=str(text or ""))
+        query_limit = 3 if scope == "contract" else 4
+        if scope == "contract" and profile == "app_dev":
+            query_limit = 4
+        queries = list(dict.fromkeys(queries))[:query_limit]
 
         max_items = min(int(max_per_type), 3)
-        out = {"enabled": True, "queries": queries, "results": {}, "errors": []}
+        start_ts = time.time()
+        out = {"enabled": True, "queries": queries, "query_reasons": qobjs[:10], "results": {}, "errors": []}
         context_text = str(text or "")
-        out["results"]["laws"] = self._search_target("law", queries, context_text=context_text, matched_rules=matched_rules or [], max_items=max_items)
-        out["results"]["precedents"] = self._search_target("prec", queries, context_text=context_text, matched_rules=matched_rules or [], max_items=max_items)
-        out["results"]["interpretations"] = self._search_target("expc", queries, context_text=context_text, matched_rules=matched_rules or [], max_items=max_items)
+        out["results"]["laws"] = self._search_target(
+            "law",
+            queries,
+            context_text=context_text,
+            matched_rules=matched_rules or [],
+            max_items=max_items,
+            query_reasons=qobjs,
+            start_ts=start_ts,
+            time_budget_sec=float(time_budget_sec),
+        )
+        out["results"]["precedents"] = [] if scope == "clause" else self._search_target(
+            "prec",
+            queries,
+            context_text=context_text,
+            matched_rules=matched_rules or [],
+            max_items=max_items,
+            query_reasons=qobjs,
+            start_ts=start_ts,
+            time_budget_sec=float(time_budget_sec),
+        )
+        out["results"]["interpretations"] = self._search_target(
+            "expc",
+            queries,
+            context_text=context_text,
+            matched_rules=matched_rules or [],
+            max_items=max_items,
+            query_reasons=qobjs,
+            start_ts=start_ts,
+            time_budget_sec=float(time_budget_sec),
+        )
         out["results"]["admin_rules"] = []
         out["results"]["local_ordinances"] = []
         return out
@@ -72,11 +117,16 @@ class LawSearchService:
         context_text: str,
         matched_rules: list[dict[str, Any]],
         max_items: int,
+        query_reasons: list[dict[str, str]],
+        start_ts: float,
+        time_budget_sec: float,
     ) -> list[dict[str, Any]]:
         collected: list[LawReference] = []
         errors: list[str] = []
 
         for q in queries:
+            if (time.time() - start_ts) > float(time_budget_sec):
+                break
             if len(collected) >= max_items:
                 break
             try:
@@ -84,11 +134,13 @@ class LawSearchService:
             except Exception as exc:
                 errors.append(str(exc))
                 continue
+            reason_code = _pick_query_reason_code(q, qobjs=query_reasons)
             refs = _extract_references_from_json(
                 source_query=q,
                 target=target,
                 base_url=self._cfg.base_url,
                 json_obj=res,
+                reason_code=reason_code,
             )
             collected.extend(refs[:max_items])
 
@@ -113,6 +165,8 @@ class LawSearchService:
                 "snippet": r.snippet,
                 "identifiers": r.identifiers,
                 "drf_detail_url": r.drf_detail_url,
+                "reason_code": r.reason_code,
+                "relevance_score": r.relevance_score,
             }
             for r in reranked[:max_items]
         ] + ([] if not errors else [{"error": "; ".join(errors)}])
@@ -141,48 +195,142 @@ class LawSearchService:
         return obj
 
 
-def _derive_topics(*, entity: str, contract_type: str, text: str, matched_rules: list[dict[str, Any]]) -> list[str]:
-    t = (contract_type or "").strip()
-    out: list[str] = []
-    out.extend(get_priority_topics_with_context(entity=entity, contract_type=contract_type, text=text))
+def _derive_queries(*, entity: str, contract_type: str, text: str, matched_rules: list[dict[str, Any]], scope: str) -> list[dict[str, str]]:
+    ct = (contract_type or "").strip()
+    txt = (text or "")
+    out: list[dict[str, str]] = []
 
-    if "대리점" in t or "유통" in t or "위탁" in t:
-        out.extend(["대리점법", "공정거래"])
-    if "하도급" in t or "도급" in t or "공사" in t:
-        out.extend(["하도급법", "공정거래"])
-    if "개인정보" in t or "처리위탁" in t:
-        out.append("개인정보보호법")
-    if "광고" in t or "마케팅" in t or "협찬" in t:
-        out.extend(["표시광고", "소비자보호"])
-    if "바로스" in t or "물류" in t or "설치" in t:
-        out.extend(["산업안전보건법", "중대재해처벌법"])
+    profile = _infer_contract_profile(contract_type=ct, text=txt)
+    if scope == "contract" and profile == "purchase_installation":
+        out.extend(
+            [
+                {"query": "민법 매매 하자담보 손해배상", "reason_code": "contract_profile:purchase_installation"},
+                {"query": "민법 도급 하자담보 지체 손해배상", "reason_code": "contract_profile:purchase_installation"},
+                {"query": "상법 상사매매 검사 통지", "reason_code": "contract_profile:purchase_installation"},
+                {"query": "산업안전보건법 설치 작업 안전관리", "reason_code": "contract_profile:purchase_installation"},
+                {"query": "중대재해처벌법 안전보건 확보의무", "reason_code": "contract_profile:purchase_installation"},
+                {"query": "제조물책임법 품질보증 하자보수", "reason_code": "contract_profile:purchase_installation"},
+            ]
+        )
+    elif scope == "contract" and profile == "app_dev":
+        out.extend(
+            [
+                {"query": "민법 도급 채무불이행 손해배상", "reason_code": "contract_profile:app_dev"},
+                {"query": "저작권법 프로그램 저작권 양도", "reason_code": "contract_profile:app_dev"},
+                {"query": "부정경쟁방지법 영업비밀 소스코드", "reason_code": "contract_profile:app_dev"},
+                {"query": "개인정보보호법 개인정보 유출 손해배상", "reason_code": "contract_profile:app_dev"},
+            ]
+        )
+        if any(k in txt for k in ("이용자", "회원", "결제", "통신판매", "서비스 제공")):
+            out.append({"query": "전자상거래법 통신판매 소비자", "reason_code": "contract_profile:app_dev"})
+    elif scope == "contract":
+        for t in get_priority_topics_with_context(entity=entity, contract_type=contract_type, text=text):
+            out.append({"query": t, "reason_code": "entity_priority"})
 
-    txt = text or ""
+    if profile != "purchase_installation":
+        if "대리점" in ct or "유통" in ct or "위탁" in ct:
+            out.extend([{"query": "대리점법", "reason_code": "contract_type:dealer"}, {"query": "공정거래", "reason_code": "contract_type:dealer"}])
+    if "하도급" in ct or "도급" in ct or "공사" in ct:
+        out.extend([{"query": "하도급법", "reason_code": "contract_type:subcontract"}, {"query": "공정거래", "reason_code": "contract_type:subcontract"}])
+    if "개인정보" in ct or "처리위탁" in ct:
+        out.append({"query": "개인정보보호법", "reason_code": "contract_type:privacy"})
+    if profile != "app_dev" and ("광고" in ct or "마케팅" in ct or "협찬" in ct):
+        out.extend([{"query": "표시광고", "reason_code": "contract_type:ads"}, {"query": "소비자보호", "reason_code": "contract_type:ads"}])
+    if "바로스" in ct or "물류" in ct or "설치" in ct:
+        out.extend([{"query": "산업안전보건법", "reason_code": "contract_type:safety"}, {"query": "중대재해처벌법", "reason_code": "contract_type:safety"}])
+
     if any(k in txt for k in ("개인정보", "처리위탁", "주민등록", "privacy", "DPA", "dpa")):
-        out.append("개인정보보호법")
-    if any(k in txt for k in ("대리점", "위탁판매", "판매장려금", "판촉", "리베이트")):
-        out.append("대리점법")
+        out.append({"query": "개인정보보호법", "reason_code": "text:privacy"})
+    if profile != "purchase_installation":
+        if any(k in txt for k in ("대리점", "위탁판매", "판매장려금", "판촉", "리베이트")):
+            out.append({"query": "대리점법", "reason_code": "text:dealer"})
     if any(k in txt for k in ("하도급", "기술자료", "단가", "재하도급", "원사업자", "수급사업자")):
-        out.extend(["하도급법", "기술자료"])
+        out.extend([{"query": "하도급법", "reason_code": "text:subcontract"}, {"query": "기술자료", "reason_code": "text:tech"}])
     if any(k in txt for k in ("안전", "산업안전", "중대재해", "현장", "작업", "공사")):
-        out.extend(["산업안전보건법", "중대재해처벌법"])
-    if any(k in txt for k in ("표시광고", "과장", "허위", "광고", "소비자", "보증")):
-        out.extend(["표시광고", "소비자보호"])
+        out.extend([{"query": "산업안전보건법", "reason_code": "text:safety"}, {"query": "중대재해처벌법", "reason_code": "text:safety"}])
+    if profile != "app_dev" and any(k in txt for k in ("표시광고", "과장", "허위", "광고", "소비자", "보증")):
+        out.extend([{"query": "표시광고", "reason_code": "text:ads"}, {"query": "소비자보호", "reason_code": "text:ads"}])
 
     for r in matched_rules:
         rid = str(r.get("rule_id") or "")
         if rid in ("RISK-006", "ACT-009"):
-            out.extend(["대리점법", "판매장려금", "판촉비", "반품", "광고비"])
+            if profile != "purchase_installation":
+                out.extend(
+                    [
+                        {"query": "대리점법", "reason_code": "rule:RISK-006"},
+                        {"query": "판매장려금", "reason_code": "rule:RISK-006"},
+                        {"query": "판촉비", "reason_code": "rule:RISK-006"},
+                        {"query": "반품", "reason_code": "rule:RISK-006"},
+                        {"query": "광고비", "reason_code": "rule:RISK-006"},
+                    ]
+                )
         if rid in ("RISK-005", "ACT-008", "RISK-004", "ACT-007"):
-            out.extend(["하도급법", "단가", "감액", "기술자료"])
+            out.extend(
+                [
+                    {"query": "하도급법", "reason_code": f"rule:{rid}"},
+                    {"query": "단가 감액", "reason_code": f"rule:{rid}"},
+                    {"query": "기술자료", "reason_code": f"rule:{rid}"},
+                ]
+            )
         if rid in ("RISK-003", "ACT-010"):
-            out.extend(["산업안전보건법", "중대재해처벌법"])
+            out.extend([{"query": "산업안전보건법", "reason_code": f"rule:{rid}"}, {"query": "중대재해처벌법", "reason_code": f"rule:{rid}"}])
         if rid in ("RISK-001", "RISK-002"):
-            out.extend(["손해배상", "책임 제한", "면책"])
+            out.extend(
+                [
+                    {"query": "민법 손해배상", "reason_code": f"rule:{rid}"},
+                    {"query": "책임 제한", "reason_code": f"rule:{rid}"},
+                    {"query": "면책", "reason_code": f"rule:{rid}"},
+                ]
+            )
+        if rid.startswith("APP-"):
+            if rid in ("APP-001", "APP-008"):
+                out.extend(
+                    [
+                        {"query": "저작권법 프로그램 저작권", "reason_code": f"rule:{rid}"},
+                        {"query": "제3자 권리침해 보증 손해배상", "reason_code": f"rule:{rid}"},
+                    ]
+                )
+            if rid == "APP-002":
+                out.extend([{"query": "저작권법 라이선스 위반 손해배상", "reason_code": f"rule:{rid}"}, {"query": "오픈소스 라이선스 의무", "reason_code": f"rule:{rid}"}])
+            if rid in ("APP-003", "APP-004", "APP-005", "APP-006", "APP-011", "APP-012"):
+                out.extend([{"query": "민법 도급 하자보수 손해배상", "reason_code": f"rule:{rid}"}, {"query": "민법 채무불이행 지체 손해배상", "reason_code": f"rule:{rid}"}])
+            if rid in ("APP-007", "APP-010"):
+                out.extend(
+                    [
+                        {"query": "개인정보보호법 개인정보 유출 통지", "reason_code": f"rule:{rid}"},
+                        {"query": "개인정보보호법 개인정보 파기 삭제", "reason_code": f"rule:{rid}"},
+                        {"query": "정보통신망 침해사고", "reason_code": f"rule:{rid}"},
+                    ]
+                )
+            if rid == "APP-009":
+                out.extend([{"query": "민법 도급 재하도급 책임", "reason_code": f"rule:{rid}"}, {"query": "재위탁 사전 승인 책임", "reason_code": f"rule:{rid}"}])
 
-    if entity:
-        out.append(str(entity))
+    if scope == "contract" and entity and profile != "purchase_installation":
+        out.append({"query": str(entity), "reason_code": "entity"})
     return out
+
+
+def _infer_contract_profile(*, contract_type: str, text: str) -> str:
+    ct = contract_type or ""
+    t = text or ""
+    if any(k in ct for k in ("앱개발", "소프트웨어개발", "SI", "유지보수", "SaaS", "API")):
+        return "app_dev"
+    if any(k in t for k in ("앱 개발", "소프트웨어 개발", "시스템 개발", "개발 용역", "소스코드", "산출물", "SLA", "유지보수", "오픈소스", "API 연동")):
+        return "app_dev"
+    if any(k in ct for k in ("물품공급/구매/매매", "장비공급", "구매")) and any(k in ct for k in ("설치", "시운전")):
+        return "purchase_installation"
+    if any(k in t for k in ("장비", "설치", "시운전", "기계", "물품", "제품")) and any(k in t for k in ("대금", "납품", "매매", "구매")):
+        return "purchase_installation"
+    return "generic"
+
+
+def _pick_query_reason_code(query: str, *, qobjs: list[dict[str, str]] | None) -> str | None:
+    if not qobjs:
+        return None
+    for q in qobjs:
+        if q.get("query") == query:
+            return q.get("reason_code")
+    return None
 
 
 def _tokenize(text: str) -> set[str]:
@@ -245,9 +393,29 @@ def _rerank_and_filter_references(
         score = _score_reference(r, context_terms=context_terms)
         if score <= 1:
             continue
-        scored.append((score, r))
+        rr = LawReference(
+            source=r.source,
+            target=r.target,
+            title=r.title,
+            snippet=r.snippet,
+            identifiers=r.identifiers,
+            drf_detail_url=r.drf_detail_url,
+            reason_code=r.reason_code,
+            relevance_score=score,
+        )
+        scored.append((score, rr))
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [r for _, r in scored[: max(1, int(max_items))]]
+    picked = [r for _, r in scored[: max(1, int(max_items))]]
+    if picked:
+        return picked
+    fallback_scored: list[tuple[int, LawReference]] = []
+    for r in references:
+        if _is_noise_title(r.title):
+            continue
+        score = _score_reference(r, context_terms=context_terms)
+        fallback_scored.append((score, r))
+    fallback_scored.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in fallback_scored[: max(1, int(max_items))]]
 
 
 def _extract_references_from_json(
@@ -256,6 +424,7 @@ def _extract_references_from_json(
     target: str,
     base_url: str,
     json_obj: dict[str, Any],
+    reason_code: str | None,
 ) -> list[LawReference]:
     items = _find_list_of_dicts(json_obj)
     out: list[LawReference] = []
@@ -272,6 +441,7 @@ def _extract_references_from_json(
                 snippet=snippet,
                 identifiers=identifiers,
                 drf_detail_url=detail_url,
+                reason_code=reason_code,
             )
         )
     return out

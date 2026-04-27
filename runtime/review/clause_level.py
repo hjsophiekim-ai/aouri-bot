@@ -10,7 +10,10 @@ from runtime.ai.http_openai_compatible_provider import build_messages
 from runtime.ai.provider import AIProvider, AIRequest
 from runtime.ai.safe import sanitize_error_message
 from runtime.law.search_service import LawSearchService
-from runtime.review.revision import ClauseChunk, suggest_revisions, split_into_clauses
+from runtime.review.clause_extraction import ClauseChunk, extract_clauses
+from runtime.review.party_role import infer_party_role, infer_review_posture
+from runtime.review.revision import suggest_revisions
+from runtime.review.word_markers import contains_wordprocessingml_markers
 from runtime.services.query_service import ReviewInput, RuleQueryService
 
 
@@ -23,24 +26,8 @@ class ClauseLevelResult:
     meta: dict[str, Any]
 
 
-_WORD_XML_MARKERS = (
-    "<w:",
-    "</w:",
-    "w:rPr",
-    "w:pPr",
-    "w:ins",
-    "w:del",
-    "w:delText",
-    "<?xml",
-    "xmlns:w=",
-)
-
-
 def _contains_wordprocessingml_markers(text: str) -> bool:
-    s = text or ""
-    if not s:
-        return False
-    return any(m in s for m in _WORD_XML_MARKERS)
+    return contains_wordprocessingml_markers(text)
 
 
 def build_clause_level_result(
@@ -60,16 +47,30 @@ def build_clause_level_result(
     max_clause_law_items: int = 2,
     max_ai_clauses: int = 6,
 ) -> ClauseLevelResult:
-    def _derive_review_posture(*, contract_type: str, text: str) -> str:
-        ct = (contract_type or "").lower()
-        t = (text or "").lower()
-        if any(k in ct for k in ("구매", "purchase", "물품공급", "장비", "설치", "시운전")):
-            return "buyer_favorable"
-        if any(k in t for k in ("장비", "설치", "시운전", "납품", "검수")) and any(k in ct for k in ("물품공급", "구매", "매매", "supply", "purchase")):
-            return "buyer_favorable"
-        return "neutral"
+    if _contains_wordprocessingml_markers(text):
+        meta = {
+            "review_posture": "neutral",
+            "text_length": len(text or ""),
+            "text_sha256": sha256((text or "").encode("utf-8", errors="replace")).hexdigest() if text else None,
+            "clause_count": 0,
+            "issue_clause_count": 0,
+            "headings_found": False,
+            "fallback_only": False,
+            "warnings": ["word_xml_markers_detected_block"],
+            "docx_allowed": False,
+            "law_errors": [],
+            "ai": None,
+        }
+        return ClauseLevelResult(
+            review={"summary": {"error": "WordprocessingML markers detected in contract text"}, "matched_rules": []},
+            revision={"summary": {"issue_clause_count": 0}, "items": []},
+            clauses=[],
+            clause_results=[],
+            meta=meta,
+        )
 
-    review_posture = _derive_review_posture(contract_type=str(contract_type), text=str(text))
+    party = infer_party_role(contract_type=str(contract_type), text=str(text), answers=answers)
+    review_posture = infer_review_posture(party=party, contract_type=str(contract_type), text=str(text))
     review = service.analyze(
         ReviewInput(
             entity=entity,
@@ -79,8 +80,10 @@ def build_clause_level_result(
             answers=answers,
         )
     )
-    clauses = split_into_clauses(text)
-    revision = suggest_revisions(clauses, review.get("matched_rules", []), posture=review_posture)
+    clauses, clause_report = extract_clauses(text)
+    revision = suggest_revisions(clauses, review.get("matched_rules", []), posture=review_posture, party=party)
+
+    clause_title_by_id: dict[str, str] = {str(c.clause_id): str(c.title or "") for c in clauses}
 
     rule_by_id: dict[str, dict[str, Any]] = {}
     for r in review.get("matched_rules", []) if isinstance(review.get("matched_rules"), list) else []:
@@ -127,6 +130,7 @@ def build_clause_level_result(
         clause_results.append(
             {
                 "clause_id": clause_id,
+                "article_number": it.get("article_number"),
                 "clause_title": it.get("clause_title"),
                 "original_text": it.get("original_clause"),
                 "detected_issue_list": it.get("detected_issues") if isinstance(it.get("detected_issues"), list) else [],
@@ -136,6 +140,7 @@ def build_clause_level_result(
                 "suggested_rewrite": suggested_rewrite,
                 "approval_required": bool(it.get("approval_required")),
                 "high_risk": bool(it.get("high_risk")),
+                "unfavorable_to_us": bool(it.get("unfavorable_to_us")),
             }
         )
 
@@ -149,6 +154,40 @@ def build_clause_level_result(
     )
     clause_results = [cr for cr in clause_results if not _contains_wordprocessingml_markers(str(cr.get("original_text") or ""))]
 
+    mismatches: list[dict[str, str]] = []
+    for cr in clause_results:
+        cid = str(cr.get("clause_id") or "")
+        expected = clause_title_by_id.get(cid)
+        actual = str(cr.get("clause_title") or "")
+        if expected is None:
+            continue
+        if expected != actual:
+            mismatches.append({"clause_id": cid, "expected": expected, "actual": actual})
+    if mismatches:
+        meta = {
+            "review_posture": review_posture,
+            "party_role": party.to_dict(),
+            "text_length": len(text or ""),
+            "text_sha256": sha256((text or "").encode("utf-8", errors="replace")).hexdigest() if text else None,
+            "clause_count": len(clauses),
+            "issue_clause_count": len(clause_results),
+            "headings_found": any(not (c.clause_id or "").startswith("P-") for c in clauses),
+            "fallback_only": bool(clauses) and all((c.clause_id or "").startswith("P-") for c in clauses),
+            "warnings": ["clause_title_mismatch_block"],
+            "docx_allowed": False,
+            "law_errors": [],
+            "ai": None,
+            "clause_extraction_report": clause_report.to_dict(),
+            "clause_identity_mismatches": mismatches[:10],
+        }
+        return ClauseLevelResult(
+            review={"summary": {"error": "clause_title mismatch detected"}, "matched_rules": []},
+            revision={"summary": {"issue_clause_count": 0}, "items": []},
+            clauses=clauses,
+            clause_results=[],
+            meta=meta,
+        )
+
     law_errors: list[str] = []
     if law_service is not None and clause_results:
         for cr in clause_results[: min(len(clause_results), 10)]:
@@ -160,6 +199,7 @@ def build_clause_level_result(
                     contract_type=str(contract_type),
                     text=ctext,
                     matched_rules=rr,
+                    scope="clause",
                     max_per_type=max_clause_law_items,
                 )
             except Exception as exc:
@@ -209,6 +249,7 @@ def build_clause_level_result(
                 "근거 없이 새로운 사실/의무/법적 결론을 추가하지 말고, 제공된 정보 밖으로 추정하지 마라. "
                 "원문 조항에 이미 적절한 표현은 유지하고, 문제되는 표현만 최소 변경으로 수정하라. "
                 "fallback_rewrite를 그대로 복사하거나 재진술하지 말고, 원문 문장 구조를 기반으로 실제 조항에 맞게 고쳐라. "
+                "rewrite_reason은 250자 이내로, suggested_rewrite는 1200자 이내로 작성하라. "
                 "출력은 JSON 배열만, 각 원소는 clause_id/rewrite_reason/suggested_rewrite만 포함하라."
             )
             user = json.dumps(
@@ -240,6 +281,8 @@ def build_clause_level_result(
             try:
                 resp = ai_provider.complete(req)
                 obj = _try_json(resp.content)
+                if isinstance(obj, dict) and isinstance(obj.get("items"), list):
+                    obj = obj.get("items")
                 if isinstance(obj, list):
                     by_id: dict[str, dict[str, Any]] = {}
                     for it in obj:
@@ -301,6 +344,7 @@ def build_clause_level_result(
 
     meta = {
         "review_posture": review_posture,
+        "party_role": party.to_dict(),
         "text_length": text_len,
         "text_sha256": sha256((text or "").encode("utf-8", errors="replace")).hexdigest() if text else None,
         "clause_count": clause_count,
@@ -311,6 +355,7 @@ def build_clause_level_result(
         "docx_allowed": docx_allowed,
         "law_errors": law_errors[:5],
         "ai": ai_meta,
+        "clause_extraction_report": clause_report.to_dict() if isinstance(clause_report, object) else None,
     }
     return ClauseLevelResult(
         review=review,

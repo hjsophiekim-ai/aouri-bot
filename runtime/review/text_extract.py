@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from runtime.review.word_markers import contains_wordprocessingml_markers
+
 
 @dataclass
 class TextExtractionResult:
@@ -24,24 +26,8 @@ def _norm_text(s: str) -> str:
     return s.strip()
 
 
-_WORD_XML_MARKERS = (
-    "<w:",
-    "</w:",
-    "w:rPr",
-    "w:pPr",
-    "w:ins",
-    "w:del",
-    "w:delText",
-    "<?xml",
-    "xmlns:w=",
-)
-
-
 def _contains_wordprocessingml_markers(text: str) -> bool:
-    s = text or ""
-    if not s:
-        return False
-    return any(m in s for m in _WORD_XML_MARKERS)
+    return contains_wordprocessingml_markers(text)
 
 
 def _strip_zero_width_and_ctrl(text: str) -> str:
@@ -62,6 +48,8 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
         except Exception:
             raw = file_path.read_text(encoding="utf-8", errors="replace")
         text = _norm_text(_strip_zero_width_and_ctrl(raw))
+        if _contains_wordprocessingml_markers(text):
+            return TextExtractionResult(False, "", "txt_read", "WordprocessingML markers detected in input text")
         if len(text) < min_len:
             return TextExtractionResult(False, "", "txt_read", "extracted text too short")
         return TextExtractionResult(True, text, "txt_read", None)
