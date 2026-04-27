@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from runtime.review.party_role import PartyRole
+from runtime.review.korean_polish import polish_korean_legal_style
 
 
 @dataclass(frozen=True)
@@ -291,23 +292,63 @@ def _party_term(party: PartyRole | None, *, which: str) -> str:
     return "상대방"
 
 
+def _replace_first_line(
+    text: str,
+    *,
+    predicate,
+    replacement_line: str,
+) -> tuple[str, bool]:
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        if predicate(line):
+            lines[i] = replacement_line
+            return _norm_ws("\n".join(lines)), True
+    return _norm_ws(text), False
+
+
+def _insert_after_first_match(text: str, *, predicate, insert_line: str) -> str:
+    lines = (text or "").splitlines()
+    for i, line in enumerate(lines):
+        if predicate(line):
+            lines.insert(i + 1, insert_line)
+            return _norm_ws("\n".join(lines))
+    if lines:
+        lines.append(insert_line)
+        return _norm_ws("\n".join(lines))
+    return _norm_ws(insert_line)
+
+
+def _has_any(text: str, needles: list[str]) -> bool:
+    t = (text or "").lower()
+    return any((n or "").lower() in t for n in needles if isinstance(n, str) and n)
+
+
+_AMBIG = ["별도 협의", "추후 협의", "상호 협의", "협의한다", "협의하여", "별도로 정한다", "추후 정한다", "to be agreed", "tbd"]
+
+
 def _rewrite_app_001_ip(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
     original = _norm_ws(text)
     if not original:
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (개발 산출물(소스코드·문서·설계서·테스트 산출물 등)에 대한 저작권 및 지식재산권은 "
-        f"{our}가 검수 합격 및 대금 지급을 완료한 시점에 {our}에게 이전(양도)되는 것으로 하며, "
-        f"{cp}는 제3자 권리침해가 없음을 보증한다. "
-        f"오픈소스·서드파티 컴포넌트가 포함되는 경우 사전 고지 및 라이선스 준수 의무를 부담하고, "
-        f"권리침해 주장 시 {cp}는 {our}를 방어·면책하며(통지·방어권·합의/변제 승인 절차 포함), "
-        f"대체/수정/제거 등으로 시정한다.)"
+    repl = (
+        f"개발 산출물(소스코드 포함)에 대한 저작권 및 지식재산권은 {our}에게 귀속하며, "
+        f"{cp}는 제3자 권리침해가 없음을 보증하고 권리침해 주장 시 자신의 비용과 책임으로 시정하며 {our}를 면책한다."
     )
-    reason = "산출물/소스코드/IP 귀속과 제3자 권리침해 보증·시정 구조가 불명확할 수 있어, 귀속·보증·방어/시정 프레임을 명시."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-001"])
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["저작권", "지식재산", "산출물", "소스코드", "ip"]) and _has_any(l, _AMBIG),
+        replacement_line=repl,
+    )
+    if not replaced and _has_any(original, ["저작권", "지식재산", "산출물", "소스코드", "ip"]):
+        out = _insert_after_first_match(
+            out,
+            predicate=lambda l: _has_any(l, ["저작권", "지식재산", "산출물", "소스코드", "ip"]),
+            insert_line=repl,
+        )
+    reason = "산출물/소스코드/IP 귀속 및 제3자 권리침해 보증·시정 책임을 문장 내에 직접 반영."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-001"])
 
 
 def _rewrite_app_002_oss(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -316,16 +357,19 @@ def _rewrite_app_002_oss(text: str, *, posture: str, party: PartyRole | None) ->
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (오픈소스/서드파티 컴포넌트를 사용하는 경우 {cp}는 적용 라이선스 및 버전, 사용 범위, "
-        f"소스 공개 의무/표시 의무 등을 포함한 목록(SBOM)을 {our}에게 제공하고 변경 시 사전 고지한다. "
-        f"GPL 등 카피레프트 라이선스 적용이 발생할 수 있는 구성요소는 {our}의 사전 서면 승인 없이 사용하지 않는다. "
-        f"라이선스 위반이 발생한 경우 {cp}는 자신의 비용과 책임으로 시정(대체/수정/제거)하고, "
-        f"{our}에 발생한 손해를 배상한다.)"
+    ins = (
+        f"오픈소스/서드파티 사용 시 {cp}는 라이선스·버전·적용범위 및 목록(SBOM)을 {our}에게 제공하고, "
+        f"카피레프트(GPL 등)는 {our}의 사전 서면 승인 없이 사용하지 않으며, 위반 시 자신의 비용과 책임으로 시정하고 손해를 배상한다."
     )
-    reason = "오픈소스 사용 고지·승인·준수·위반 시 시정/배상 구조가 누락되면 소스 공개 의무 등 치명적 리스크로 이어질 수 있어 보완."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-002"])
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["오픈소스", "open source", "라이선스", "license"]) and _has_any(l, _AMBIG),
+        replacement_line=ins,
+    )
+    if not replaced and _has_any(original, ["오픈소스", "open source", "라이선스", "license", "서드파티", "third party"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["오픈소스", "open source", "라이선스", "license"]), insert_line=ins)
+    reason = "오픈소스 사용의 고지·승인·준수·위반 시 시정/배상 구조를 조항 내에 직접 반영."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-002"])
 
 
 def _rewrite_app_003_sow(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -334,14 +378,16 @@ def _rewrite_app_003_sow(text: str, *, posture: str, party: PartyRole | None) ->
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (개발 범위/요구사항/산출물/일정은 별지 SOW(요구사항정의서/기능명세/화면설계서 등)에 따른다. "
-        f"범위 변경은 변경요청서 제출 → 영향분석(일정/비용/리스크) → {our}의 서면 승인에 따라 반영하며, "
-        f"{our} 승인 없는 추가 개발/비용 청구는 인정되지 않는다.)"
+    ins = f"개발 범위/요구사항(SOW) 및 변경요청은 {our}의 서면 승인에 따라 확정되며, 승인 없는 추가 개발/비용 청구는 인정되지 않는다."
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["범위", "사양", "요구사항", "SOW", "변경"]) and _has_any(l, _AMBIG),
+        replacement_line=ins,
     )
-    reason = "SOW/변경관리(승인·비용·일정) 구조가 약하면 범위 확장 및 추가비용 분쟁이 커질 수 있어 보완."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-003"])
+    if not replaced and _has_any(original, ["범위", "사양", "요구사항", "SOW", "변경요청", "change request"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["범위", "사양", "요구사항", "SOW"]), insert_line=ins)
+    reason = "SOW/변경관리(승인·비용·일정) 핵심 문구를 별도 보강문이 아닌 본문 문장으로 흡수."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-003"])
 
 
 def _rewrite_app_004_acceptance(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -350,15 +396,19 @@ def _rewrite_app_004_acceptance(text: str, *, posture: str, party: PartyRole | N
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (검수 기준(테스트 시나리오/성능 기준/결함 등급)과 검수 기간은 별지로 정하며, "
-        f"{our}는 검수 기간 내 합격 또는 보완 요청을 통지한다. "
-        f"{cp}는 보완 요청을 받은 날부터 합리적 기간 내 무상으로 수정하고 재검수를 진행한다. "
-        f"간주검수는 {our}에게 산출물 제공 및 검수요청의 서면 통지, 합리적 대응기간 부여 등 요건을 충족한 경우에만 적용한다.)"
+    ins = (
+        f"검수 기준 및 검수 기간은 사전에 서면으로 확정하며, {our}의 서면 합격 통지 전에는 간주검수를 적용하지 않는다. "
+        f"{cp}는 보완 요청이 있는 경우 무상으로 보완 후 재검수를 진행한다."
     )
-    reason = "검수/간주검수/재검수 기준이 불명확하면 대금지급·책임전환 시점 분쟁으로 확대될 수 있어 절차를 명시."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-004"])
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["검수", "인수", "acceptance", "간주검수"]) and _has_any(l, _AMBIG),
+        replacement_line=ins,
+    )
+    if not replaced and _has_any(original, ["검수", "인수", "acceptance", "간주검수"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["검수", "인수", "acceptance"]), insert_line=ins)
+    reason = "검수/간주검수 핵심 요건을 조항 내 문장으로 흡수하여 분쟁 가능성을 낮춤."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-004"])
 
 
 def _rewrite_app_006_sla(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -367,15 +417,19 @@ def _rewrite_app_006_sla(text: str, *, posture: str, party: PartyRole | None) ->
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (유지보수/SLA가 적용되는 경우, 장애 등급별 응답/복구 시간, 정기점검 및 업데이트 정책, "
-        f"에스컬레이션 절차를 별지로 정한다. "
-        f"SLA 위반 시 {our}는 서비스 크레딧/대금 감액 및 반복 위반 시 해지권을 가진다. "
-        f"{cp}는 장애 원인 분석 및 재발방지 대책을 제공한다.)"
+    ins = (
+        f"유지보수/SLA는 장애 등급별 응답·복구 시간 및 에스컬레이션 절차를 포함하여 사전에 서면으로 확정하며, "
+        f"반복 위반 시 {our}는 감액/크레딧 및 해지 등 구제수단을 가진다."
     )
-    reason = "유지보수/SLA의 측정·구제수단(감액/크레딧/해지)과 장애 대응 절차가 약하면 운영 리스크를 통제하기 어려워 보완."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-006"])
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["SLA", "가용성", "응답", "복구", "장애", "유지보수", "uptime"]) and _has_any(l, _AMBIG),
+        replacement_line=ins,
+    )
+    if not replaced and _has_any(original, ["SLA", "가용성", "응답", "복구", "장애", "유지보수", "uptime"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["SLA", "유지보수", "장애", "가용성", "uptime"]), insert_line=ins)
+    reason = "SLA 핵심 요소(응답/복구·구제수단)를 과잉 보강문이 아닌 조항 문장으로 반영."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-006"])
 
 
 def _rewrite_app_007_security(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -384,15 +438,19 @@ def _rewrite_app_007_security(text: str, *, posture: str, party: PartyRole | Non
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (보안사고/개인정보 유출 등 침해사고 발생 시 {cp}는 즉시 {our}에 통지하고 조사·시정·재발방지에 협력한다. "
-        f"{cp}는 접근통제/암호화/로그/취약점 조치 등 합리적 보안조치를 유지하고, "
-        f"재위탁이 있는 경우 {our}의 사전 서면 승인 및 동일 수준의 보안·비밀유지 의무를 하위전가한다. "
-        f"{cp}의 귀책으로 침해사고가 발생한 경우 관련 비용(조사/통지/대응) 및 손해를 배상한다.)"
+    ins = (
+        f"침해사고(보안사고/개인정보 유출) 발생 시 {cp}는 즉시 {our}에 통지하고 조사·시정·재발방지에 협력하며, "
+        f"{cp}의 귀책으로 인한 사고에 대해서는 관련 비용 및 손해를 배상한다."
     )
-    reason = "보안사고/개인정보 유출은 통지·협력·비용 부담·재위탁 통제까지 명확해야 실무적으로 대응 가능하므로 책임 및 절차를 보완."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-007"])
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["보안", "침해", "유출", "사고", "incident", "개인정보"]) and _has_any(l, _AMBIG),
+        replacement_line=ins,
+    )
+    if not replaced and _has_any(original, ["보안", "침해", "유출", "사고", "incident", "개인정보"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["보안", "침해", "유출", "사고", "개인정보"]), insert_line=ins)
+    reason = "침해사고 통지·협력·배상 책임을 조항 본문에 직접 반영."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-007"])
 
 
 def _rewrite_app_009_subcontract(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -401,14 +459,16 @@ def _rewrite_app_009_subcontract(text: str, *, posture: str, party: PartyRole | 
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (재위탁(하도급) 또는 협력업체 활용은 {our}의 사전 서면 승인 하에만 가능하며, "
-        f"{cp}는 하위수탁자의 행위에 대하여 동일한 책임을 부담한다. "
-        f"하위수탁자에게도 비밀유지/보안/개인정보 보호 의무를 동일하게 부과하고, {our}의 요청 시 이를 증명한다.)"
+    repl = f"재위탁(하도급) 또는 협력업체 활용은 {our}의 사전 서면 승인 하에만 가능하며, {cp}는 하위수탁자에 대하여 동일한 책임을 부담한다."
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["재위탁", "하도급", "외주", "협력업체", "subcontract"]) and (_has_any(l, _AMBIG) or _has_any(l, ["할 수 있다", "가능하다"])),
+        replacement_line=repl,
     )
-    reason = "재위탁 통제가 없으면 품질/보안/IP 리스크가 급증하므로, 사전 승인 및 책임 귀속·의무 하위전가 구조를 명시."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-009"])
+    if not replaced and _has_any(original, ["재위탁", "하도급", "외주", "협력업체", "subcontract"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["재위탁", "하도급", "외주", "협력업체", "subcontract"]), insert_line=repl)
+    reason = "재위탁 허용 문구를 최소 변경으로 ‘사전 서면 승인 + 동일 책임’ 구조로 전환."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-009"])
 
 
 def _rewrite_app_010_data(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -417,14 +477,18 @@ def _rewrite_app_010_data(text: str, *, posture: str, party: PartyRole | None) -
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (계약 종료 또는 {our}의 요청 시 {cp}는 {our}의 데이터 및 산출물을 합리적 포맷으로 반환하고, "
-        f"개인정보를 포함하는 경우 관련 법령 및 {our}의 지시에 따라 파기/삭제한다. "
-        f"백업/로그에 남는 데이터의 처리 기준과 삭제 완료 확인(증적 제공) 범위를 명시한다.)"
+    ins = (
+        f"계약 종료 또는 {our}의 요청 시 {cp}는 {our}의 데이터(백업/로그 포함)를 반환한 후 관련 법령 및 {our}의 지시에 따라 파기/삭제하고, 삭제 완료를 확인할 수 있는 증적을 제공한다."
     )
-    reason = "데이터 반환/삭제(백업·로그 포함)와 삭제 확인이 불명확하면 종료 후 분쟁 및 개인정보 리스크가 발생할 수 있어 보완."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-010"])
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["데이터", "반환", "삭제", "파기", "백업", "로그"]) and _has_any(l, _AMBIG),
+        replacement_line=ins,
+    )
+    if not replaced and _has_any(original, ["데이터", "반환", "삭제", "파기"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["데이터", "반환", "삭제", "파기"]), insert_line=ins)
+    reason = "종료 시 데이터 반환·삭제(백업/로그 포함) 및 삭제 확인을 조항 본문에 직접 반영."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-010"])
 
 
 def _rewrite_app_011_handover(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
@@ -433,15 +497,18 @@ def _rewrite_app_011_handover(text: str, *, posture: str, party: PartyRole | Non
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    suffix = (
-        f" (계약 종료 시 {cp}는 소스코드, 빌드/배포 스크립트, 환경설정, 계정/권한, 운영 매뉴얼, 테스트 결과 등 "
-        f"인수인계에 필요한 자료를 {our}에게 제공하고 전환(마이그레이션) 지원에 협력한다. "
-        f"인수인계 범위/기간/요율은 별지로 정하되, {cp}의 귀책으로 인한 종료 또는 계약상 의무 불이행이 있는 경우 "
-        f"필수 인수인계는 무상으로 제공한다.)"
+    ins = (
+        f"계약 종료 시 {cp}는 인수인계에 필요한 자료(소스코드, 빌드/배포 스크립트, 환경설정, 운영 매뉴얼 등)를 {our}에게 제공하고 전환(마이그레이션)에 협력한다."
     )
-    reason = "종료 시 인수인계/전환 협력이 명확하지 않으면 서비스 중단 리스크가 커지므로, 산출물 목록과 전환 협력 범위를 보완."
-    prefix = "구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else ""
-    return RewriteProposal(suggested_rewrite=_norm_ws(original + suffix), rewrite_reason=(prefix + reason)[:900], reason_codes=["APP-011"])
+    out, replaced = _replace_first_line(
+        original,
+        predicate=lambda l: _has_any(l, ["종료", "해지", "인수인계", "전환", "migration", "마이그레이션"]) and _has_any(l, _AMBIG),
+        replacement_line=ins,
+    )
+    if not replaced and _has_any(original, ["종료", "해지", "인수인계", "전환", "migration", "마이그레이션"]):
+        out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["종료", "해지", "인수인계", "전환", "migration", "마이그레이션"]), insert_line=ins)
+    reason = "종료/전환(인수인계) 핵심 의무를 조항 본문 문장으로 흡수하여 과잉 수정(덧붙임) 최소화."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-011"])
 
 
 def propose_clause_specific_rewrite(
@@ -520,11 +587,8 @@ def propose_clause_specific_rewrite(
             merged_reasons.append(p.rewrite_reason)
 
     return RewriteProposal(
-        suggested_rewrite=_norm_ws(out_text),
-        rewrite_reason=(
-            ("구매자 보호 방향(" + str(posture) + ") 기준으로 보완: " if posture == "buyer_favorable" else "")
-            + " / ".join(merged_reasons)
-        )[:900],
+        suggested_rewrite=polish_korean_legal_style(_norm_ws(out_text)),
+        rewrite_reason=polish_korean_legal_style(" / ".join(merged_reasons))[:900],
         reason_codes=merged_reason_codes,
     )
 

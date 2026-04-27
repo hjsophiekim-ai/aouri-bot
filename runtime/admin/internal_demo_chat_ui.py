@@ -131,6 +131,19 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     .badgeWarn { background: var(--warnSoft); color: var(--warn); border-color: rgba(180,83,9,0.25); }
     .badgeDanger { background: var(--dangerSoft); color: var(--danger); border-color: rgba(214,69,69,0.25); }
     .avatar { width: 26px; height: 26px; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
+    .analyzePanel { display:none; padding: 12px 14px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,0.92); }
+    .stepList { margin-top: 10px; display:flex; flex-direction:column; gap: 6px; }
+    .stepItem { display:flex; align-items:center; justify-content:space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+    .stepName { font-weight: 900; }
+    .stepState { font-size: 12px; color: var(--muted); }
+    .stepItem.active { border-color: rgba(31,122,224,0.55); background: rgba(31,122,224,0.05); }
+    .stepItem.done { border-color: rgba(15,118,110,0.25); background: var(--okSoft); }
+    .stepItem.delayed { border-color: rgba(180,83,9,0.25); background: var(--warnSoft); }
+    .dots { display:inline-flex; gap: 2px; align-items:center; }
+    .dots span { display:inline-block; width: 6px; text-align:center; animation: blink 1.1s infinite; }
+    .dots span:nth-child(2) { animation-delay: .15s; }
+    .dots span:nth-child(3) { animation-delay: .30s; }
+    @keyframes blink { 0% { opacity: .2; } 35% { opacity: 1; } 100% { opacity: .2; } }
 
     .chat { padding: 14px; display:flex; flex-direction:column; gap: 10px; min-height: 420px; }
     .msgRow { display:flex; gap: 10px; align-items:flex-start; }
@@ -157,7 +170,14 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     .clauseBody { margin-top: 8px; display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .clauseBox { border: 1px solid rgba(216,236,255,0.6); border-radius: 12px; padding: 10px; background: #fff; }
     .clauseBox .label { margin: 0 0 6px 0; }
-    .rewrite { color: var(--danger); font-weight: 900; text-decoration: underline; }
+    .context { color: var(--muted); font-size: 12px; margin: 0 0 6px 0; white-space: pre-wrap; }
+    .redline { white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
+    .redline .ins { color: var(--danger); font-weight: 900; }
+    .redline .del { color: var(--danger); text-decoration: line-through; font-weight: 900; }
+    .guidance { border: 1px solid rgba(31,122,224,0.25); background: rgba(31,122,224,0.07); border-radius: 12px; padding: 10px; color: #0c4a6e; white-space: pre-wrap; }
+    .guidance .hintTitle { font-weight: 900; margin: 0 0 6px 0; }
+    .tagHigh { background: var(--dangerSoft); color: var(--danger); border-color: rgba(214,69,69,0.25); }
+    .tagGuide { background: rgba(31,122,224,0.10); color: #0c4a6e; border-color: rgba(31,122,224,0.25); }
     .lawList { margin-top: 8px; color: var(--muted); font-size: 12px; }
 
     .composer {
@@ -248,6 +268,23 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             </div>
           </div>
 
+          <div class="analyzePanel" id="analyzePanel">
+            <div class="row" style="justify-content:space-between; align-items:center;">
+              <div class="row" style="gap:8px;">
+                <span class="badge" id="analyzeStepBadge">진행 0/5</span>
+                <span class="badge" id="analyzeStageBadge">대기</span>
+                <span class="badge" id="analyzeEtaBadge">남은 시간: -</span>
+                <span class="badge" id="analyzeElapsedBadge">경과: 0s</span>
+              </div>
+              <div class="row">
+                <button class="btn btnGhost" id="btnCancelAnalyze" onclick="cancelAnalyze()" style="display:none;">취소</button>
+                <button class="btn btnSecondary" id="btnRetryAnalyze" onclick="retryAnalyze()" style="display:none;">재시도</button>
+              </div>
+            </div>
+            <div class="stepList" id="analyzeSteps"></div>
+            <div class="meta" id="analyzeHint"></div>
+          </div>
+
           <div class="chat" id="chat"></div>
 
           <div class="composer">
@@ -274,8 +311,25 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           <div style="padding: 0 14px 14px 14px;">
             <div class="h1" style="font-size:18px; margin-top:0;" id="conclusionTitle">-</div>
             <div class="sub" id="conclusionBody">-</div>
+            <div class="meta" id="phaseNote">-</div>
             <div class="meta" id="recommendedAction">-</div>
             <div class="meta" id="docxStatus">수정본: 미생성</div>
+            <div class="analyzePanel" id="resultAnalyzePanel" style="margin-top:10px;">
+              <div class="row" style="justify-content:space-between; align-items:center;">
+                <div class="row" style="gap:8px;">
+                  <span class="badge" id="resultAnalyzeStepBadge">진행 0/5</span>
+                  <span class="badge" id="resultAnalyzeStageBadge">대기</span>
+                  <span class="badge" id="resultAnalyzeEtaBadge">남은 시간: -</span>
+                  <span class="badge" id="resultAnalyzeElapsedBadge">경과: 0s</span>
+                </div>
+                <div class="row">
+                  <button class="btn btnGhost" id="btnCancelAnalyze2" onclick="cancelAnalyze()" style="display:none;">취소</button>
+                  <button class="btn btnSecondary" id="btnRetryAnalyze2" onclick="retryAnalyze()" style="display:none;">재시도</button>
+                </div>
+              </div>
+              <div class="stepList" id="resultAnalyzeSteps"></div>
+              <div class="meta" id="resultAnalyzeHint"></div>
+            </div>
 
             <div style="margin-top:12px;">
               <div class="badge" style="margin-bottom:8px;">조항별 수정 제안</div>
@@ -348,6 +402,215 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     let reviewResult = null;
     let revisionResult = null;
     let draftSuggest = null;
+    let analyzeState = {
+      active: false,
+      startedAt: 0,
+      expectedTotalSec: 40,
+      stageIndex: 0,
+      fastDone: false,
+      deepDone: false,
+      timer: null,
+      t15: null,
+      t30: null,
+      t90: null,
+      deepAbort: null,
+      lastError: null,
+      retryFn: null
+    };
+
+    const ANALYZE_STAGES = [
+      { key: 'prepare', name: '업로드/텍스트 정리' },
+      { key: 'rules', name: '규칙 분석' },
+      { key: 'law', name: '법령/판례 확인' },
+      { key: 'ai', name: 'AI 정밀 검토' },
+      { key: 'summarize', name: '수정 제안 정리' },
+    ];
+
+    function showAnalyzePanel(show) {
+      for (const id of ['analyzePanel', 'resultAnalyzePanel']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? 'block' : 'none';
+      }
+    }
+
+    function renderAnalyzeSteps() {
+      function build(rootId, stepPrefix, statePrefix) {
+        const root = document.getElementById(rootId);
+        if (!root) return;
+        root.innerHTML = '';
+        for (let i = 0; i < ANALYZE_STAGES.length; i++) {
+          const st = ANALYZE_STAGES[i];
+          const row = document.createElement('div');
+          row.className = 'stepItem';
+          row.id = `${stepPrefix}_${i}`;
+          const left = document.createElement('div');
+          left.className = 'stepName';
+          left.innerText = st.name;
+          const right = document.createElement('div');
+          right.className = 'stepState';
+          right.id = `${statePrefix}_${i}`;
+          right.innerText = '대기';
+          row.appendChild(left);
+          row.appendChild(right);
+          root.appendChild(row);
+        }
+      }
+      build('analyzeSteps', 'anStep', 'anState');
+      build('resultAnalyzeSteps', 'rAnStep', 'rAnState');
+    }
+
+    function _sec(n) {
+      const x = Math.max(0, Math.round(Number(n || 0)));
+      return `${x}s`;
+    }
+
+    function _computeEtaSec() {
+      const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
+      const remain = Math.max(0, analyzeState.expectedTotalSec - elapsed);
+      return Math.round(remain);
+    }
+
+    function updateAnalyzeHeader() {
+      const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
+      const stepText = `진행 ${Math.min(analyzeState.stageIndex + 1, 5)}/5`;
+      const etaText = `남은 시간: 약 ${_sec(_computeEtaSec())}`;
+      const elapsedText = `경과: ${_sec(elapsed)}`;
+      for (const id of ['analyzeElapsedBadge', 'resultAnalyzeElapsedBadge']) {
+        const el = document.getElementById(id);
+        if (el) el.innerText = elapsedText;
+      }
+      for (const id of ['analyzeEtaBadge', 'resultAnalyzeEtaBadge']) {
+        const el = document.getElementById(id);
+        if (el) el.innerText = etaText;
+      }
+      for (const id of ['analyzeStepBadge', 'resultAnalyzeStepBadge']) {
+        const el = document.getElementById(id);
+        if (el) el.innerText = stepText;
+      }
+    }
+
+    function setAnalyzeStage(index, state, label) {
+      analyzeState.stageIndex = Math.max(0, Math.min(index, ANALYZE_STAGES.length - 1));
+      for (let i = 0; i < ANALYZE_STAGES.length; i++) {
+        for (const [stepPrefix, statePrefix] of [['anStep', 'anState'], ['rAnStep', 'rAnState']]) {
+          const row = document.getElementById(`${stepPrefix}_${i}`);
+          const st = document.getElementById(`${statePrefix}_${i}`);
+          if (!row || !st) continue;
+          row.className = 'stepItem';
+          st.innerText = '대기';
+          if (i < analyzeState.stageIndex) {
+            row.className = 'stepItem done';
+            st.innerText = '완료';
+          } else if (i === analyzeState.stageIndex) {
+            row.className = 'stepItem active';
+            st.innerText = label || '진행 중';
+          }
+        }
+      }
+      const stageHtml = (state || '진행 중') + ' <span class="dots"><span>•</span><span>•</span><span>•</span></span>';
+      for (const id of ['analyzeStageBadge', 'resultAnalyzeStageBadge']) {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = stageHtml;
+      }
+      updateAnalyzeHeader();
+    }
+
+    function startAnalyzeProgress(expectedTotalSec) {
+      analyzeState.active = true;
+      analyzeState.fastDone = false;
+      analyzeState.deepDone = false;
+      analyzeState.lastError = null;
+      analyzeState.retryFn = null;
+      analyzeState.startedAt = Date.now();
+      analyzeState.expectedTotalSec = Math.max(20, Math.min(60, Number(expectedTotalSec || 40)));
+      renderAnalyzeSteps();
+      showAnalyzePanel(true);
+      for (const id of ['btnCancelAnalyze', 'btnCancelAnalyze2']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'inline-block';
+      }
+      for (const id of ['btnRetryAnalyze', 'btnRetryAnalyze2']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      }
+      for (const id of ['analyzeHint', 'resultAnalyzeHint']) {
+        const el = document.getElementById(id);
+        if (el) el.innerText = '먼저 핵심 결과를 보여드리고, 조항별 수정안은 이어서 정리할게요.';
+      }
+      setAnalyzeStage(0, '계약서 읽는 중', '진행 중');
+
+      if (analyzeState.timer) clearInterval(analyzeState.timer);
+      analyzeState.timer = setInterval(() => {
+        if (!analyzeState.active) return;
+        updateAnalyzeHeader();
+        const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
+        if (!analyzeState.deepDone && elapsed >= 90) {
+          for (const prefix of ['anStep', 'rAnStep']) {
+            const row = document.getElementById(`${prefix}_${analyzeState.stageIndex}`);
+            if (row) row.className = 'stepItem delayed';
+          }
+        }
+      }, 250);
+
+      if (analyzeState.t15) clearTimeout(analyzeState.t15);
+      if (analyzeState.t30) clearTimeout(analyzeState.t30);
+      if (analyzeState.t90) clearTimeout(analyzeState.t90);
+      analyzeState.t15 = setTimeout(() => {
+        if (analyzeState.active && !analyzeState.deepDone) {
+          addMsg('bot', '법령/판례와 AI 검토를 함께 진행 중이라 조금 더 걸리고 있어요.');
+        }
+      }, 15000);
+      analyzeState.t30 = setTimeout(() => {
+        if (analyzeState.active && !analyzeState.deepDone) {
+          addMsg('bot', '조항별 검토를 계속 진행 중이에요. 창을 닫지 말고 조금만 기다려 주세요.');
+        }
+      }, 30000);
+      analyzeState.t90 = setTimeout(() => {
+        if (analyzeState.active && !analyzeState.deepDone) {
+          addMsg('bot', '예상보다 지연되고 있어요. 네트워크 상태를 확인한 뒤, 필요하면 재시도해 주세요.');
+          for (const prefix of ['anStep', 'rAnStep']) {
+            const row = document.getElementById(`${prefix}_${analyzeState.stageIndex}`);
+            if (row) row.className = 'stepItem delayed';
+          }
+        }
+      }, 90000);
+    }
+
+    function finishAnalyzeProgress(ok) {
+      analyzeState.active = false;
+      if (analyzeState.timer) clearInterval(analyzeState.timer);
+      analyzeState.timer = null;
+      for (const id of ['btnCancelAnalyze', 'btnCancelAnalyze2']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      }
+      for (const id of ['analyzeStageBadge', 'resultAnalyzeStageBadge']) {
+        const el = document.getElementById(id);
+        if (el) el.innerText = ok ? '완료' : '오류';
+      }
+      updateAnalyzeHeader();
+    }
+
+    function cancelAnalyze() {
+      try {
+        if (analyzeState.deepAbort) analyzeState.deepAbort.abort();
+      } catch (_) {}
+      analyzeState.active = false;
+      finishAnalyzeProgress(false);
+      addMsg('bot', '검토를 중단했어요. 필요하면 다시 시도해 주세요.');
+      for (const id of ['btnRetryAnalyze', 'btnRetryAnalyze2']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'inline-block';
+      }
+    }
+
+    function retryAnalyze() {
+      if (typeof analyzeState.retryFn === 'function') {
+        analyzeState.retryFn();
+        return;
+      }
+      addMsg('bot', '재시도를 위해 “처음으로”에서 다시 검토를 시작해 주세요.');
+    }
 
     async function startReview() {
       document.getElementById('startError').innerText = '';
@@ -457,7 +720,28 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     async function finishAndAnalyze() {
       document.getElementById('btnNext').disabled = true;
       try {
-        addMsg('bot', '좋아요. 이제 검토 결과를 정리해볼게요.');
+        addMsg('bot', '좋아요. 이제 검토를 시작해볼게요.');
+        addMsg('bot', '계약 길이와 조항 수에 따라 20~60초 정도 걸릴 수 있어요.');
+
+        startAnalyzeProgress(40);
+        setAnalyzeStage(0, '질문 답변 반영 중', '진행 중');
+
+        const analyzePayload = {
+          entity: ctx.entity || 'all',
+          contract_type: ctx.contract_type || 'all',
+          filename: ctx.filename || 'demo.txt',
+          text: (ctx.text || ''),
+          answers: answers
+        };
+
+        const draftPromise = fetch(`/api/draft/suggest?contract_type=${encodeURIComponent(ctx.contract_type || '')}`)
+          .then(r => r.json())
+          .then(d => {
+            draftSuggest = d;
+            buildResult();
+            return d;
+          })
+          .catch(() => null);
 
         if (ctx.session_id) {
           await fetch(`/api/question_sessions/${encodeURIComponent(ctx.session_id)}/answers`, {
@@ -465,38 +749,136 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             headers: { 'Content-Type': 'application/json; charset=utf-8' },
             body: JSON.stringify({ answers })
           });
-          const res1 = await fetch(`/api/question_sessions/${encodeURIComponent(ctx.session_id)}/review`, { method:'POST' });
-          const reviewWrap = await res1.json();
-          reviewResult = (reviewWrap && reviewWrap.review) ? reviewWrap.review : reviewWrap;
-
-          const res2 = await fetch('/api/revision/suggest', {
-            method:'POST',
-            headers: { 'Content-Type':'application/json; charset=utf-8' },
-            body: JSON.stringify({ session_id: ctx.session_id })
-          });
-          revisionResult = await res2.json();
-        } else {
-          const analyzePayload = {
-            entity: ctx.entity || 'all',
-            contract_type: ctx.contract_type || 'all',
-            filename: ctx.filename || 'demo.txt',
-            text: (ctx.text || ''),
-            answers: answers
-          };
-          const res1 = await fetch('/api/review/analyze', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(analyzePayload) });
-          reviewResult = await res1.json();
-
-          const res2 = await fetch('/api/revision/suggest_text', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(analyzePayload) });
-          revisionResult = await res2.json();
         }
 
-        const res3 = await fetch(`/api/draft/suggest?contract_type=${encodeURIComponent(ctx.contract_type || '')}`);
-        draftSuggest = await res3.json();
+        setAnalyzeStage(1, '규칙 검토 중', '진행 중');
+
+        let fastResult = null;
+        try {
+          if (ctx.session_id) {
+            const res = await fetch(`/api/question_sessions/${encodeURIComponent(ctx.session_id)}/review_fast`, { method: 'POST' });
+            const wrap = await res.json();
+            fastResult = (wrap && wrap.review) ? wrap.review : wrap;
+          } else {
+            const res = await fetch('/api/review/analyze_fast', {
+              method: 'POST',
+              headers: {'Content-Type':'application/json; charset=utf-8'},
+              body: JSON.stringify(analyzePayload)
+            });
+            fastResult = await res.json();
+          }
+        } catch (e) {
+          fastResult = { error: String(e || 'fast review failed') };
+        }
+
+        if (fastResult && fastResult.error) {
+          analyzeState.lastError = fastResult.error;
+          finishAnalyzeProgress(false);
+          document.getElementById('phaseNote').innerText = '1차 결과 생성 중 오류가 발생했어요. 잠시 후 재시도해 주세요.';
+          for (const id of ['btnRetryAnalyze','btnRetryAnalyze2']) {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'inline-block';
+          }
+          showStage('stageResult');
+          buildResult();
+          return;
+        }
+
+        reviewResult = fastResult;
+        analyzeState.fastDone = true;
+
+        const meta = (reviewResult && reviewResult.clause_meta) ? reviewResult.clause_meta : {};
+        const clauseCount = Number(meta.clause_count || 0) || (Array.isArray(reviewResult && reviewResult.clause_results) ? reviewResult.clause_results.length : 0);
+        const textLen = Number(meta.text_length || 0) || (String(analyzePayload.text || '').length);
+        const expected = Math.max(20, Math.min(60, 18 + Math.round(clauseCount * 2.1) + (textLen > 9000 ? 10 : 0)));
+        analyzeState.expectedTotalSec = expected;
+
+        showStage('stageResult');
+        document.getElementById('resultTitle').innerText = '핵심 결과(1차)';
+        document.getElementById('phaseNote').innerText = '먼저 핵심 결과를 보여드리고, 조항별 수정안은 이어서 정리할게요.';
+        document.getElementById('docxStatus').innerText = '수정본: 정밀 검토 후 준비됩니다';
+        document.getElementById('btnConfirmRevision').disabled = true;
 
         buildResult();
-        showStage('stageResult');
+        renderSkeletonClauseList();
+
+        const deepRun = async () => {
+          analyzeState.deepAbort = new AbortController();
+          const signal = analyzeState.deepAbort.signal;
+          analyzeState.retryFn = deepRun;
+          analyzeState.lastError = null;
+          analyzeState.active = true;
+
+          setAnalyzeStage(2, '법령/판례 확인 중', '진행 중');
+          const tAi = setTimeout(() => {
+            if (analyzeState.active && !analyzeState.deepDone) setAnalyzeStage(3, 'AI 정밀 검토 중', '진행 중');
+          }, 7000);
+          const tSum = setTimeout(() => {
+            if (analyzeState.active && !analyzeState.deepDone) setAnalyzeStage(4, '수정 제안 정리 중', '진행 중');
+          }, 14000);
+
+          try {
+            let deepResult = null;
+            if (ctx.session_id) {
+              const res = await fetch(`/api/question_sessions/${encodeURIComponent(ctx.session_id)}/review`, { method: 'POST', signal });
+              const wrap = await res.json();
+              deepResult = (wrap && wrap.review) ? wrap.review : wrap;
+            } else {
+              const res = await fetch('/api/review/analyze_deep', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json; charset=utf-8'},
+                body: JSON.stringify(analyzePayload),
+                signal
+              });
+              deepResult = await res.json();
+            }
+            if (deepResult && deepResult.error) throw new Error(deepResult.error);
+
+            reviewResult = deepResult;
+            analyzeState.deepDone = true;
+            revisionResult = {
+              revision: { summary: { issue_clause_count: Number((deepResult.clause_meta || {}).issue_clause_count || 0) } },
+              clause_results: Array.isArray(deepResult.clause_results) ? deepResult.clause_results : [],
+              meta: deepResult.clause_meta || null
+            };
+            setAnalyzeStage(4, '정리 완료', '완료');
+            finishAnalyzeProgress(true);
+            for (const id of ['btnRetryAnalyze','btnRetryAnalyze2']) {
+              const el = document.getElementById(id);
+              if (el) el.style.display = 'none';
+            }
+            document.getElementById('phaseNote').innerText = '정밀 결과가 준비되었어요. 조항별 수정안을 확인해 주세요.';
+            buildResult();
+          } catch (e) {
+            analyzeState.lastError = String(e || 'deep review failed');
+            finishAnalyzeProgress(false);
+            document.getElementById('phaseNote').innerText = '정밀 결과 로딩 중 오류가 발생했어요. 네트워크 확인 후 재시도해 주세요.';
+            for (const id of ['btnRetryAnalyze','btnRetryAnalyze2']) {
+              const el = document.getElementById(id);
+              if (el) el.style.display = 'inline-block';
+            }
+          } finally {
+            clearTimeout(tAi);
+            clearTimeout(tSum);
+          }
+        };
+
+        deepRun();
+        await draftPromise;
       } finally {
         document.getElementById('btnNext').disabled = false;
+      }
+    }
+
+    function renderSkeletonClauseList() {
+      const root = document.getElementById('clauseList');
+      if (!root) return;
+      root.innerHTML = '';
+      for (let i = 0; i < 4; i++) {
+        const card = document.createElement('div');
+        card.className = 'clauseCard';
+        card.innerHTML = `<div class="meta">조항별 수정안을 정리 중입니다<span class="dots"><span>•</span><span>•</span><span>•</span></span></div>`;
+        root.appendChild(card);
       }
     }
 
@@ -520,6 +902,61 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       return out.slice(0, 6);
     }
 
+    function tokenizeForDiff(s) {
+      const text = (s || '');
+      const re = /(\\s+|[0-9A-Za-z가-힣]+|[^0-9A-Za-z가-힣\\s])/g;
+      const out = [];
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        out.push(m[0]);
+        if (out.length > 900) break;
+      }
+      return out;
+    }
+
+    function diffOps(aTokens, bTokens) {
+      const a = aTokens || [];
+      const b = bTokens || [];
+      const n = a.length;
+      const m = b.length;
+      const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+      for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) {
+          dp[i][j] = (a[i] === b[j]) ? (dp[i + 1][j + 1] + 1) : Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+      const ops = [];
+      let i = 0, j = 0;
+      while (i < n && j < m) {
+        if (a[i] === b[j]) { ops.push({ op: 'eq', t: a[i] }); i++; j++; continue; }
+        if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ op: 'del', t: a[i] }); i++; continue; }
+        ops.push({ op: 'ins', t: b[j] }); j++;
+      }
+      while (i < n) { ops.push({ op: 'del', t: a[i++] }); }
+      while (j < m) { ops.push({ op: 'ins', t: b[j++] }); }
+      const merged = [];
+      for (const x of ops) {
+        const last = merged.length ? merged[merged.length - 1] : null;
+        if (last && last.op === x.op) last.t += x.t;
+        else merged.push({ op: x.op, t: x.t });
+      }
+      return merged;
+    }
+
+    function renderRedlineHtml(originalText, revisedText) {
+      const a = tokenizeForDiff(originalText);
+      const b = tokenizeForDiff(revisedText);
+      const ops = diffOps(a, b);
+      const parts = [];
+      for (const x of ops) {
+        if (!x.t) continue;
+        if (x.op === 'eq') parts.push(escapeHtml(x.t));
+        else if (x.op === 'ins') parts.push('<span class="ins">' + escapeHtml(x.t) + '</span>');
+        else if (x.op === 'del') parts.push('<span class="del">' + escapeHtml(x.t) + '</span>');
+      }
+      return parts.join('');
+    }
+
     function renderClauseList(items) {
       const root = document.getElementById('clauseList');
       root.innerHTML = '';
@@ -527,19 +964,27 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         root.innerHTML = '<div class="meta">조항별 수정 제안이 없습니다.</div>';
         return;
       }
-      for (const it of items.slice(0, 12)) {
+      const visible = items.filter(it => it && (it.approval_required || it.high_risk || String(it.risk_tier || '').toUpperCase() === 'MEDIUM'));
+      const list = (visible.length > 0 ? visible : items);
+      for (const it of list.slice(0, 12)) {
         const card = document.createElement('div');
         card.className = 'clauseCard';
         const head = document.createElement('div');
         head.className = 'clauseHead';
         const title = document.createElement('div');
         title.className = 'clauseTitle';
-        title.innerText = `${it.clause_id || ''} ${it.clause_title || ''}`.trim() || '조항';
+        const dp0 = (it.display_path || it.clause_id || '').trim();
+        let t0 = String(it.clause_title || '').trim();
+        if (dp0 && t0 && t0.startsWith(dp0 + ' ')) t0 = t0.slice(dp0.length).trim();
+        if (dp0 && t0 && t0.startsWith(dp0)) t0 = t0.slice(dp0.length).trim();
+        if (t0.startsWith('[') && t0.endsWith(']')) t0 = t0.slice(1, -1).trim();
+        title.innerText = (dp0 ? (dp0 + (t0 ? ` [${t0}]` : '')) : (t0 || '조항')).trim();
         const tag = document.createElement('div');
         tag.className = 'clauseTag';
         const appr = !!it.approval_required;
         const high = !!it.high_risk;
-        tag.innerText = appr ? '승인 필요' : (high ? '고위험' : '검토');
+        tag.innerText = appr ? '승인 필요' : (high ? '고위험' : '권장/참고');
+        tag.className = 'clauseTag ' + (high || appr ? 'tagHigh' : 'tagGuide');
         head.appendChild(title);
         head.appendChild(tag);
         card.appendChild(head);
@@ -548,11 +993,24 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         body.className = 'clauseBody';
         const left = document.createElement('div');
         left.className = 'clauseBox';
-        left.innerHTML = `<div class="label">원문</div><div>${escapeHtml((it.original_text || '').slice(0, 320))}${(it.original_text || '').length > 320 ? '…' : ''}</div>`;
+        const ctxText = (it.context_text || '');
+        const ctxBlock = ctxText ? `<div class="context">${escapeHtml(ctxText.slice(0, 180))}${ctxText.length > 180 ? '…' : ''}</div>` : '';
+        left.innerHTML = `<div class="label">원문</div>${ctxBlock}<div>${escapeHtml((it.original_text || '').slice(0, 320))}${(it.original_text || '').length > 320 ? '…' : ''}</div>`;
         const right = document.createElement('div');
         right.className = 'clauseBox';
         const rw = (it.suggested_rewrite || '');
-        right.innerHTML = `<div class="label">추천 수정문안</div><div class="rewrite">${escapeHtml((rw || '').slice(0, 320))}${(rw || '').length > 320 ? '…' : ''}</div>`;
+        if (high || appr) {
+          const html = renderRedlineHtml(it.original_text || '', rw || '');
+          right.innerHTML = `<div class="label">필수 수정(redline)</div><div class="redline">${html}</div>`;
+        } else {
+          const dirs = Array.isArray(it.suggested_direction) ? it.suggested_direction : [];
+          const rr0 = (it.rewrite_reason || '');
+          const lines = [];
+          if (dirs.length) lines.push('방향: ' + dirs.slice(0, 3).join(' / '));
+          if (rr0) lines.push('사유: ' + rr0.slice(0, 240) + (rr0.length > 240 ? '…' : ''));
+          if (rw) lines.push('참고 문안: ' + rw.slice(0, 240) + (rw.length > 240 ? '…' : ''));
+          right.innerHTML = `<div class="label">권장/참고(guidance)</div><div class="guidance"><div class="hintTitle">보완 권고</div>${escapeHtml(lines.join('\\n'))}</div>`;
+        }
         body.appendChild(left);
         body.appendChild(right);
         card.appendChild(body);
@@ -580,11 +1038,17 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       const issueTitles = matched.map(x => x.title || x.rule_id || 'rule').slice(0, 6);
 
       const revSum = (revisionResult && revisionResult.revision && revisionResult.revision.summary) ? revisionResult.revision.summary : {};
-      const issueClauseCount = revSum.issue_clause_count || 0;
+      const meta0 = (reviewResult && reviewResult.clause_meta) ? reviewResult.clause_meta : {};
+      const itemsAll = Array.isArray(revisionResult && revisionResult.clause_results) ? revisionResult.clause_results
+                    : (Array.isArray(reviewResult && reviewResult.clause_results) ? reviewResult.clause_results : []);
+      const issueClauseCount = Number(revSum.issue_clause_count || meta0.issue_clause_count || 0) || 0;
+      const mustCount = itemsAll.filter(x => x && (x.approval_required || x.high_risk)).length;
+      const medCount = itemsAll.filter(x => x && !x.approval_required && !x.high_risk && (String(x.risk_tier || '').toUpperCase() === 'MEDIUM')).length;
+      const lowCount = itemsAll.filter(x => x && !x.approval_required && !x.high_risk && (String(x.risk_tier || '').toUpperCase() === 'LOW')).length;
 
       const suggested = (draftSuggest && Array.isArray(draftSuggest.suggested_template_ids)) ? draftSuggest.suggested_template_ids : [];
 
-      document.getElementById('resultMeta').innerText = `${ctx.entity || '-'} / ${ctx.contract_type || '-'} · issues=${s.matched_rule_count || 0}`;
+      document.getElementById('resultMeta').innerText = `${ctx.entity || '-'} / ${ctx.contract_type || '-'} · issues=${s.matched_rule_count || 0} · 필수수정=${mustCount} 권장=${medCount} 참고=${lowCount}`;
 
       let action = 'revision';
       if (s.high_risk || s.approval_required) action = 'legal';
@@ -627,8 +1091,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       }
       document.getElementById('detailIssues').innerText = JSON.stringify(issuesOut, null, 2);
       document.getElementById('detailRules').innerText = JSON.stringify(matched.slice(0, 80), null, 2);
-      document.getElementById('detailLaw').innerText = JSON.stringify(revisionResult && revisionResult.clause_results ? revisionResult.clause_results.slice(0, 5).map(x => ({ clause_id: x.clause_id, clause_title: x.clause_title, related_laws: x.related_laws })) : null, null, 2);
-      document.getElementById('detailRevision').innerText = JSON.stringify(revisionResult && revisionResult.clause_results ? revisionResult.clause_results.slice(0, 8).map(x => ({ clause_id: x.clause_id, clause_title: x.clause_title, suggested_rewrite: x.suggested_rewrite, rewrite_reason: x.rewrite_reason })) : (revisionResult && revisionResult.revision ? revisionResult.revision : revisionResult), null, 2);
+      document.getElementById('detailLaw').innerText = JSON.stringify(itemsAll ? itemsAll.slice(0, 5).map(x => ({ clause_id: x.clause_id, clause_title: x.clause_title, related_laws: x.related_laws })) : null, null, 2);
+      document.getElementById('detailRevision').innerText = JSON.stringify(itemsAll ? itemsAll.slice(0, 8).map(x => ({ clause_id: x.clause_id, clause_title: x.clause_title, suggested_rewrite: x.suggested_rewrite, rewrite_reason: x.rewrite_reason })) : null, null, 2);
       document.getElementById('detailDraft').innerText = JSON.stringify(draftSuggest, null, 2);
 
       document.getElementById('confirmNote').innerText = '';
@@ -638,12 +1102,18 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       const docxStatus = document.getElementById('docxStatus');
       const meta = (revisionResult && revisionResult.meta) ? revisionResult.meta : (reviewResult && reviewResult.clause_meta ? reviewResult.clause_meta : null);
 
-      if (meta && meta.docx_allowed === false) {
+      if (!analyzeState.deepDone) {
         btnRev.disabled = true;
-        docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
+        if (meta && meta.docx_allowed === false) docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
+        else docxStatus.innerText = '수정본: 정밀 검토 진행 중';
       } else {
-        btnRev.disabled = false;
-        docxStatus.innerText = '수정본: 다운로드 가능';
+        if (meta && meta.docx_allowed === false) {
+          btnRev.disabled = true;
+          docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
+        } else {
+          btnRev.disabled = false;
+          docxStatus.innerText = '수정본: 다운로드 가능';
+        }
       }
       btnDraft.dataset.templateId = (suggested.length > 0 ? suggested[0] : '');
       btnDraft.disabled = (suggested.length === 0);
@@ -658,9 +1128,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         btnDraft.className = 'btn btnSecondary';
       }
 
-      const items = (revisionResult && Array.isArray(revisionResult.clause_results)) ? revisionResult.clause_results
-                  : ((reviewResult && Array.isArray(reviewResult.clause_results)) ? reviewResult.clause_results : []);
-      renderClauseList(items);
+      renderClauseList(itemsAll);
     }
 
     async function confirmRevision() {

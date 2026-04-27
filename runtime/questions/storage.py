@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from runtime.ai.config import load_ai_config
+from runtime.ai.factory import create_ai_provider
+from runtime.law.cache import JsonFileCache
+from runtime.law.config import load_law_api_config
+from runtime.law.search_service import LawSearchService
 from runtime.questions.generator import generate_questions
 from runtime.questions.model import question_to_dict
 from runtime.services.query_service import ReviewInput, RuleQueryService
@@ -93,7 +98,7 @@ def create_session(
         law_topics=None,
         contract_text=text,
         clause_results=bundle.clause_results,
-        max_questions=5,
+        max_questions=7,
     )
 
     now = _utc_now_iso()
@@ -135,6 +140,86 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
     contract_type = doc.get("contract_type", "all")
     filename = (doc.get("input") or {}).get("filename")
     answers = doc.get("answers") or {}
+    base_sig = sha256(
+        json.dumps(
+            {
+                "entity": entity,
+                "contract_type": contract_type,
+                "filename": filename,
+                "text_sha256": sha256(str(text).encode("utf-8", errors="replace")).hexdigest(),
+                "answers": answers if isinstance(answers, dict) else {},
+                "mode": "deep",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if isinstance(doc.get("review_result"), dict) and doc.get("review_result_sig") == base_sig:
+        return doc["review_result"]
+    law_cfg = load_law_api_config()
+    law_cache = JsonFileCache(path=DATA_DIR / "law_cache.json")
+    law_service = LawSearchService(cfg=law_cfg, cache=law_cache) if law_cfg.enabled and law_cfg.api_key else None
+    cfg = load_ai_config()
+    ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+    bundle = build_clause_level_result(
+        service=service,
+        entity=str(entity),
+        contract_type=str(contract_type),
+        text=str(text),
+        filename=str(filename) if isinstance(filename, str) else None,
+        answers=answers if isinstance(answers, dict) else None,
+        law_service=law_service,
+        ai_provider=ai_provider,
+        ai_model=cfg.model if ai_provider else None,
+        ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
+        ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
+        ai_temperature=cfg.temperature if ai_provider else None,
+        max_clause_law_items=2,
+    )
+    result = dict(bundle.review)
+    result["clause_results"] = bundle.clause_results
+    result["clause_meta"] = bundle.meta
+    meta_ai = (bundle.meta.get("ai") if isinstance(bundle.meta, dict) else None) if isinstance(bundle.meta, dict) else None
+    ai_enabled = bool(ai_provider) and cfg.provider == "openai"
+    ai_used = bool(isinstance(meta_ai, dict) and meta_ai.get("used"))
+    result["ai"] = {
+        "enabled": ai_enabled,
+        "provider": "openai" if ai_enabled else "mock",
+        "model": cfg.model,
+        "used": ai_used,
+        "detail": meta_ai,
+    }
+    doc["review_result"] = result
+    doc["review_result_sig"] = base_sig
+    doc["updated_at"] = _utc_now_iso()
+    save_session(doc)
+    return result
+
+
+def run_review_with_session_fast(service: RuleQueryService, session_id: str) -> dict[str, Any]:
+    doc = load_session(session_id)
+    text = doc.get("text", "") or ""
+    entity = doc.get("entity", "all")
+    contract_type = doc.get("contract_type", "all")
+    filename = (doc.get("input") or {}).get("filename")
+    answers = doc.get("answers") or {}
+    base_sig = sha256(
+        json.dumps(
+            {
+                "entity": entity,
+                "contract_type": contract_type,
+                "filename": filename,
+                "text_sha256": sha256(str(text).encode("utf-8", errors="replace")).hexdigest(),
+                "answers": answers if isinstance(answers, dict) else {},
+                "mode": "fast",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if isinstance(doc.get("review_result_fast"), dict) and doc.get("review_result_fast_sig") == base_sig:
+        return doc["review_result_fast"]
+
     bundle = build_clause_level_result(
         service=service,
         entity=str(entity),
@@ -153,7 +238,22 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
     result = dict(bundle.review)
     result["clause_results"] = bundle.clause_results
     result["clause_meta"] = bundle.meta
-    doc["review_result"] = result
+    result["law_search"] = {
+        "enabled": False,
+        "note": "fast_mode",
+        "queries": [],
+        "results": {"laws": [], "precedents": [], "interpretations": [], "admin_rules": [], "local_ordinances": []},
+        "errors": [],
+    }
+    result["ai"] = {
+        "enabled": False,
+        "provider": "mock",
+        "model": None,
+        "used": False,
+        "detail": {"enabled": False, "used": False, "selected_clause_ids": [], "selected_count": 0},
+    }
+    doc["review_result_fast"] = result
+    doc["review_result_fast_sig"] = base_sig
     doc["updated_at"] = _utc_now_iso()
     save_session(doc)
     return result

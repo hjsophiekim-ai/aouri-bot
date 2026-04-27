@@ -118,9 +118,24 @@ def _classify_entity(text: str, filename: str | None) -> str:
 
 def _classify_contract_type(text: str, filename: str | None) -> str:
     s = (text or "") + "\n" + (filename or "")
+    scored: list[tuple[int, int, str]] = []
+    priority = {
+        "앱개발/소프트웨어개발/SI/유지보수/SaaS": 500,
+        "장비공급/설치/시운전": 420,
+        "개인정보/처리위탁(DPA)": 410,
+        "라이선스/로열티": 390,
+        "용역/자문/SOW": 360,
+        "NDA/비밀유지": 300,
+    }
     for name, pats in CONTRACT_TYPE_RULES:
+        match_count = 0
         for p in pats:
             if re.search(p, s, re.IGNORECASE):
-                return name
-    return "기타/미분류"
+                match_count += 1
+        if match_count > 0:
+            scored.append((priority.get(name, 200), match_count, name))
+    if not scored:
+        return "기타/미분류"
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return scored[0][2]
 

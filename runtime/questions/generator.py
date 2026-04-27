@@ -30,6 +30,22 @@ def _extract_rule_ids(clause_results: list[dict] | None) -> set[str]:
     return out
 
 
+def _topic_risk(clause_results: list[dict] | None, keywords: list[str]) -> str:
+    best = "none"
+    for cr in clause_results or []:
+        if not isinstance(cr, dict):
+            continue
+        txt = " ".join([str(cr.get("clause_title") or ""), str(cr.get("display_path") or ""), str(cr.get("original_text") or "")])
+        if not _has_any(txt, keywords):
+            continue
+        tier = str(cr.get("risk_tier") or "").strip().upper()
+        if bool(cr.get("must_fix")) or tier == "HIGH":
+            return "high"
+        if tier == "MEDIUM":
+            best = "medium"
+    return best
+
+
 def _top_keywords(text: str, keywords: list[str], *, limit: int = 3) -> list[str]:
     out: list[str] = []
     t = text.lower()
@@ -95,7 +111,7 @@ def generate_questions(
     law_topics: list[str] | None = None,
     contract_text: str | None = None,
     clause_results: list[dict] | None = None,
-    max_questions: int = 5,
+    max_questions: int = 7,
 ) -> list[Question]:
     detected = set(detected_rule_ids or [])
     ctype = contract_type or ""
@@ -208,12 +224,23 @@ def generate_questions(
 
     if max_questions < 1:
         max_questions = 1
-    max_questions = min(int(max_questions), 8)
+    max_questions = min(int(max_questions), 7)
+
+    ip_risk = _topic_risk(clause_results, ["산출물", "저작권", "지식재산", "ip", "소스코드", "프로그램"])
+    oss_risk = _topic_risk(clause_results, ["오픈소스", "open source", "gpl", "mit", "apache", "라이선스", "license", "서드파티"])
+    maintenance_risk = _topic_risk(clause_results, ["유지보수", "운영", "하자보수", "SLA", "장애"])
+    acceptance_risk = _topic_risk(clause_results, ["검수", "인수", "간주검수", "재검수", "테스트", "시운전"])
+    sla_risk = _topic_risk(clause_results, ["SLA", "가용성", "uptime", "응답시간", "복구시간", "장애", "서비스 수준"])
+    privacy_risk = _topic_risk(clause_results, ["개인정보", "처리위탁", "수탁", "국외이전", "재위탁", "파기", "유출"])
+    subcontract_risk = _topic_risk(clause_results, ["재위탁", "하도급", "외주", "협력업체"])
+    security_risk = _topic_risk(clause_results, ["보안", "침해", "유출", "사고", "취약점", "암호화"])
+    exit_risk = _topic_risk(clause_results, ["종료", "해지", "인수인계", "데이터", "반환", "삭제", "파기"])
 
     if app_dev_present and ip_state != "clear":
         candidates.append(
             (
-                96 if ip_state == "missing" else 94,
+                (96 if ip_state == "missing" else 94)
+                + (4 if ip_risk == "high" else (2 if ip_risk == "medium" else 0)),
                 Question(
                     question_id="Q-AD-001-ip-ownership",
                     title="개발 산출물/소스코드/저작권(IP) 귀속(양도/이용허락) 구조가 계약서에 명확히 적혀 있나요?",
@@ -230,7 +257,8 @@ def generate_questions(
     if app_dev_present and oss_state != "clear":
         candidates.append(
             (
-                93 if oss_state == "missing" else 92,
+                (93 if oss_state == "missing" else 92)
+                + (4 if oss_risk == "high" else (2 if oss_risk == "medium" else 0)),
                 Question(
                     question_id="Q-AD-002-oss",
                     title="오픈소스/서드파티 라이브러리 사용 고지(SBOM)와 라이선스 준수/위반 시 시정·배상 구조가 계약서에 포함돼 있나요?",
@@ -269,7 +297,8 @@ def generate_questions(
     if app_dev_present and acceptance_state != "clear":
         candidates.append(
             (
-                92 if acceptance_state == "missing" else 90,
+                (92 if acceptance_state == "missing" else 90)
+                + (4 if acceptance_risk == "high" else (2 if acceptance_risk == "medium" else 0)),
                 Question(
                     question_id="Q-AD-004-acceptance",
                     title="검수 기준과 검수 기간(재검수/간주검수 포함)이 계약서에 명확히 정해져 있나요?",
@@ -286,7 +315,7 @@ def generate_questions(
     if app_dev_present and sla_state != "clear" and _has_any(text, ["SLA", "가용성", "응답시간", "복구시간", "장애", "서비스 수준", "uptime", "유지보수"]):
         candidates.append(
             (
-                89,
+                89 + (4 if sla_risk == "high" else (2 if sla_risk == "medium" else 0)),
                 Question(
                     question_id="Q-AD-005-sla",
                     title="장애 대응 시간/가용성 등 SLA(서비스 수준)를 계약서에 명시할 필요가 있나요?",
@@ -303,7 +332,7 @@ def generate_questions(
     if app_dev_present and privacy_state != "clear" and (data_subject_hint or _has_any(text, ["개인정보", "privacy", "dpa", "처리위탁", "수탁", "위탁"])):
         candidates.append(
             (
-                88,
+                88 + (4 if privacy_risk == "high" else (2 if privacy_risk == "medium" else 0)),
                 Question(
                     question_id="Q-AD-006-privacy-processing",
                     title="개인정보 처리/위탁(DPA) 여부와 재위탁·파기·사고 통지 등 통제조항이 계약서에 충분히 포함돼 있나요?",
@@ -320,7 +349,8 @@ def generate_questions(
     if app_dev_present and source_delivery_state != "clear":
         candidates.append(
             (
-                87 if source_delivery_state == "missing" else 86,
+                (87 if source_delivery_state == "missing" else 86)
+                + (4 if ip_risk == "high" else (2 if ip_risk == "medium" else 0)),
                 Question(
                     question_id="Q-AD-007-source-delivery",
                     title="소스코드 인도(저장소 이전/접근권 포함)가 계약 범위에 포함되어야 하나요?",

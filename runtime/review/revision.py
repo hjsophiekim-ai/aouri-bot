@@ -76,11 +76,14 @@ def suggest_revisions(
         evidence: list[dict[str, Any]] = []
         high_risk = False
         approval_required = False
+        search_text = ((c.context_text or "") + "\n" + (c.text or "")).strip()
+        if not search_text:
+            search_text = str(c.text or "")
 
         for rid, kws in rule_keywords.items():
             if not kws:
                 continue
-            matched_kws = [k for k in kws if k.lower() in c.text.lower()]
+            matched_kws = [k for k in kws if k.lower() in search_text.lower()]
             if matched_kws:
                 r = matched_by_id[rid]
                 risk_level = str(r.get("risk_level", "") or "")
@@ -140,6 +143,12 @@ def suggest_revisions(
             {
                 "clause_id": c.clause_id,
                 "article_number": c.article_number,
+                "paragraph_number": c.paragraph_number,
+                "item_number": c.item_number,
+                "subitem_number": c.subitem_number,
+                "display_path": c.display_path,
+                "parent_clause_id": c.parent_clause_id,
+                "context_text": c.context_text,
                 "clause_title": c.title,
                 "original_clause": c.text,
                 "detected_issues": clause_issues,

@@ -24,7 +24,7 @@ from runtime.admin.internal_demo_ui import INTERNAL_DEMO_HTML
 from runtime.admin.internal_demo_chat_ui import INTERNAL_DEMO_CHAT_HTML
 from runtime.db.review_repository import ReviewRepository
 from runtime.rules.loader import RuleLoader
-from runtime.questions.storage import create_session, load_session, run_review_with_session, save_answers
+from runtime.questions.storage import create_session, load_session, run_review_with_session, run_review_with_session_fast, save_answers
 from runtime.questions.generator import generate_questions
 from runtime.questions.model import question_to_dict
 from runtime.ep.intake import intake_to_dict, validate_ep_intake
@@ -216,6 +216,12 @@ def create_handler(service: RuleQueryService):
     analysis_cache: dict[str, tuple[float, dict]] = {}
     analysis_cache_ttl_sec = 600.0
     analysis_cache_max = 200
+    fast_review_cache: dict[str, tuple[float, dict]] = {}
+    fast_review_cache_ttl_sec = 600.0
+    fast_review_cache_max = 120
+    deep_review_cache: dict[str, tuple[float, dict]] = {}
+    deep_review_cache_ttl_sec = 900.0
+    deep_review_cache_max = 120
 
     def analyze_cached(review_input: ReviewInput) -> dict:
         payload = {
@@ -589,20 +595,20 @@ def create_handler(service: RuleQueryService):
             if parsed.path == "/api/questions/generate":
                 self._handle_questions_generate(service)
                 return
-            if parsed.path != "/api/review/analyze":
-                _json_response(self, HTTPStatus.NOT_FOUND, {"error": "unknown path"})
+            if parsed.path in ("/api/review/analyze", "/api/review/analyze_fast", "/api/review/analyze_deep"):
+                self._handle_review_analyze_api(service, parsed.path)
                 return
 
+            _json_response(self, HTTPStatus.NOT_FOUND, {"error": "unknown path"})
+            return
+
+        def _handle_review_analyze_api(self, service: RuleQueryService, path: str) -> None:
             try:
                 content_len = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(content_len)
                 body = json.loads(raw.decode("utf-8")) if raw else {}
             except Exception as exc:
-                _json_response(
-                    self,
-                    HTTPStatus.BAD_REQUEST,
-                    {"error": f"invalid JSON body: {exc}"},
-                )
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"invalid JSON body: {exc}"})
                 return
 
             entity = body.get("entity", "all")
@@ -611,6 +617,21 @@ def create_handler(service: RuleQueryService):
             filename = body.get("filename")
             answers = body.get("answers") if isinstance(body.get("answers"), dict) else None
             persist = body.get("persist") is True
+            ai_mode = str(body.get("ai_mode") or "auto").strip().lower()
+            law_mode = str(body.get("law_mode") or "auto").strip().lower()
+
+            review_mode = "deep"
+            if path.endswith("_fast"):
+                review_mode = "fast"
+            elif path.endswith("_deep"):
+                review_mode = "deep"
+            else:
+                m = str(body.get("review_mode") or body.get("mode") or "").strip().lower()
+                if m in ("fast", "deep"):
+                    review_mode = m
+                if body.get("fast_mode") is True:
+                    review_mode = "fast"
+
             if _contains_wordprocessingml_markers(str(text)):
                 _json_response(
                     self,
@@ -618,10 +639,86 @@ def create_handler(service: RuleQueryService):
                     {"error": "WordprocessingML markers detected in input text (docx markup must not be analyzed)"},
                 )
                 return
+
+            cache_payload = {
+                "entity": str(entity or ""),
+                "contract_type": str(contract_type or ""),
+                "filename": str(filename or ""),
+                "text_sha256": sha256(str(text or "").encode("utf-8", errors="replace")).hexdigest(),
+                "answers": answers or {},
+                "review_mode": review_mode,
+                "ai_mode": ai_mode if review_mode == "deep" else "off",
+                "law_mode": law_mode if review_mode == "deep" else "off",
+                "rules_sha": rules_sha,
+            }
+            cache_key = sha256(json.dumps(cache_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            now = time.time()
+            if review_mode == "fast":
+                hit = fast_review_cache.get(cache_key)
+                if hit and (now - float(hit[0])) <= fast_review_cache_ttl_sec:
+                    _json_response(self, HTTPStatus.OK, hit[1])
+                    return
+            else:
+                hit = deep_review_cache.get(cache_key)
+                if hit and (now - float(hit[0])) <= deep_review_cache_ttl_sec:
+                    _json_response(self, HTTPStatus.OK, hit[1])
+                    return
+
+            if review_mode == "fast":
+                bundle = build_clause_level_result(
+                    service=service,
+                    entity=str(entity),
+                    contract_type=str(contract_type),
+                    text=str(text),
+                    filename=str(filename) if isinstance(filename, str) else None,
+                    answers=answers,
+                    law_service=None,
+                    ai_provider=None,
+                    ai_model=None,
+                    ai_timeout_sec=None,
+                    ai_max_tokens=None,
+                    ai_temperature=None,
+                    max_clause_law_items=0,
+                )
+                result = dict(bundle.review)
+                result["mode"] = "fast"
+                result["clause_results"] = bundle.clause_results
+                result["clause_meta"] = bundle.meta
+                result["law_search"] = {
+                    "enabled": False,
+                    "note": "fast_mode",
+                    "queries": [],
+                    "results": {"laws": [], "precedents": [], "interpretations": [], "admin_rules": [], "local_ordinances": []},
+                    "errors": [],
+                }
+                result["ai"] = {
+                    "enabled": False,
+                    "provider": "mock",
+                    "model": None,
+                    "used": False,
+                    "detail": {"enabled": False, "used": False, "selected_clause_ids": [], "selected_count": 0},
+                }
+                fast_review_cache[cache_key] = (now, result)
+                if len(fast_review_cache) > fast_review_cache_max:
+                    oldest_key = min(fast_review_cache.items(), key=lambda kv: kv[1][0])[0]
+                    fast_review_cache.pop(oldest_key, None)
+                _json_response(self, HTTPStatus.OK, result)
+                return
+
             law_cfg = load_law_api_config()
             law_service = LawSearchService(cfg=law_cfg, cache=law_cache) if law_cfg.enabled and law_cfg.api_key else None
+            if law_mode == "off":
+                law_service = None
+            elif law_mode == "on" and law_service is None:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "law_mode=on but LAW_API is not configured"})
+                return
             cfg = load_ai_config()
             ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+            if ai_mode == "off":
+                ai_provider = None
+            elif ai_mode == "on" and ai_provider is None:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "ai_mode=on but OPENAI_API_KEY is not configured"})
+                return
 
             bundle = build_clause_level_result(
                 service=service,
@@ -634,12 +731,12 @@ def create_handler(service: RuleQueryService):
                 ai_provider=ai_provider,
                 ai_model=cfg.model if ai_provider else None,
                 ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                ai_max_tokens=min(cfg.max_tokens, 1800) if ai_provider else None,
+                ai_max_tokens=min(max(cfg.max_tokens, 1800), 2800) if ai_provider else None,
                 ai_temperature=cfg.temperature if ai_provider else None,
                 max_clause_law_items=2,
-                max_ai_clauses=4,
             )
             result = dict(bundle.review)
+            result["mode"] = "deep"
             result["clause_results"] = bundle.clause_results
             result["clause_meta"] = bundle.meta
             if law_service is not None:
@@ -650,7 +747,12 @@ def create_handler(service: RuleQueryService):
                         text=str(text),
                         matched_rules=(bundle.review.get("matched_rules") if isinstance(bundle.review, dict) else None),
                         scope="contract",
-                        max_per_type=3,
+                        max_per_type=2,
+                        time_budget_sec=3.0,
+                        context={
+                            "review_posture": (bundle.meta.get("review_posture") if isinstance(bundle.meta, dict) else None),
+                            "party_role": (bundle.meta.get("party_role") if isinstance(bundle.meta, dict) else None),
+                        },
                     )
                 except Exception as exc:
                     result["law_search"] = {
@@ -667,13 +769,14 @@ def create_handler(service: RuleQueryService):
                     "errors": [],
                 }
             ai_enabled = bool(ai_provider) and cfg.provider == "openai"
-            ai_used = bool(isinstance(bundle.meta, dict) and bundle.meta.get("ai") is not None)
+            meta_ai = (bundle.meta.get("ai") if isinstance(bundle.meta, dict) else None) if isinstance(bundle.meta, dict) else None
+            ai_used = bool(isinstance(meta_ai, dict) and meta_ai.get("used"))
             result["ai"] = {
                 "enabled": ai_enabled,
                 "provider": "openai" if ai_enabled else "mock",
                 "model": cfg.model,
                 "used": ai_used,
-                "detail": (bundle.meta.get("ai") if isinstance(bundle.meta, dict) else None),
+                "detail": meta_ai,
             }
             if persist:
                 repo.save_review(
@@ -688,7 +791,13 @@ def create_handler(service: RuleQueryService):
                     review_result=result,
                     text=text,
                 )
+
+            deep_review_cache[cache_key] = (now, result)
+            if len(deep_review_cache) > deep_review_cache_max:
+                oldest_key = min(deep_review_cache.items(), key=lambda kv: kv[1][0])[0]
+                deep_review_cache.pop(oldest_key, None)
             _json_response(self, HTTPStatus.OK, result)
+            return
 
         def _handle_ep_status_update(self) -> None:
             try:
@@ -1043,10 +1152,9 @@ def create_handler(service: RuleQueryService):
                     ai_provider=ai_provider,
                     ai_model=cfg.model if ai_provider else None,
                     ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                    ai_max_tokens=min(cfg.max_tokens, 1800) if ai_provider else None,
+                    ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
                     ai_temperature=cfg.temperature if ai_provider else None,
                     max_clause_law_items=2,
-                    max_ai_clauses=4,
                 )
                 _json_response(
                     self,
@@ -1078,11 +1186,23 @@ def create_handler(service: RuleQueryService):
             text = body.get("text", "")
             filename = body.get("filename")
             answers = body.get("answers") if isinstance(body.get("answers"), dict) else None
+            ai_mode = str(body.get("ai_mode") or "auto").strip().lower()
+            law_mode = str(body.get("law_mode") or "auto").strip().lower()
 
             law_cfg = load_law_api_config()
             law_service = LawSearchService(cfg=law_cfg, cache=law_cache) if law_cfg.enabled and law_cfg.api_key else None
+            if law_mode == "off":
+                law_service = None
+            elif law_mode == "on" and law_service is None:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "law_mode=on but LAW_API is not configured"})
+                return
             cfg = load_ai_config()
             ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+            if ai_mode == "off":
+                ai_provider = None
+            elif ai_mode == "on" and ai_provider is None:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "ai_mode=on but OPENAI_API_KEY is not configured"})
+                return
 
             bundle = build_clause_level_result(
                 service=service,
@@ -1095,10 +1215,9 @@ def create_handler(service: RuleQueryService):
                 ai_provider=ai_provider,
                 ai_model=cfg.model if ai_provider else None,
                 ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                ai_max_tokens=min(cfg.max_tokens, 1800) if ai_provider else None,
+                ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
                 ai_temperature=cfg.temperature if ai_provider else None,
                 max_clause_law_items=2,
-                max_ai_clauses=4,
             )
             _json_response(
                 self,
@@ -1133,11 +1252,23 @@ def create_handler(service: RuleQueryService):
                 filename = (doc.get("input") or {}).get("filename")
                 text = str(doc.get("text", "") or "")
                 answers = doc.get("answers") if isinstance(doc.get("answers"), dict) else {}
+                ai_mode = str(body.get("ai_mode") or "auto").strip().lower()
+                law_mode = str(body.get("law_mode") or "auto").strip().lower()
 
                 law_cfg = load_law_api_config()
                 law_service = LawSearchService(cfg=law_cfg, cache=law_cache) if law_cfg.enabled and law_cfg.api_key else None
+                if law_mode == "off":
+                    law_service = None
+                elif law_mode == "on" and law_service is None:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "law_mode=on but LAW_API is not configured"})
+                    return
                 cfg = load_ai_config()
                 ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+                if ai_mode == "off":
+                    ai_provider = None
+                elif ai_mode == "on" and ai_provider is None:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "ai_mode=on but OPENAI_API_KEY is not configured"})
+                    return
 
                 bundle = build_clause_level_result(
                     service=service,
@@ -1150,10 +1281,9 @@ def create_handler(service: RuleQueryService):
                     ai_provider=ai_provider,
                     ai_model=cfg.model if ai_provider else None,
                     ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                    ai_max_tokens=min(cfg.max_tokens, 1800) if ai_provider else None,
+                    ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
                     ai_temperature=cfg.temperature if ai_provider else None,
                     max_clause_law_items=2,
-                    max_ai_clauses=6,
                 )
                 if isinstance(bundle.meta, dict) and bundle.meta.get("docx_allowed") is False:
                     _json_response(
@@ -1166,6 +1296,12 @@ def create_handler(service: RuleQueryService):
                     {
                         "clause_id": c.clause_id,
                         "article_number": c.article_number,
+                        "paragraph_number": c.paragraph_number,
+                        "item_number": c.item_number,
+                        "subitem_number": c.subitem_number,
+                        "display_path": c.display_path,
+                        "parent_clause_id": c.parent_clause_id,
+                        "context_text": c.context_text,
                         "clause_title": c.title,
                         "text": c.text,
                     }
@@ -1187,6 +1323,10 @@ def create_handler(service: RuleQueryService):
                             matched_rules=bundle.review.get("matched_rules") if isinstance(bundle.review, dict) else None,
                             scope="contract",
                             max_per_type=2,
+                            context={
+                                "review_posture": (bundle.meta.get("review_posture") if isinstance(bundle.meta, dict) else None),
+                                "party_role": (bundle.meta.get("party_role") if isinstance(bundle.meta, dict) else None),
+                            },
                         )
                     except Exception:
                         contract_law_search = None
@@ -1199,18 +1339,22 @@ def create_handler(service: RuleQueryService):
                     law_topics=law_topics,
                     contract_text=text,
                     clause_results=bundle.clause_results,
-                    max_questions=5,
+                    max_questions=7,
                 )
-                docx_bytes = build_revision_docx(
-                    entity=entity,
-                    contract_type=contract_type,
-                    filename=str(filename) if isinstance(filename, str) else None,
-                    original_clauses=original_clauses,
-                    clause_results=bundle.clause_results,
-                    review_summary=(bundle.review.get("summary") if isinstance(bundle.review, dict) and isinstance(bundle.review.get("summary"), dict) else None),
-                    law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
-                    questions=[question_to_dict(q) for q in qs],
-                )
+                try:
+                    docx_bytes = build_revision_docx(
+                        entity=entity,
+                        contract_type=contract_type,
+                        filename=str(filename) if isinstance(filename, str) else None,
+                        original_clauses=original_clauses,
+                        clause_results=bundle.clause_results,
+                        review_summary=(bundle.review.get("summary") if isinstance(bundle.review, dict) and isinstance(bundle.review.get("summary"), dict) else None),
+                        law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
+                        questions=[question_to_dict(q) for q in qs],
+                    )
+                except Exception as exc:
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
+                    return
                 _binary_response(
                     self,
                     HTTPStatus.OK,
@@ -1294,18 +1438,22 @@ def create_handler(service: RuleQueryService):
                 law_topics=law_topics,
                 contract_text=contract_text,
                 clause_results=clause_results,
-                max_questions=5,
+                max_questions=7,
             )
-            docx_bytes = build_revision_docx(
-                entity=entity,
-                contract_type=contract_type,
-                filename=str(filename) if isinstance(filename, str) else None,
-                original_clauses=original_clauses,
-                clause_results=clause_results,
-                review_summary=(review.get("summary") if isinstance(review, dict) and isinstance(review.get("summary"), dict) else None),
-                law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
-                questions=[question_to_dict(q) for q in qs],
-            )
+            try:
+                docx_bytes = build_revision_docx(
+                    entity=entity,
+                    contract_type=contract_type,
+                    filename=str(filename) if isinstance(filename, str) else None,
+                    original_clauses=original_clauses,
+                    clause_results=clause_results,
+                    review_summary=(review.get("summary") if isinstance(review, dict) and isinstance(review.get("summary"), dict) else None),
+                    law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
+                    questions=[question_to_dict(q) for q in qs],
+                )
+            except Exception as exc:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
+                return
             _binary_response(
                 self,
                 HTTPStatus.OK,
@@ -1381,7 +1529,7 @@ def create_handler(service: RuleQueryService):
                 law_topics=law_topics,
                 contract_text=str(text),
                 clause_results=clause_bundle.clause_results,
-                max_questions=5,
+                max_questions=7,
             )
             q_items = [question_to_dict(q) for q in questions]
             ai_meta: dict[str, Any] | None = None
@@ -1416,7 +1564,7 @@ def create_handler(service: RuleQueryService):
                         timeout_sec=cfg.timeout_sec,
                         max_tokens=min(cfg.max_tokens, 600),
                         temperature=cfg.temperature,
-                        max_questions=5,
+                        max_questions=7,
                     )
                 q_items, pol_meta = polish_questions(
                     provider=provider,
@@ -1741,6 +1889,15 @@ def create_handler(service: RuleQueryService):
                 except Exception:
                     pass
                 _json_response(self, HTTPStatus.OK, {"request_id": request_id, "review": result})
+                return
+
+            if action == "review_fast":
+                try:
+                    result = run_review_with_session_fast(service, session_id)
+                except Exception as exc:
+                    _json_response(self, HTTPStatus.NOT_FOUND, {"error": str(exc)})
+                    return
+                _json_response(self, HTTPStatus.OK, {"review": result})
                 return
 
             _json_response(self, HTTPStatus.NOT_FOUND, {"error": "unknown path"})

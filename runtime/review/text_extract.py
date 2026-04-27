@@ -105,6 +105,8 @@ def extract_text_from_docx(file_path: Path) -> dict[str, object]:
                 parts.append(n)
             elif n in ("word/footnotes.xml", "word/endnotes.xml"):
                 parts.append(n)
+        numbering_xml = z.read("word/numbering.xml") if "word/numbering.xml" in names else None
+        numbering_defs = _parse_numbering_xml(numbering_xml) if numbering_xml else None
 
         texts: list[str] = []
         raw_parts: list[str] = []
@@ -113,7 +115,11 @@ def extract_text_from_docx(file_path: Path) -> dict[str, object]:
             if part not in names:
                 continue
             xml_bytes = z.read(part)
-            piece = _extract_visible_text_from_word_xml(xml_bytes, track_changes_policy=track_changes_policy)
+            piece = _extract_visible_text_from_word_xml(
+                xml_bytes,
+                track_changes_policy=track_changes_policy,
+                numbering_defs=numbering_defs,
+            )
             texts.extend(piece["texts"])
             raw_parts.append(piece["raw_markup_text"])
             has_track_changes = has_track_changes or bool(piece["has_track_changes"])
@@ -128,10 +134,154 @@ def extract_text_from_docx(file_path: Path) -> dict[str, object]:
         }
 
 
+def _parse_numbering_xml(xml_bytes: bytes) -> dict[str, object] | None:
+    try:
+        root = ET.fromstring(xml_bytes)
+    except Exception:
+        return None
+    w_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    ns = {"w": w_ns}
+    num_to_abs: dict[str, str] = {}
+    abs_levels: dict[str, dict[str, tuple[str, str]]] = {}
+
+    for num in root.findall("w:num", ns):
+        num_id = num.get(f"{{{w_ns}}}numId") or num.get("numId")
+        abs_el = num.find("w:abstractNumId", ns)
+        abs_id = abs_el.get(f"{{{w_ns}}}val") if abs_el is not None else None
+        if isinstance(num_id, str) and isinstance(abs_id, str):
+            num_to_abs[num_id] = abs_id
+
+    for absn in root.findall("w:abstractNum", ns):
+        abs_id = absn.get(f"{{{w_ns}}}abstractNumId") or absn.get("abstractNumId")
+        if not isinstance(abs_id, str):
+            continue
+        levels: dict[str, tuple[str, str]] = {}
+        for lvl in absn.findall("w:lvl", ns):
+            ilvl = lvl.get(f"{{{w_ns}}}ilvl") or lvl.get("ilvl")
+            if not isinstance(ilvl, str):
+                continue
+            fmt_el = lvl.find("w:numFmt", ns)
+            txt_el = lvl.find("w:lvlText", ns)
+            num_fmt = (fmt_el.get(f"{{{w_ns}}}val") if fmt_el is not None else None) or "decimal"
+            lvl_text = (txt_el.get(f"{{{w_ns}}}val") if txt_el is not None else None) or "%1."
+            levels[ilvl] = (str(num_fmt), str(lvl_text))
+        abs_levels[abs_id] = levels
+
+    return {"num_to_abs": num_to_abs, "abs_levels": abs_levels}
+
+
+_HANGUL = ["가", "나", "다", "라", "마", "바", "사", "아", "자", "차", "카", "타", "파", "하"]
+_CIRCLED = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩", "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"]
+
+
+def _to_roman(n: int) -> str:
+    vals = [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ]
+    out = []
+    x = n
+    for v, sym in vals:
+        while x >= v:
+            out.append(sym)
+            x -= v
+    return "".join(out) or str(n)
+
+
+def _fmt_num(n: int, fmt: str) -> str:
+    f = (fmt or "decimal").lower()
+    if f in ("decimal", "decimalzero"):
+        return str(n)
+    if f in ("lowerletter", "loweralpha"):
+        return chr(ord("a") + (n - 1) % 26)
+    if f in ("upperletter", "upperalpha"):
+        return chr(ord("A") + (n - 1) % 26)
+    if f == "lowerroman":
+        return _to_roman(n).lower()
+    if f == "upperroman":
+        return _to_roman(n).upper()
+    if f in ("koreanhangul", "hangul"):
+        return _HANGUL[(n - 1) % len(_HANGUL)]
+    if f in ("decimalenclosedcircle", "decimalenclosedcirclechinese"):
+        return _CIRCLED[n - 1] if 1 <= n <= len(_CIRCLED) else str(n)
+    return str(n)
+
+
+def _numbering_prefix(
+    *,
+    numbering_defs: dict[str, object] | None,
+    state: dict[str, list[int]],
+    num_id: str,
+    ilvl: int,
+) -> str | None:
+    if not num_id:
+        return None
+    counters = state.get(num_id) or []
+    while len(counters) <= ilvl:
+        counters.append(0)
+    counters[ilvl] += 1
+    for j in range(ilvl + 1, len(counters)):
+        counters[j] = 0
+    for j in range(0, ilvl):
+        if counters[j] <= 0:
+            counters[j] = 1
+    state[num_id] = counters
+
+    abs_id = None
+    levels = None
+    if isinstance(numbering_defs, dict):
+        num_to_abs = numbering_defs.get("num_to_abs")
+        abs_levels = numbering_defs.get("abs_levels")
+        if isinstance(num_to_abs, dict):
+            abs_id = num_to_abs.get(num_id)
+        if isinstance(abs_levels, dict) and isinstance(abs_id, str):
+            levels = abs_levels.get(abs_id)
+
+    fmt_by_level: dict[int, str] = {}
+    lvl_text = None
+    if isinstance(levels, dict):
+        t = levels.get(str(ilvl))
+        if isinstance(t, tuple) and len(t) == 2:
+            fmt_by_level[ilvl] = str(t[0])
+            lvl_text = str(t[1])
+        for k, v in levels.items():
+            try:
+                lk = int(k)
+            except Exception:
+                continue
+            if isinstance(v, tuple) and len(v) == 2:
+                fmt_by_level[lk] = str(v[0])
+    if not lvl_text:
+        lvl_text = "%1."
+
+    def repl(m: re.Match) -> str:
+        idx = int(m.group(1)) - 1
+        if idx < 0 or idx >= len(counters):
+            return m.group(0)
+        fmt = fmt_by_level.get(idx, "decimal")
+        return _fmt_num(int(counters[idx] or 0), fmt)
+
+    label = re.sub(r"%(\d)", repl, lvl_text)
+    label = label.strip()
+    return label if label else None
+
+
 def _extract_visible_text_from_word_xml(
     xml_bytes: bytes,
     *,
     track_changes_policy: str,
+    numbering_defs: dict[str, object] | None,
 ) -> dict[str, object]:
     raw_markup_text = xml_bytes.decode("utf-8", errors="replace")
     has_track_changes = ("<w:ins" in raw_markup_text) or ("<w:del" in raw_markup_text) or ("<w:delText" in raw_markup_text)
@@ -144,6 +294,7 @@ def _extract_visible_text_from_word_xml(
 
     w_ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     ns = {"w": w_ns}
+    num_state: dict[str, list[int]] = {}
 
     def _include_text(*, in_del: bool, in_ins: bool) -> bool:
         if track_changes_policy == "final":
@@ -174,6 +325,22 @@ def _extract_visible_text_from_word_xml(
     paras: list[str] = []
     for p in root.findall(".//w:p", ns):
         buf: list[str] = []
+        prefix = None
+        ppr = p.find("w:pPr", ns)
+        if ppr is not None:
+            numpr = ppr.find("w:numPr", ns)
+            if numpr is not None:
+                ilvl_el = numpr.find("w:ilvl", ns)
+                numid_el = numpr.find("w:numId", ns)
+                try:
+                    ilvl = int(ilvl_el.get(f"{{{w_ns}}}val")) if ilvl_el is not None else None
+                except Exception:
+                    ilvl = None
+                num_id = numid_el.get(f"{{{w_ns}}}val") if numid_el is not None else None
+                if isinstance(num_id, str) and ilvl is not None:
+                    prefix = _numbering_prefix(numbering_defs=numbering_defs, state=num_state, num_id=num_id, ilvl=ilvl)
+        if prefix:
+            buf.append(prefix + " ")
         walk(p, in_del=False, in_ins=False, out=buf)
         joined = "".join(buf)
         joined = _strip_zero_width_and_ctrl(joined)
