@@ -86,6 +86,7 @@ class LawSearchService:
             query_reasons=qobjs,
             start_ts=start_ts,
             time_budget_sec=float(time_budget_sec),
+            profile=profile,
         )
         out["results"]["precedents"] = self._search_target(
             "prec",
@@ -96,6 +97,7 @@ class LawSearchService:
             query_reasons=qobjs,
             start_ts=start_ts,
             time_budget_sec=float(time_budget_sec),
+            profile=profile,
         )
         out["results"]["interpretations"] = self._search_target(
             "expc",
@@ -106,6 +108,7 @@ class LawSearchService:
             query_reasons=qobjs,
             start_ts=start_ts,
             time_budget_sec=float(time_budget_sec),
+            profile=profile,
         )
         out["results"]["admin_rules"] = []
         out["results"]["local_ordinances"] = []
@@ -171,6 +174,7 @@ class LawSearchService:
                     query_reasons=fb,
                     start_ts=start_ts,
                     time_budget_sec=float(time_budget_sec),
+                    profile=profile,
                 )
                 out["results"]["precedents"] = self._search_target(
                     "prec",
@@ -181,6 +185,7 @@ class LawSearchService:
                     query_reasons=fb,
                     start_ts=start_ts,
                     time_budget_sec=float(time_budget_sec),
+                    profile=profile,
                 )
                 out["results"]["interpretations"] = self._search_target(
                     "expc",
@@ -191,6 +196,7 @@ class LawSearchService:
                     query_reasons=fb,
                     start_ts=start_ts,
                     time_budget_sec=float(time_budget_sec),
+                    profile=profile,
                 )
         return out
 
@@ -205,10 +211,12 @@ class LawSearchService:
         query_reasons: list[dict[str, str]],
         start_ts: float,
         time_budget_sec: float,
+        profile: str,
     ) -> list[dict[str, Any]]:
         collected: list[LawReference] = []
         errors: list[str] = []
 
+        display = min(20, max(10, int(max_items) * 4))
         for q in queries:
             if (time.time() - start_ts) > float(time_budget_sec):
                 break
@@ -218,7 +226,7 @@ class LawSearchService:
                 q_eff = _normalize_law_title_query(q) if target == "law" else q
                 if not isinstance(q_eff, str) or not q_eff.strip():
                     q_eff = q
-                res = self._cached_search(target=target, query=q_eff, page=1, display=max_items, fmt="JSON")
+                res = self._cached_search(target=target, query=q_eff, page=1, display=display, fmt="JSON")
             except Exception as exc:
                 errors.append(str(exc))
                 continue
@@ -243,6 +251,7 @@ class LawSearchService:
             context_text=str(context_text or ""),
             matched_rules=matched_rules,
             max_items=max_items,
+            profile=profile,
         )
 
         return [
@@ -551,10 +560,38 @@ def _fallback_contract_queries(*, profile: str, text: str, matched_rules: list[d
 def _infer_contract_profile(*, contract_type: str, text: str) -> str:
     ct = contract_type or ""
     t = text or ""
-    if any(k in ct for k in ("앱개발", "소프트웨어개발", "SI", "유지보수", "SaaS", "API")):
+    low = (ct + "\n" + t).lower()
+
+    def has_any(needles: list[str]) -> bool:
+        return any(n.lower() in low for n in needles if n)
+
+    def has_app_dev_strong() -> bool:
+        return has_any(
+            [
+                "소스코드",
+                "source code",
+                "오픈소스",
+                "open source",
+                "sbom",
+                "sow",
+                "statement of work",
+                "api 연동",
+                "프로그램 개발",
+                "소프트웨어 개발",
+                "앱 개발",
+                "저작권 양도",
+            ]
+        )
+
+    if has_any(["운영대행", "위탁운영", "운영위탁", "공간운영", "매장운영", "라운지", "시설관리", "관리용역", "운영용역", "서비스위탁"]) and not has_app_dev_strong():
+        return "operations"
+
+    if has_any(["대리점", "유통", "위탁판매", "판매대행"]) or has_any(["판매장려금", "판촉", "리베이트", "대리점거래"]):
+        return "dealer"
+
+    if has_any(["앱개발", "소프트웨어개발", "si", "saas"]) or has_app_dev_strong():
         return "app_dev"
-    if any(k in t for k in ("앱 개발", "소프트웨어 개발", "시스템 개발", "개발 용역", "소스코드", "산출물", "SLA", "유지보수", "오픈소스", "API 연동")):
-        return "app_dev"
+
     if any(k in ct for k in ("물품공급/구매/매매", "장비공급", "구매")) and any(k in ct for k in ("설치", "시운전")):
         return "purchase_installation"
     if any(k in t for k in ("장비", "설치", "시운전", "기계", "물품", "제품")) and any(k in t for k in ("대금", "납품", "매매", "구매")):
@@ -660,12 +697,80 @@ def _score_reference(ref: LawReference, *, context_terms: set[str]) -> int:
     return score
 
 
+_BANNED_ALWAYS_TITLES = (
+    "난민법",
+    "난민법 시행령",
+    "난민법 시행규칙",
+)
+
+
+def _allowed_law_keywords_by_profile(profile: str) -> tuple[str, ...]:
+    if profile == "app_dev":
+        return (
+            "민법",
+            "저작권법",
+            "부정경쟁방지",
+            "개인정보",
+            "정보통신",
+            "전자상거래",
+        )
+    if profile == "operations":
+        return (
+            "민법",
+            "상법",
+            "하도급거래 공정화",
+            "대리점거래의 공정화",
+            "독점규제 및 공정거래",
+            "산업안전보건",
+            "중대재해",
+            "개인정보",
+            "근로기준",
+            "파견근로자",
+        )
+    if profile == "dealer":
+        return (
+            "대리점거래의 공정화",
+            "독점규제 및 공정거래",
+            "표시·광고의 공정화",
+            "하도급거래 공정화",
+            "민법",
+            "상법",
+            "개인정보",
+        )
+    if profile == "purchase_installation":
+        return (
+            "민법",
+            "상법",
+            "산업안전보건",
+            "중대재해",
+            "제조물책임",
+            "개인정보",
+        )
+    return ("민법", "상법", "개인정보", "하도급거래 공정화")
+
+
+def _is_banned_title(title: str) -> bool:
+    t = (title or "").strip()
+    if not t:
+        return False
+    return any(b in t for b in _BANNED_ALWAYS_TITLES)
+
+
+def _is_allowed_law_title(title: str, *, profile: str) -> bool:
+    t = (title or "").strip()
+    if not t:
+        return False
+    allowed = _allowed_law_keywords_by_profile(profile)
+    return any(k in t for k in allowed)
+
+
 def _rerank_and_filter_references(
     *,
     references: list[LawReference],
     context_text: str,
     matched_rules: list[dict[str, Any]],
     max_items: int,
+    profile: str,
 ) -> list[LawReference]:
     ctx = context_text or ""
     context_terms = _tokenize(ctx).union(_rule_terms(matched_rules))
@@ -673,8 +778,15 @@ def _rerank_and_filter_references(
     for r in references:
         if _is_noise_title(r.title):
             continue
+        if _is_banned_title(r.title):
+            continue
+        if r.target == "law" and not _is_allowed_law_title(r.title, profile=profile):
+            continue
+        title_terms = _tokenize(r.title)
+        snippet_terms = _tokenize(r.snippet or "")
+        overlap_cnt = len(context_terms.intersection(title_terms.union(snippet_terms)))
         score = _score_reference(r, context_terms=context_terms)
-        if score <= 1:
+        if r.target in ("prec", "expc") and overlap_cnt < 2:
             continue
         rr = LawReference(
             source=r.source,
@@ -691,14 +803,20 @@ def _rerank_and_filter_references(
     picked = [r for _, r in scored[: max(1, int(max_items))]]
     if picked:
         return picked
-    fallback_scored: list[tuple[int, LawReference]] = []
-    for r in references:
-        if _is_noise_title(r.title):
-            continue
-        score = _score_reference(r, context_terms=context_terms)
-        fallback_scored.append((score, r))
-    fallback_scored.sort(key=lambda x: x[0], reverse=True)
-    return [r for _, r in fallback_scored[: max(1, int(max_items))]]
+    if profile and any(r.target == "law" for r in references):
+        fb: list[tuple[int, LawReference]] = []
+        for r in references:
+            if r.target != "law":
+                continue
+            if _is_noise_title(r.title) or _is_banned_title(r.title):
+                continue
+            if not _is_allowed_law_title(r.title, profile=profile):
+                continue
+            score = _score_reference(r, context_terms=context_terms)
+            fb.append((score, r))
+        fb.sort(key=lambda x: x[0], reverse=True)
+        return [r for _, r in fb[: max(1, int(max_items))]]
+    return []
 
 
 def _extract_references_from_json(

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from runtime.rules.loader import RuleLoader
+from runtime.review.jurisdiction import classify_jurisdiction_profile
+from runtime.review.user_focus import parse_user_focus_issues
 
 
 FURSYS_GROUP_ENTITIES = (
@@ -43,6 +45,7 @@ class ReviewInput:
     text: str
     filename: str | None = None
     answers: dict[str, Any] | None = None
+    review_focus: str | None = None
 
 
 class RuleQueryService:
@@ -60,33 +63,34 @@ class RuleQueryService:
             return False
         return any(self._contains_ci(text, kw) for kw in keywords)
 
-    def _derive_contract_types_from_text(self, text: str) -> list[str]:
+    def _derive_contract_types_from_text(self, text: str, *, contract_type_hint: str | None = None) -> list[str]:
         out: list[str] = []
-        if self._any_keyword(
+        hint = (contract_type_hint or "").strip()
+        hint_is_dealer = any(k in hint for k in ("대리점", "유통", "위탁"))
+        dealer_in_text = self._any_keyword(text, ["대리점", "dealer", "distributor", "consignment", "위탁거래"])
+
+        strong_app_dev = self._any_keyword(
             text,
             [
                 "앱 개발",
                 "소프트웨어 개발",
                 "시스템 개발",
                 "개발 용역",
-                "IT 용역",
-                "SI",
-                "유지보수",
-                "maintenance",
+                "프로그램 개발",
+                "소스코드",
+                "source code",
                 "SaaS",
                 "API 연동",
                 "API integration",
-                "소스코드",
-                "source code",
-                "산출물",
-                "SLA",
                 "오픈소스",
                 "opensource",
                 "open source",
-                "라이선스",
-                "license",
+                "SBOM",
+                "SOW",
+                "Statement of Work",
             ],
-        ):
+        )
+        if strong_app_dev and not (hint_is_dealer or dealer_in_text):
             out.append("앱개발/소프트웨어개발/SI/유지보수/SaaS")
         if self._any_keyword(text, TRIGGER_MAP.get("ACT-009", []) + TRIGGER_MAP.get("RISK-006", [])):
             out.append("대리점/위탁/유통")
@@ -184,7 +188,9 @@ class RuleQueryService:
         if answers.get("Q-009-ad-model") == "yes":
             additional_contract_types_by_questions.append("광고/마케팅/협찬")
 
-        additional_contract_types_by_text = self._derive_contract_types_from_text(text)
+        additional_contract_types_by_text = self._derive_contract_types_from_text(text, contract_type_hint=contract_type_input)
+        jur = classify_jurisdiction_profile(text=text, entity=entity_input, contract_type=contract_type_input, filename=review_input.filename)
+        focus = parse_user_focus_issues(review_input.review_focus)
 
         base_applicable = self.list_rules(
             entity=entity_input,
@@ -235,6 +241,22 @@ class RuleQueryService:
                         rule["context_expanded_by_questions"] = True
                     if rid in expanded_by_text:
                         rule["context_expanded_by_text"] = True
+                if rid == "ACT-004" and jur.kind == "domestic_korea":
+                    rule = dict(rule)
+                    ct0 = str(contract_type_input or "")
+                    is_dealer0 = any(k in ct0 for k in ("대리점", "유통", "위탁"))
+                    focus_txt = str(review_input.review_focus or "")
+                    wants_dispute = any(k in focus_txt for k in ("관할", "준거법", "분쟁", "중재", "조정"))
+                    if is_dealer0 and not wants_dispute:
+                        rule["risk_level"] = "LOW"
+                        rule["title"] = "분쟁조항(보조) 점검"
+                        rule["description"] = "국내 대리점 계약의 관할/준거법은 기본값으로 보되, 핵심 이슈 검토 후 보조적으로 전속관할/합의관할 구조만 요약 점검한다."
+                        rule["summary_suppress"] = True
+                        rule["supplemental_only"] = True
+                    else:
+                        rule["risk_level"] = "MEDIUM"
+                        rule["title"] = "국내 계약 분쟁조항 점검"
+                        rule["description"] = "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다."
                 matched_rules.append(rule)
             elif rule_status == "confirmed_standard":
                 rid = rule.get("rule_id")
@@ -245,6 +267,32 @@ class RuleQueryService:
                     if rid in expanded_by_text:
                         rule["context_expanded_by_text"] = True
                 checklist_rules.append(rule)
+
+        is_dealer = any(k in str(contract_type_input or "") for k in ("대리점", "유통", "위탁"))
+        has_strong_app_dev = self._any_keyword(
+            text,
+            [
+                "앱 개발",
+                "소프트웨어 개발",
+                "시스템 개발",
+                "개발 용역",
+                "프로그램 개발",
+                "소스코드",
+                "source code",
+                "SaaS",
+                "API 연동",
+                "API integration",
+                "오픈소스",
+                "opensource",
+                "open source",
+                "SBOM",
+                "SOW",
+                "Statement of Work",
+            ],
+        )
+        if is_dealer and not has_strong_app_dev:
+            matched_rules = [r for r in matched_rules if not str(r.get("rule_id") or "").startswith("APP-")]
+            checklist_rules = [r for r in checklist_rules if not str(r.get("rule_id") or "").startswith("APP-")]
 
         approval_required_matches = [
             r for r in matched_rules if r["rule_status"] == "approval_required" or r["approval_required"]
@@ -262,12 +310,15 @@ class RuleQueryService:
                 "entity": entity_input,
                 "contract_type": contract_type_input,
                 "filename": review_input.filename,
+                "review_focus": (review_input.review_focus or None),
             },
             "question_answers": dict(answers),
             "derived_context": {
                 "additional_contract_types_by_questions": additional_contract_types_by_questions,
                 "additional_contract_types_by_text": additional_contract_types_by_text,
                 "expanded_rule_count": len(expanded_by_questions) + len(expanded_by_text),
+                "jurisdiction": jur.to_dict(),
+                "user_focus_issues": [x.to_dict() for x in focus],
             },
             "summary": {
                 "applicable_rule_count": len(applicable),

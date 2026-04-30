@@ -8,6 +8,7 @@ from runtime.review.clause_extraction import ClauseChunk, extract_clauses
 from runtime.review.rewrite_engine import propose_clause_specific_rewrite
 from runtime.review.party_role import PartyRole
 from runtime.review.word_markers import contains_wordprocessingml_markers
+from runtime.review.clause_topic import classify_clause_topic, infer_rewrite_topics, is_topic_compatible, TOPIC_OTHER
 
 
 REPLACEMENT_TEXT_BY_RULE_ID = {
@@ -55,6 +56,7 @@ def suggest_revisions(
     *,
     posture: str = "neutral",
     party: PartyRole | None = None,
+    contract_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     matched_by_id: dict[str, dict[str, Any]] = {}
     for r in matched_rules:
@@ -71,14 +73,15 @@ def suggest_revisions(
 
     items: list[dict[str, Any]] = []
     for c in clauses:
+        clause_topic = classify_clause_topic(title=str(c.title or ""), text=str(c.text or ""))
         clause_issues: list[dict[str, Any]] = []
         applied_rules: list[dict[str, Any]] = []
         evidence: list[dict[str, Any]] = []
         high_risk = False
         approval_required = False
-        search_text = ((c.context_text or "") + "\n" + (c.text or "")).strip()
-        if not search_text:
-            search_text = str(c.text or "")
+        search_text = ((str(c.title or "") + "\n" + str(c.text or "")).strip()) if (c.title or c.text) else str(c.text or "")
+        if isinstance(c.context_text, str) and c.context_text.strip() and len(c.context_text.strip()) <= 120:
+            search_text = (c.context_text.strip() + "\n" + search_text).strip()
 
         for rid, kws in rule_keywords.items():
             if not kws:
@@ -86,6 +89,12 @@ def suggest_revisions(
             matched_kws = [k for k in kws if k.lower() in search_text.lower()]
             if matched_kws:
                 r = matched_by_id[rid]
+                if rid in ("RISK-006", "ACT-009") and clause_topic not in ("cost_burden", "payment_settlement", "dealer_unfair"):
+                    continue
+                if rid in ("RISK-003", "ACT-010") and clause_topic not in ("safety",):
+                    continue
+                if rid in ("C-001",) and clause_topic not in ("payment_settlement", "cost_burden"):
+                    continue
                 risk_level = str(r.get("risk_level", "") or "")
                 is_high = risk_level.lower() in ("high", "very_high", "critical")
                 is_approval = bool(r.get("approval_required")) or r.get("rule_status") == "approval_required"
@@ -93,12 +102,15 @@ def suggest_revisions(
                 approval_required = approval_required or is_approval
                 clause_issues.append(
                     {
+                        "rule_id": rid,
                         "issue_title": str(r.get("title", rid)),
                         "issue_detail": str(r.get("description", "")),
                         "review_action": list(r.get("review_action") or []),
                         "risk_level": risk_level,
                         "high_risk": is_high,
                         "approval_required": is_approval,
+                        "summary_suppress": bool(r.get("summary_suppress")),
+                        "supplemental_only": bool(r.get("supplemental_only")),
                     }
                 )
                 applied_rules.append(
@@ -129,15 +141,28 @@ def suggest_revisions(
         seen = set()
         replacement_texts = [x for x in replacement_texts if not (x in seen or seen.add(x))]
 
-        proposal = propose_clause_specific_rewrite(clause_text=c.text, applied_rules=applied_rules, posture=posture, party=party)
+        proposal = propose_clause_specific_rewrite(
+            clause_text=c.text,
+            applied_rules=applied_rules,
+            posture=posture,
+            party=party,
+            contract_context=contract_context,
+        )
         recommended_rewrite = proposal.suggested_rewrite if proposal else None
         rewrite_reason = proposal.rewrite_reason if proposal else None
+        reason_codes = proposal.reason_codes if proposal else []
+        rewrite_topics = infer_rewrite_topics(rewrite_text=recommended_rewrite, reason_codes=reason_codes)
+        if recommended_rewrite and not is_topic_compatible(clause_topic=clause_topic, rewrite_topics=rewrite_topics):
+            recommended_rewrite = None
+            if not (isinstance(rewrite_reason, str) and rewrite_reason.strip()):
+                rewrite_reason = "조항 주제와 무관한 수정문안은 제외(guardrail)."
         unfavorable_to_us = _infer_unfavorable_to_us(
             clause_text=str(c.text or ""),
             applied_rules=applied_rules,
             posture=str(posture or "neutral"),
             party=party,
         )
+
 
         items.append(
             {
@@ -158,6 +183,8 @@ def suggest_revisions(
                 "fallback_text": replacement_texts,
                 "recommended_rewrite": recommended_rewrite,
                 "rewrite_reason": rewrite_reason,
+                "rewrite_reason_codes": reason_codes,
+                "clause_topic": clause_topic if clause_topic != TOPIC_OTHER else None,
                 "high_risk": high_risk,
                 "approval_required": approval_required,
                 "unfavorable_to_us": unfavorable_to_us,

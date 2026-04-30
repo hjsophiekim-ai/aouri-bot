@@ -85,6 +85,7 @@ class DeepReviewRegressionTests(unittest.TestCase):
             context_text="하도급 단가 감액 사전 협의 서면 합의",
             matched_rules=[{"rule_id": "RISK-005", "matched_keywords": ["단가", "감액"]}],
             max_items=3,
+            profile="generic",
         )
         titles = [r.title for r in rr]
         self.assertIn("하도급거래 공정화에 관한 법률", titles)
@@ -102,4 +103,3 @@ class DeepReviewRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

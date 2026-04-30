@@ -237,6 +237,11 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
               </div>
 
               <div style="margin-top:10px;">
+                <div class="label">중점 검토 내용</div>
+                <textarea id="reviewFocus" placeholder="예: 대리점법상 불이익 제공, 경영간섭, 비용전가, 계약해지 남용 등 (자유입력)"></textarea>
+              </div>
+
+              <div style="margin-top:10px;">
                 <div class="label">계약서 첨부</div>
                 <input id="file" type="file" />
               </div>
@@ -329,6 +334,16 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
               </div>
               <div class="stepList" id="resultAnalyzeSteps"></div>
               <div class="meta" id="resultAnalyzeHint"></div>
+            </div>
+
+            <div style="margin-top:12px;">
+              <div class="badge" style="margin-bottom:8px;">사용자 요청 핵심 이슈 반영 결과</div>
+              <div class="meta" id="focusSummary">-</div>
+            </div>
+
+            <div style="margin-top:12px;">
+              <div class="badge" style="margin-bottom:8px;">질문 답변 반영 요약</div>
+              <div class="meta" id="answerSummary">-</div>
             </div>
 
             <div style="margin-top:12px;">
@@ -619,12 +634,13 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const entity = (document.getElementById('entity').value || '').trim();
         const contractType = (document.getElementById('contractType').value || '').trim();
         const text = (document.getElementById('text').value || '').trim();
+        const reviewFocus = (document.getElementById('reviewFocus').value || '').trim();
         const file = document.getElementById('file').files[0];
         if (!file && text.length < 5) {
           document.getElementById('startError').innerText = '계약서 파일을 첨부하거나, 계약 내용을 입력해 주세요.';
           return;
         }
-        ctx = { entity, contract_type: contractType, text, filename: null, session_id: null };
+        ctx = { entity, contract_type: contractType, text, filename: null, session_id: null, review_focus: reviewFocus || null };
         questions = [];
         qIndex = 0;
         answers = {};
@@ -637,6 +653,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           fd.append('file', file, file.name);
           if (entity) fd.append('entity', entity);
           if (contractType) fd.append('contract_type', contractType);
+          if (reviewFocus) fd.append('review_focus', reviewFocus);
           const res = await fetch('/api/upload', { method: 'POST', body: fd });
           const data = await res.json();
           if (data && data.extraction && data.extraction.success === false) {
@@ -653,7 +670,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             ctx.text = '(업로드 기반: 텍스트는 서버에서 추출되어 질문/검토에 사용됩니다)';
           }
         } else {
-          const payload = { entity: entity || 'all', contract_type: contractType || 'all', filename: 'demo.txt', text: text };
+          const payload = { entity: entity || 'all', contract_type: contractType || 'all', filename: 'demo.txt', text: text, review_focus: reviewFocus || null };
           const res = await fetch('/api/questions/generate', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
           const data = await res.json();
           if (data.error) {
@@ -661,6 +678,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             return;
           }
           questions = data.questions || [];
+          ctx.session_id = data.question_session_id || null;
           ctx.entity = entity || 'all';
           ctx.contract_type = contractType || 'all';
           ctx.filename = payload.filename;
@@ -720,7 +738,9 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     async function finishAndAnalyze() {
       document.getElementById('btnNext').disabled = true;
       try {
-        addMsg('bot', '좋아요. 이제 검토를 시작해볼게요.');
+        if (analyzeState && analyzeState.active) return;
+        analyzeState.active = true;
+        addMsg('bot', '좋아요. 이제 검토 결과를 정리해볼게요.');
         addMsg('bot', '계약 길이와 조항 수에 따라 20~60초 정도 걸릴 수 있어요.');
 
         startAnalyzeProgress(40);
@@ -731,7 +751,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           contract_type: ctx.contract_type || 'all',
           filename: ctx.filename || 'demo.txt',
           text: (ctx.text || ''),
-          answers: answers
+          answers: answers,
+          review_focus: (ctx.review_focus || null)
         };
 
         const draftPromise = fetch(`/api/draft/suggest?contract_type=${encodeURIComponent(ctx.contract_type || '')}`)
@@ -957,6 +978,38 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       return parts.join('');
     }
 
+    function cleanClauseTitle(it) {
+      const dp0 = String((it && (it.display_path || it.clause_id)) || '').trim();
+      let t0 = String((it && it.clause_title) || '').trim();
+      if (dp0 && t0 && t0.startsWith(dp0 + ' ')) t0 = t0.slice(dp0.length).trim();
+      if (dp0 && t0 && t0.startsWith(dp0)) t0 = t0.slice(dp0.length).trim();
+      if (dp0 && t0) {
+        const first = t0.split(' ')[0] || '';
+        const isKrTok = (/^제\\s*\\d{1,4}\\s*조$/.test(first) || /^제\\s*\\d{1,4}\\s*항$/.test(first) || /^\\d{1,4}\\s*호$/.test(first) || /^[가-하]\\s*목$/.test(first));
+        if (isKrTok && dp0.includes(first)) t0 = t0.slice(first.length).trim();
+      }
+      if (t0.startsWith('[') && t0.endsWith(']')) t0 = t0.slice(1, -1).trim();
+      return t0;
+    }
+
+    function clauseHierarchyLines(it) {
+      const title = cleanClauseTitle(it);
+      const a = String((it && it.article_number) || '').trim();
+      const p = String((it && it.paragraph_number) || '').trim();
+      const i = String((it && it.item_number) || '').trim();
+      const s = String((it && it.subitem_number) || '').trim();
+      const lines = [];
+      if (a) lines.push(`제${a}조${title ? ` [${title}]` : ''}`);
+      else {
+        const dp0 = String((it && (it.display_path || it.clause_id)) || '').trim();
+        lines.push((dp0 ? (dp0 + (title ? ` [${title}]` : '')) : (title || '조항')).trim());
+      }
+      if (p) lines.push(`제${p}항`);
+      if (i) lines.push(`제${i}호`);
+      if (s) lines.push(`${s}목`);
+      return lines;
+    }
+
     function renderClauseList(items) {
       const root = document.getElementById('clauseList');
       root.innerHTML = '';
@@ -964,26 +1017,32 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         root.innerHTML = '<div class="meta">조항별 수정 제안이 없습니다.</div>';
         return;
       }
-      const visible = items.filter(it => it && (it.approval_required || it.high_risk || String(it.risk_tier || '').toUpperCase() === 'MEDIUM'));
+      const visible = items.filter(it => {
+        if (!it) return false;
+        const tier = String(it.risk_tier || '').toUpperCase();
+        return !!it.user_focus_hit || !!it.factual_hit || !!it.approval_required || !!it.high_risk || tier === 'HIGH' || tier === 'MEDIUM';
+      });
       const list = (visible.length > 0 ? visible : items);
-      for (const it of list.slice(0, 12)) {
+      for (const it of list.slice(0, 14)) {
         const card = document.createElement('div');
         card.className = 'clauseCard';
         const head = document.createElement('div');
         head.className = 'clauseHead';
         const title = document.createElement('div');
         title.className = 'clauseTitle';
-        const dp0 = (it.display_path || it.clause_id || '').trim();
-        let t0 = String(it.clause_title || '').trim();
-        if (dp0 && t0 && t0.startsWith(dp0 + ' ')) t0 = t0.slice(dp0.length).trim();
-        if (dp0 && t0 && t0.startsWith(dp0)) t0 = t0.slice(dp0.length).trim();
-        if (t0.startsWith('[') && t0.endsWith(']')) t0 = t0.slice(1, -1).trim();
-        title.innerText = (dp0 ? (dp0 + (t0 ? ` [${t0}]` : '')) : (t0 || '조항')).trim();
+        const lines = clauseHierarchyLines(it);
+        title.innerHTML = lines.map((x, idx) => `<div style="margin-top:${idx===0?0:4}px; padding-left:${idx===0?0:12}px; color:${idx===0?'#102a43':'#5b7086'};">${escapeHtml(x)}</div>`).join('');
         const tag = document.createElement('div');
         tag.className = 'clauseTag';
         const appr = !!it.approval_required;
         const high = !!it.high_risk;
-        tag.innerText = appr ? '승인 필요' : (high ? '고위험' : '권장/참고');
+        const focus = !!it.user_focus_hit;
+        const fact = !!it.factual_hit;
+        const cr0 = (it && it.change_record) ? it.change_record : null;
+        const ctype = cr0 && cr0.change_type ? String(cr0.change_type) : '';
+        const changeBadge = (ctype === 'keep_as_is') ? '유지' : (it.has_rewrite_change ? '수정' : (ctype === 'suppressed' ? '중복생략' : '검토'));
+        const priBadge = focus ? '중점' : (fact ? '답변' : '');
+        tag.innerText = (priBadge ? (priBadge + ' · ') : '') + (appr ? '승인 필요' : (high ? '고위험' : '권장/참고')) + ' · ' + changeBadge;
         tag.className = 'clauseTag ' + (high || appr ? 'tagHigh' : 'tagGuide');
         head.appendChild(title);
         head.appendChild(tag);
@@ -999,13 +1058,17 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const right = document.createElement('div');
         right.className = 'clauseBox';
         const rw = (it.suggested_rewrite || '');
-        if (high || appr) {
+        if ((high || appr) && rw) {
           const html = renderRedlineHtml(it.original_text || '', rw || '');
           right.innerHTML = `<div class="label">필수 수정(redline)</div><div class="redline">${html}</div>`;
         } else {
           const dirs = Array.isArray(it.suggested_direction) ? it.suggested_direction : [];
           const rr0 = (it.rewrite_reason || '');
           const lines = [];
+          const mt = Array.isArray(it.user_focus_match_titles) ? it.user_focus_match_titles : [];
+          const ft = Array.isArray(it.factual_match_titles) ? it.factual_match_titles : [];
+          if (mt.length) lines.push('중점 이슈 연결: ' + mt.slice(0, 3).join(' / '));
+          if (ft.length) lines.push('답변 반영 쟁점: ' + ft.slice(0, 3).join(' / '));
           if (dirs.length) lines.push('방향: ' + dirs.slice(0, 3).join(' / '));
           if (rr0) lines.push('사유: ' + rr0.slice(0, 240) + (rr0.length > 240 ? '…' : ''));
           if (rw) lines.push('참고 문안: ' + rw.slice(0, 240) + (rw.length > 240 ? '…' : ''));
@@ -1035,7 +1098,10 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     function buildResult() {
       const s = (reviewResult && reviewResult.summary) ? reviewResult.summary : {};
       const matched = Array.isArray(reviewResult && reviewResult.matched_rules) ? reviewResult.matched_rules : [];
-      const issueTitles = matched.map(x => x.title || x.rule_id || 'rule').slice(0, 6);
+      const issueTitles = matched
+        .filter(x => x && !x.summary_suppress)
+        .map(x => x.title || x.rule_id || 'rule')
+        .slice(0, 6);
 
       const revSum = (revisionResult && revisionResult.revision && revisionResult.revision.summary) ? revisionResult.revision.summary : {};
       const meta0 = (reviewResult && reviewResult.clause_meta) ? reviewResult.clause_meta : {};
@@ -1049,6 +1115,53 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       const suggested = (draftSuggest && Array.isArray(draftSuggest.suggested_template_ids)) ? draftSuggest.suggested_template_ids : [];
 
       document.getElementById('resultMeta').innerText = `${ctx.entity || '-'} / ${ctx.contract_type || '-'} · issues=${s.matched_rule_count || 0} · 필수수정=${mustCount} 권장=${medCount} 참고=${lowCount}`;
+
+      try {
+        const frc = meta0 && meta0.final_review_context ? meta0.final_review_context : null;
+        const focus = (frc && Array.isArray(frc.user_focus_issues)) ? frc.user_focus_issues : [];
+        const hits = itemsAll.filter(x => x && x.user_focus_hit);
+        const lines = [];
+        if (focus.length === 0) lines.push('중점 검토 내용이 입력되지 않았습니다.');
+        else lines.push('요청 이슈: ' + focus.map(x => x.title || x.code).slice(0, 6).join(' / '));
+        if (hits.length === 0) {
+          const dbg = (meta0 && Array.isArray(meta0.user_focus_mapping_debug)) ? meta0.user_focus_mapping_debug : [];
+          const cands = [];
+          for (const d of dbg) {
+            if (d && Array.isArray(d.candidate_clause_ids) && d.candidate_clause_ids.length > 0) {
+              const top = d.candidate_clause_ids.slice(0, 3).join(', ');
+              cands.push(`${d.objective_title || d.objective_code}: 후보 ${top}`);
+            }
+          }
+          if (cands.length > 0) {
+            lines.push('관련 조항: (자동 탐지 약함) ' + cands.slice(0, 3).join(' · '));
+          } else {
+            lines.push('관련 조항: (탐지 없음) - 조항 토픽/키워드 신호가 약할 수 있어요. 조항 제목/조문 번호를 확인해 주세요.');
+          }
+        }
+        else {
+          const top = hits.slice(0, 3).map(x => (x.display_path || x.clause_id || '') + (x.clause_title ? ` [${cleanClauseTitle(x)}]` : '')).join(' · ');
+          lines.push(`관련 조항: ${hits.length}개 (상위: ${top})`);
+        }
+        document.getElementById('focusSummary').innerText = lines.join('\\n');
+      } catch (e) {
+        document.getElementById('focusSummary').innerText = '-';
+      }
+
+      try {
+        const a = (answers && typeof answers === 'object') ? answers : {};
+        const keys = Object.keys(a || {}).filter(k => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '');
+        if (keys.length === 0) {
+          document.getElementById('answerSummary').innerText = '답변: (없음)';
+        } else {
+          const lines = [];
+          for (const k of keys.slice(0, 6)) {
+            lines.push(`${k}: ${String(a[k]).slice(0, 80)}${String(a[k]).length > 80 ? '…' : ''}`);
+          }
+          document.getElementById('answerSummary').innerText = lines.join('\\n');
+        }
+      } catch (e) {
+        document.getElementById('answerSummary').innerText = '-';
+      }
 
       let action = 'revision';
       if (s.high_risk || s.approval_required) action = 'legal';

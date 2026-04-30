@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 
 from runtime.questions.model import Question, QuestionOption
+from runtime.review.jurisdiction import classify_jurisdiction_profile
+from runtime.review.priority_map import infer_contract_profile
+from runtime.review.user_focus import parse_user_focus_issues
 
 
 YES_NO = [
@@ -112,6 +115,7 @@ def generate_questions(
     contract_text: str | None = None,
     clause_results: list[dict] | None = None,
     max_questions: int = 7,
+    review_focus: str | None = None,
 ) -> list[Question]:
     detected = set(detected_rule_ids or [])
     ctype = contract_type or ""
@@ -119,6 +123,10 @@ def generate_questions(
     topics = set([t.strip() for t in (law_topics or []) if isinstance(t, str) and t.strip()])
     text = contract_text or ""
     clause_rule_ids = _extract_rule_ids(clause_results)
+    jur = classify_jurisdiction_profile(text=text, entity=ent, contract_type=ctype, filename=None)
+    prof = infer_contract_profile(contract_type=ctype, text=text)
+    focus = parse_user_focus_issues(review_focus)
+    focus_codes = {x.code for x in focus if hasattr(x, "code")}
 
     questions: list[Question] = []
 
@@ -225,6 +233,362 @@ def generate_questions(
     if max_questions < 1:
         max_questions = 1
     max_questions = min(int(max_questions), 7)
+
+    if prof.profile == "dealer_consignment":
+        if max_questions > 5:
+            max_questions = 5
+
+        cost_state = _topic_state(
+            text,
+            anchors=["판촉", "광고비", "반품", "판매장려금", "리베이트", "원상회복", "비용부담", "비용 전가", "비용전가"],
+            clear_terms=["상한", "정산", "증빙", "사전", "서면", "합의", "산식", "기준"],
+            ambiguity_terms=ambiguity_markers,
+        )
+        settle_state = _topic_state(
+            text,
+            anchors=["정산", "상계", "공제", "차감", "매출", "인보이스", "세금계산서"],
+            clear_terms=["산식", "기준", "정산주기", "기한", "증빙", "정산서", "상계사유"],
+            ambiguity_terms=ambiguity_markers,
+        )
+        term_state = _topic_state(
+            text,
+            anchors=["해지", "종료", "물량", "취소", "중단", "불이익"],
+            clear_terms=["사유", "통지", "기간", "정산", "반환", "손해배상"],
+            ambiguity_terms=ambiguity_markers,
+        )
+        privacy_state2 = _topic_state(
+            text,
+            anchors=["개인정보", "고객정보", "회원", "privacy", "dpa", "처리위탁", "수탁", "위탁"],
+            clear_terms=["재위탁", "파기", "보관", "암호화", "접근통제", "침해사고", "통지", "대응"],
+            ambiguity_terms=ambiguity_markers,
+        )
+
+        candidates.append(
+            (
+                96,
+                Question(
+                    question_id="Q-DL-001-form",
+                    title="이 계약서는 상대방(대리점/위탁자) 양식인가요?",
+                    description="상대방 양식이면 비용전가·정산·해지 등 핵심 조항이 상대방 유리하게 설계되는 경우가 많아, 검토 우선순위를 조정한다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:dealer", "priority:high", "reason_code:deal_form"],
+                    related_rule_ids=["ACT-009", "RISK-006"],
+                ),
+            )
+        )
+        candidates.append(
+            (
+                95 if cost_state == "missing" else (92 if cost_state == "ambiguous" else 86),
+                Question(
+                    question_id="Q-DL-002-cost-shift",
+                    title="판촉비/광고비/반품비/원상회복 비용을 누가 어떤 기준(상한·증빙·정산)으로 부담하나요?",
+                    description="대리점/위탁거래의 핵심 쟁점으로, 비용 부담 주체·상한·증빙·사전 서면합의가 불명확하면 분쟁 및 공정거래 리스크가 커질 수 있다.",
+                    answer_type="single_choice",
+                    required=(cost_state != "clear"),
+                    options=YES_NO,
+                    tags=["topic:dealer", "priority:high", ("reason_code:dealer_cost_shift_ambiguity" if cost_state != "clear" else "reason_code:confirm_dealer_cost_shift")],
+                    related_rule_ids=["RISK-006", "ACT-009"],
+                ),
+            )
+        )
+        if cost_state != "clear":
+            candidates.append(
+                (
+                    91 if cost_state == "missing" else 89,
+                    Question(
+                        question_id="Q-CA-001-dealer-cost",
+                        title="대리점/위탁 거래에서 비용 부담(판촉비/광고비/반품 등) 항목·상한·정산 기준이 계약서에 명확히 적혀 있나요?",
+                        description="대리점 비용전가 조항은 고위험 후보가 될 수 있어, 항목·상한·정산·증빙·사전 서면합의 요건을 명확히 해야 한다.",
+                        answer_type="single_choice",
+                        required=False,
+                        options=YES_NO,
+                        tags=["topic:dealer", "priority:medium", "reason_code:dealer_cost_terms"],
+                        related_rule_ids=["RISK-006", "ACT-009"],
+                    ),
+                )
+            )
+        candidates.append(
+            (
+                92 if settle_state == "missing" else (90 if settle_state == "ambiguous" else 86),
+                Question(
+                    question_id="Q-DL-003-settlement",
+                    title="정산식/상계/공제(차감) 기준과 정산 주기·증빙·이의제기 절차가 명확한가요?",
+                    description="정산/상계/공제는 대금 분쟁의 핵심이라 산식·기준·증빙과 이의제기 기간이 모호하면 리스크가 커진다.",
+                    answer_type="single_choice",
+                    required=(settle_state != "clear"),
+                    options=YES_NO,
+                    tags=["topic:dealer", "priority:high", ("reason_code:settlement_offset_ambiguity" if settle_state != "clear" else "reason_code:confirm_settlement_controls")],
+                    related_rule_ids=["C-001"],
+                ),
+            )
+        )
+        candidates.append(
+            (
+                91 if term_state == "missing" else (89 if term_state == "ambiguous" else 86),
+                Question(
+                    question_id="Q-DL-004-termination",
+                    title="계약 해지/물량 축소/불이익 조치가 가능한 조건과 절차(통지·유예·정산)가 명확한가요?",
+                    description="해지/불이익 조치는 거래상 지위 남용 리스크와 직결되므로, 요건·절차·정산을 명확히 해야 한다.",
+                    answer_type="single_choice",
+                    required=(term_state != "clear"),
+                    options=YES_NO,
+                    tags=["topic:dealer", "priority:high", ("reason_code:termination_disadvantage_risk" if term_state != "clear" else "reason_code:confirm_termination_controls")],
+                    related_rule_ids=["RISK-006"],
+                ),
+            )
+        )
+        if ("dealer_management_interference" in focus_codes) or ("dealer_unfair_disadvantage" in focus_codes):
+            candidates.append(
+                (
+                    94,
+                    Question(
+                        question_id="Q-DL-006-unfair-interference",
+                        title="불이익 제공/경영간섭(가격·인사·영업정책 강제 등) 위험이 있는 조항이 있나요?",
+                        description="대리점법상 불이익 제공·경영간섭은 핵심 쟁점이다. 해당 정황이 있으면 관련 조항을 최우선으로 집중 검토한다.",
+                        answer_type="single_choice",
+                        required=True,
+                        options=YES_NO,
+                        tags=["topic:dealer", "priority:high", "reason_code:user_focus_dealer_unfair"],
+                        related_rule_ids=["ACT-009", "RISK-006"],
+                    ),
+                )
+            )
+        if ("dispute" in focus_codes) or ("dealer_unfair_disadvantage" in focus_codes):
+            candidates.append(
+                (
+                    87,
+                    Question(
+                        question_id="Q-DL-007-dispute-special",
+                        title="대리점법상 분쟁조정/관할/준거법에 관해 특별히 요구하는 방향이 있나요?",
+                        description="국내 대리점 거래는 해외 집행 논리보다 관할·분쟁해결 절차(조정 포함)가 실무적으로 중요할 수 있어, 원하는 방향을 확인한다.",
+                        answer_type="single_choice",
+                        required=False,
+                        options=YES_NO,
+                        tags=["topic:dispute", "priority:medium", "reason_code:user_focus_dispute"],
+                        related_rule_ids=["ACT-004"],
+                    ),
+                )
+            )
+        if ("personal_data" in text.lower()) or (privacy_state2 != "missing" and privacy_state2 != "clear"):
+            candidates.append(
+                (
+                    88 if privacy_state2 == "missing" else 86,
+                    Question(
+                        question_id="Q-DL-005-privacy",
+                        title="고객/회원정보 등 개인정보를 처리(제공/위탁/재위탁)하는 경우, 재위탁·파기/반환·침해사고 통지 기준이 명확한가요?",
+                        description="대리점/위탁거래에서도 고객정보 처리가 있으면 개인정보보호법상 책임이 발생할 수 있어, 재위탁·안전조치·파기/반환·침해사고 통지를 점검해야 한다.",
+                        answer_type="single_choice",
+                        required=False,
+                        options=YES_NO,
+                        tags=["topic:privacy", "priority:medium", "reason_code:privacy_controls_missing"],
+                    related_rule_ids=[],
+                    ),
+                )
+            )
+
+        if jur.kind != "domestic_korea":
+            candidates.append(
+                (
+                    87,
+                    Question(
+                        question_id="Q-DL-006-crossborder",
+                        title="해외 당사자/해외 지급/해외 수행 등 해외 거래 정황이 있나요?",
+                        description="해외 거래 정황이 있으면 준거법/관할(또는 중재)과 집행 가능성까지 고려해야 한다.",
+                        answer_type="single_choice",
+                        required=False,
+                        options=YES_NO,
+                        tags=["topic:dispute", "priority:medium", "reason_code:cross_border_classifier"],
+                        related_rule_ids=["ACT-004"],
+                    ),
+                )
+            )
+
+        candidates.sort(key=lambda x: int(x[0]), reverse=True)
+        return [q for _, q in candidates[:max_questions]]
+
+    if prof.profile == "ops_outsourcing":
+        if max_questions > 5:
+            max_questions = 5
+
+        scope_state = _topic_state(
+            text,
+            anchors=["운영", "대행", "위탁운영", "운영위탁", "업무범위", "서비스", "관리", "대상 공간", "매장", "라운지"],
+            clear_terms=["별지", "KPI", "성과", "보고", "점검", "검수", "인수", "기준", "주기"],
+            ambiguity_terms=ambiguity_markers,
+        )
+        staffing_state = _topic_state(
+            text,
+            anchors=["인력", "직원", "근무", "교대", "배치", "교육", "관리자", "책임자"],
+            clear_terms=["인원", "자격", "요건", "교체", "승인", "근무시간", "휴게", "업무지시"],
+            ambiguity_terms=ambiguity_markers,
+        )
+        reporting_state = _topic_state(
+            text,
+            anchors=["보고", "보고서", "자료제출", "실적", "월간", "주간", "정기"],
+            clear_terms=["주기", "양식", "기한", "전자", "서면"],
+            ambiguity_terms=ambiguity_markers,
+        )
+        settle_state = _topic_state(
+            text,
+            anchors=["정산", "지급", "대금", "용역비", "수수료", "운영수수료", "상계", "공제", "증빙"],
+            clear_terms=["산식", "기준", "정산주기", "기한", "증빙", "정산서", "이의제기"],
+            ambiguity_terms=ambiguity_markers,
+        )
+        term_state = _topic_state(
+            text,
+            anchors=["해지", "종료", "갱신", "중도해지", "위약", "손해배상", "제재", "패널티"],
+            clear_terms=["사유", "통지", "기간", "유예", "정산", "인수인계"],
+            ambiguity_terms=ambiguity_markers,
+        )
+
+        candidates.append(
+            (
+                96,
+                Question(
+                    question_id="Q-OPS-001-form",
+                    title="이 운영대행/위탁운영 계약서는 상대방 양식인가요?",
+                    description="상대방 양식이면 운영범위·정산·해지·책임 배분이 상대방 유리하게 설계되는 경우가 많아, 검토 우선순위를 조정한다.",
+                    answer_type="single_choice",
+                    required=True,
+                    options=YES_NO,
+                    tags=["topic:ops", "priority:high", "reason_code:ops_form"],
+                    related_rule_ids=[],
+                ),
+            )
+        )
+        candidates.append(
+            (
+                95 if scope_state != "clear" else 88,
+                Question(
+                    question_id="Q-OPS-002-scope-kpi",
+                    title="운영 범위(업무범위), 성과/KPI, 보고·검수 기준이 계약서에 명확히 적혀 있나요?",
+                    description="운영대행 계약의 핵심은 범위·성과·보고·검수의 명확성이다. 모호하면 인력·비용·책임 분쟁이 커질 수 있다.",
+                    answer_type="single_choice",
+                    required=(scope_state != "clear"),
+                    options=YES_NO,
+                    tags=["topic:ops", "priority:high", "reason_code:ops_scope_kpi"],
+                    related_rule_ids=[],
+                ),
+            )
+        )
+        candidates.append(
+            (
+                93 if staffing_state != "clear" else 86,
+                Question(
+                    question_id="Q-OPS-003-staffing",
+                    title="운영 인력 배치(인원/자격/교체/교육)와 지휘·감독 범위가 명확한가요?",
+                    description="인력 배치/교체/교육과 지휘·감독 구조가 불명확하면 품질·안전·노무 리스크로 이어질 수 있다.",
+                    answer_type="single_choice",
+                    required=(staffing_state != "clear"),
+                    options=YES_NO,
+                    tags=["topic:ops", "priority:high", "reason_code:ops_staffing_controls"],
+                    related_rule_ids=[],
+                ),
+            )
+        )
+        candidates.append(
+            (
+                92 if settle_state != "clear" else 86,
+                Question(
+                    question_id="Q-OPS-004-settlement",
+                    title="정산(용역비/수수료) 산식·정산주기·증빙·이의제기 절차가 명확한가요?",
+                    description="정산/상계/증빙이 모호하면 운영대행 계약에서 가장 큰 분쟁(대금)으로 번질 수 있다.",
+                    answer_type="single_choice",
+                    required=(settle_state != "clear"),
+                    options=YES_NO,
+                    tags=["topic:payment", "priority:high", "reason_code:ops_settlement_controls"],
+                    related_rule_ids=["C-001"],
+                ),
+            )
+        )
+        candidates.append(
+            (
+                90 if subcontract_state != "clear" else 84,
+                Question(
+                    question_id="Q-OPS-005-subcontract",
+                    title="하도급/재위탁(협력업체 사용) 가능 여부와 사전 서면 승인·책임 귀속이 명확한가요?",
+                    description="운영 품질·안전·개인정보가 협력업체로 넘어갈 수 있어, 재위탁 통제(사전 승인/동일 의무/책임)를 확인해야 한다.",
+                    answer_type="single_choice",
+                    required=(subcontract_state != "clear") and subcontract_present,
+                    options=YES_NO,
+                    tags=["topic:subcontract", "priority:high", "reason_code:ops_subcontract_control"],
+                    related_rule_ids=["ACT-010"],
+                ),
+            )
+        )
+
+        if ("termination_abuse" in focus_codes) or ("dealer_unfair_disadvantage" in focus_codes) or ("dealer_management_interference" in focus_codes):
+            candidates.append(
+                (
+                    94,
+                    Question(
+                        question_id="Q-OPS-006-unfair-termination",
+                        title="운영지침/평가/제재/일방 해지 등으로 과도한 불이익(거래상 지위 남용/경영간섭)이 발생할 위험이 있나요?",
+                        description="운영대행에서도 지침 강제, 평가·패널티, 일방 해지/계약조건 변경이 누적되면 거래상 지위 남용 리스크가 될 수 있어 우선 확인한다.",
+                        answer_type="single_choice",
+                        required=True,
+                        options=YES_NO,
+                        tags=["topic:dealer", "priority:high", "reason_code:user_focus_unfair_ops"],
+                        related_rule_ids=["ACT-009"],
+                    ),
+                )
+            )
+
+        if onsite_present or safety_present or _has_any(text, ["안전관리", "산업안전", "중대재해"]):
+            candidates.append(
+                (
+                    88,
+                    Question(
+                        question_id="Q-OPS-007-safety",
+                        title="현장/공간 운영 중 안전관리 책임(교육·보호구·사고 보고·작업중지 등)이 계약서에 포함돼 있나요?",
+                        description="현장 운영 정황이 있으면 산안법/중대재해 리스크가 핵심이므로 안전관리 책임과 협력 체계를 확인한다.",
+                        answer_type="single_choice",
+                        required=False,
+                        options=YES_NO,
+                        tags=["topic:safety", "priority:medium", "reason_code:ops_safety_presence"],
+                        related_rule_ids=["ACT-010"],
+                    ),
+                )
+            )
+
+        if privacy_present or data_subject_hint:
+            candidates.append(
+                (
+                    87,
+                    Question(
+                        question_id="Q-OPS-008-privacy",
+                        title="고객/이용자 정보 등 개인정보를 처리(접근/제공/재위탁)하나요? 그렇다면 재위탁·파기/반환·침해사고 통지가 명확한가요?",
+                        description="운영대행에서 고객 접점이 있으면 개인정보보호법상 책임이 발생할 수 있어, 처리 범위와 통제(재위탁/파기/침해사고)를 확인한다.",
+                        answer_type="single_choice",
+                        required=False,
+                        options=YES_NO,
+                        tags=["topic:privacy", "priority:medium", "reason_code:ops_privacy_presence"],
+                        related_rule_ids=[],
+                    ),
+                )
+            )
+
+        if term_state != "clear":
+            candidates.append(
+                (
+                    89,
+                    Question(
+                        question_id="Q-OPS-009-termination",
+                        title="계약 해지/갱신 조건과 해지 시 인수인계·정산·자료 반환 의무가 명확한가요?",
+                        description="운영대행 계약은 해지 시점의 인수인계·자료 반환·정산이 핵심 분쟁 포인트가 될 수 있어 확인한다.",
+                        answer_type="single_choice",
+                        required=False,
+                        options=YES_NO,
+                        tags=["topic:termination", "priority:medium", "reason_code:ops_termination_exit"],
+                        related_rule_ids=["ACT-004"],
+                    ),
+                )
+            )
+
+        candidates.sort(key=lambda x: int(x[0]), reverse=True)
+        return [q for _, q in candidates[:max_questions]]
 
     ip_risk = _topic_risk(clause_results, ["산출물", "저작권", "지식재산", "ip", "소스코드", "프로그램"])
     oss_risk = _topic_risk(clause_results, ["오픈소스", "open source", "gpl", "mit", "apache", "라이선스", "license", "서드파티"])

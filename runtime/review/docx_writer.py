@@ -184,6 +184,32 @@ def _clause_label_from_original_clause(oc: dict[str, Any], *, style: str = "brac
     return label or cid or "조항"
 
 
+def _clause_hierarchy_lines_from_original_clause(oc: dict[str, Any]) -> list[str]:
+    cid = str(oc.get("clause_id") or "").strip()
+    an = str(oc.get("article_number") or "").strip()
+    pn = str(oc.get("paragraph_number") or "").strip()
+    inum = str(oc.get("item_number") or "").strip()
+    sn = str(oc.get("subitem_number") or "").strip()
+    title = str(oc.get("clause_title") or "").strip()
+    if title.startswith("[") and title.endswith("]"):
+        title = title[1:-1].strip()
+    lines: list[str] = []
+    if an:
+        head = f"제{an}조" if cid.startswith("KR-") else an
+        lines.append((head + (f" [{title}]" if title else "")).strip())
+    else:
+        dp = str(oc.get("display_path") or "").strip()
+        lines.append((dp or cid or "조항").strip())
+        return lines
+    if pn:
+        lines.append(f"제{pn}항")
+    if inum:
+        lines.append(f"제{inum}호")
+    if sn:
+        lines.append(f"{sn}목")
+    return [x for x in lines if x]
+
+
 def _summarize_change_points(original: str, revised: str, *, limit: int = 4) -> tuple[list[str], list[str]]:
     a = [x for x in re.findall(r"[0-9A-Za-z가-힣]+", _norm_text(original)) if x]
     b = [x for x in re.findall(r"[0-9A-Za-z가-힣]+", _norm_text(revised)) if x]
@@ -282,6 +308,8 @@ def build_revision_docx(
     review_summary: dict[str, Any] | None = None,
     law_search: dict[str, Any] | None = None,
     questions: list[dict[str, Any]] | None = None,
+    answers: dict[str, Any] | None = None,
+    final_review_context: dict[str, Any] | None = None,
 ) -> bytes:
     contract_name = filename or "미상"
     counterparty = "미상"
@@ -312,21 +340,48 @@ def build_revision_docx(
         if ot and rt and ot != rt:
             raise ValueError(f"clause_title mismatch for {cid}")
 
-    changed_clause_ids: list[str] = []
-    for cid, oc in orig_by_id.items():
-        cr = cr_by_id.get(cid)
-        if not cr:
-            continue
-        sr = cr.get("suggested_rewrite")
-        if not (isinstance(sr, str) and sr.strip()):
-            continue
-        if _norm_text(sr) == _norm_text(str(oc.get("text") or "")):
-            continue
-        changed_clause_ids.append(cid)
+    frc0 = final_review_context if isinstance(final_review_context, dict) else {}
+    jur_kind = (frc0.get("jurisdiction") or {}).get("kind") if isinstance(frc0.get("jurisdiction"), dict) else None
+    prof0 = (frc0.get("contract_profile") or {}).get("profile") if isinstance(frc0.get("contract_profile"), dict) else None
+    is_dealer_contract = (prof0 == "dealer_consignment") or any(k in str(contract_type or "") for k in ("대리점", "유통", "위탁"))
 
-    tier_by_id: dict[str, str] = {cid: _risk_tier_from_clause_result(cr_by_id.get(cid) or {}) for cid in changed_clause_ids}
-    must_ids = [cid for cid in changed_clause_ids if tier_by_id.get(cid) == "HIGH"]
-    guide_ids = [cid for cid in changed_clause_ids if tier_by_id.get(cid) in ("MEDIUM", "LOW")]
+    def should_show(cr: dict[str, Any]) -> bool:
+        tier = _risk_tier_from_clause_result(cr)
+        if str(cr.get("display_kind") or "") in ("redline", "guidance", "keep"):
+            return True
+        if bool(cr.get("user_focus_hit")) or bool(cr.get("factual_hit")):
+            return True
+        if bool(cr.get("approval_required")) or bool(cr.get("high_risk")):
+            return True
+        if tier in ("HIGH", "MEDIUM"):
+            return True
+        if bool(cr.get("has_rewrite_change")):
+            return True
+        sr = cr.get("suggested_rewrite")
+        if isinstance(sr, str) and sr.strip():
+            return True
+        return False
+
+    show_ids: list[str] = []
+    for cid in orig_order:
+        cr = cr_by_id.get(cid)
+        if isinstance(cr, dict) and should_show(cr):
+            show_ids.append(cid)
+
+    tier_by_id: dict[str, str] = {cid: _risk_tier_from_clause_result(cr_by_id.get(cid) or {}) for cid in show_ids}
+
+    for cid in show_ids:
+        cr = cr_by_id.get(cid) or {}
+        tier = tier_by_id.get(cid) or "LOW"
+        if bool(cr.get("keep_as_is")):
+            continue
+        if tier in ("HIGH", "MEDIUM"):
+            sr = cr.get("suggested_rewrite")
+            if not (isinstance(sr, str) and sr.strip()):
+                raise ValueError(f"missing suggested_rewrite for {cid} tier={tier}")
+
+    redline_ids = [cid for cid in show_ids if bool((cr_by_id.get(cid) or {}).get("has_rewrite_change")) and tier_by_id.get(cid) == "HIGH"]
+    guide_ids = [cid for cid in show_ids if cid not in set(redline_ids)]
     medium_ids = [cid for cid in guide_ids if tier_by_id.get(cid) == "MEDIUM"]
     low_ids = [cid for cid in guide_ids if tier_by_id.get(cid) == "LOW"]
 
@@ -360,7 +415,7 @@ def build_revision_docx(
 
     high_risk_rows: list[dict[str, str]] = []
     approval_rows: list[dict[str, str]] = []
-    for cid in changed_clause_ids:
+    for cid in show_ids:
         cr = cr_by_id.get(cid) or {}
         if bool(cr.get("high_risk")):
             high_risk_rows.append({"clause_id": cid, "title": str(cr.get("clause_title") or "")})
@@ -370,19 +425,25 @@ def build_revision_docx(
     sec_sum = _p(body)
     _t(_r(sec_sum, bold=True), "1) 표지/요약")
     ps = _p(body)
-    _t(_r(ps), f"필수수정(HIGH): {len(must_ids)} / 권장수정(MEDIUM): {len(medium_ids)} / 참고제안(LOW): {len(low_ids)}")
+    _t(_r(ps), f"필수수정(HIGH): {len(redline_ids)} / 권장수정(MEDIUM): {len(medium_ids)} / 참고제안(LOW): {len(low_ids)}")
     ps2 = _p(body)
     _t(_r(ps2), f"High risk 조항 수: {len(high_risk_rows)} / Approval required 조항 수: {len(approval_rows)}")
-    if changed_clause_ids:
+    if show_ids:
         ph = _p(body)
         _t(_r(ph, bold=True), "핵심 리스크 요약:")
-        for cid in changed_clause_ids[:8]:
+        shown = 0
+        for cid in show_ids:
             cr = cr_by_id.get(cid) or {}
             oc = orig_by_id.get(cid) or {}
-            head = _clause_label_from_original_clause(oc, style="bracketed")
+            head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc))
             issues = cr.get("detected_issue_list") if isinstance(cr.get("detected_issue_list"), list) else []
             it = ""
             for x in issues:
+                if isinstance(x, dict) and bool(x.get("summary_suppress")):
+                    continue
+                rid0 = str(x.get("rule_id") or "") if isinstance(x, dict) else ""
+                if is_dealer_contract and str(jur_kind or "") == "domestic_korea" and rid0 == "ACT-004" and not bool(cr.get("user_focus_hit")):
+                    continue
                 if isinstance(x, dict) and isinstance(x.get("issue_title"), str) and x["issue_title"].strip():
                     it = x["issue_title"].strip()
                     break
@@ -390,6 +451,9 @@ def build_revision_docx(
             line = f"- {head}: {it or (str(rr)[:60] if isinstance(rr, str) else '리스크/보완 필요')}"
             pl = _p(body)
             _t(_r(pl), line)
+            shown += 1
+            if shown >= 8:
+                break
     _p(body)
 
     sec_issues = _p(body)
@@ -398,12 +462,19 @@ def build_revision_docx(
         ps0 = _p(body)
         _t(_r(ps0), f"검출 이슈 수: {int(review_summary.get('issue_count') or 0)}")
     issue_titles: list[str] = []
-    for cid in (changed_clause_ids if changed_clause_ids else orig_order)[:30]:
+    for cid in (show_ids if show_ids else orig_order)[:40]:
         cr = cr_by_id.get(cid)
         if not isinstance(cr, dict):
             continue
         issues = cr.get("detected_issue_list") if isinstance(cr.get("detected_issue_list"), list) else []
         for x in issues:
+            if not isinstance(x, dict):
+                continue
+            if bool(x.get("summary_suppress")):
+                continue
+            rid0 = str(x.get("rule_id") or "")
+            if is_dealer_contract and str(jur_kind or "") == "domestic_korea" and rid0 == "ACT-004" and not bool(cr.get("user_focus_hit")):
+                continue
             if isinstance(x, dict) and isinstance(x.get("issue_title"), str) and x["issue_title"].strip():
                 t = x["issue_title"].strip()
                 if t not in issue_titles:
@@ -421,22 +492,111 @@ def build_revision_docx(
         _t(_r(pnone2), "자동으로 확정적인 수정 권고 조항은 탐지되지 않았습니다. 아래 ‘추가 확인 필요 질문’을 기준으로 추가 검토를 진행하세요.")
     _p(body)
 
+    frc0 = final_review_context if isinstance(final_review_context, dict) else {}
+    focus_items = frc0.get("user_focus_issues") if isinstance(frc0.get("user_focus_issues"), list) else []
+    focus_titles = [
+        str(x.get("title") or x.get("code") or "").strip()
+        for x in focus_items
+        if isinstance(x, dict) and str(x.get("title") or x.get("code") or "").strip()
+    ]
+    sec_focus = _p(body)
+    _t(_r(sec_focus, bold=True), "2-1) 사용자 요청 핵심 이슈 반영 결과")
+    if focus_titles:
+        pf0 = _p(body)
+        _t(_r(pf0), "요청 이슈: " + " / ".join(focus_titles[:8]))
+    else:
+        pf0 = _p(body)
+        _t(_r(pf0), "요청 이슈: (입력 없음)")
+    focus_hits = [cr for cr in clause_results if isinstance(cr, dict) and bool(cr.get("user_focus_hit"))]
+    if focus_hits:
+        pf1 = _p(body)
+        _t(_r(pf1), f"관련 조항: {len(focus_hits)}개")
+        for cr in focus_hits[:5]:
+            cid = str(cr.get("clause_id") or "")
+            oc = orig_by_id.get(cid) or {}
+            head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc))
+            mt = cr.get("user_focus_match_titles") if isinstance(cr.get("user_focus_match_titles"), list) else []
+            mt = [str(x) for x in mt if isinstance(x, str) and x.strip()]
+            line = f"- {head}" + (f" (연결: {', '.join(mt[:2])})" if mt else "")
+            pl = _p(body)
+            _t(_r(pl), line)
+    else:
+        pf1 = _p(body)
+        _t(_r(pf1), "관련 조항: (탐지 없음)")
+    if focus_titles:
+        for obj in focus_items[:8]:
+            if not isinstance(obj, dict):
+                continue
+            code0 = str(obj.get("code") or "").strip()
+            title0 = str(obj.get("title") or obj.get("code") or "").strip()
+            if not code0 or not title0:
+                continue
+            ids = [str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict) and code0 in (cr.get("user_focus_matches") or [])]
+            if not ids:
+                pl = _p(body)
+                _t(_r(pl), f"- {title0}: (후보 조항 없음)")
+                continue
+            labels = []
+            for cid in ids[:6]:
+                oc = orig_by_id.get(cid) or {}
+                labels.append(" / ".join(_clause_hierarchy_lines_from_original_clause(oc)) or cid)
+            pl = _p(body)
+            _t(_r(pl), f"- {title0}: " + " · ".join(labels[:6]))
+    _p(body)
+
+    sec_ans = _p(body)
+    _t(_r(sec_ans, bold=True), "2-2) 질문 답변 반영 요약")
+    ans0 = dict(answers or {})
+    def _answer_label(q: dict[str, Any], value: Any) -> str:
+        if value is None:
+            return ""
+        v = str(value)
+        opts = q.get("options") if isinstance(q.get("options"), list) else []
+        for o in opts:
+            if isinstance(o, dict) and str(o.get("value") or "") == v:
+                lab = str(o.get("label") or "").strip()
+                return lab or v
+        return v
+    answered_lines: list[str] = []
+    for q in questions or []:
+        if not isinstance(q, dict) or not isinstance(q.get("question_id"), str):
+            continue
+        qid = str(q.get("question_id") or "")
+        if qid not in ans0:
+            continue
+        val = ans0.get(qid)
+        if not (isinstance(val, str) and val.strip()) and not isinstance(val, (bool, int, float)):
+            continue
+        title0 = str(q.get("title") or qid).strip()
+        answered_lines.append(f"- {title0}: {_answer_label(q, val)}")
+        if len(answered_lines) >= 10:
+            break
+    if answered_lines:
+        for line in answered_lines:
+            pl = _p(body)
+            _t(_r(pl), line)
+    else:
+        pnone_ans = _p(body)
+        _t(_r(pnone_ans), "- (답변 없음)")
+    _p(body)
+
     sec_major = _p(body)
     _t(_r(sec_major, bold=True), "3) 검토된 주요 조항")
     for cid in orig_order[:10]:
         oc = orig_by_id.get(cid) or {}
-        head = _clause_label_from_original_clause(oc, style="bracketed")
+        head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc))
         pl = _p(body)
         _t(_r(pl), f"- {head}")
     _p(body)
 
     sec_reco = _p(body)
     _t(_r(sec_reco, bold=True), "4) 수정 권고 조항")
-    if changed_clause_ids:
-        for cid in changed_clause_ids[:12]:
+    if show_ids:
+        for cid in show_ids[:18]:
             oc = orig_by_id.get(cid) or {}
             tier = tier_by_id.get(cid)
-            head = ((f"[{tier}] " if tier else "") + _clause_label_from_original_clause(oc, style="bracketed")).strip()
+            base = " / ".join(_clause_hierarchy_lines_from_original_clause(oc))
+            head = ((f"[{tier}] " if tier else "") + base).strip()
             pl = _p(body)
             _t(_r(pl), f"- {head}")
     else:
@@ -449,7 +609,7 @@ def build_revision_docx(
     law_titles: list[str] = []
     law_titles.extend(_extract_law_titles_from_search(law_search, limit=6))
     if not law_titles:
-        for cid in changed_clause_ids[:8]:
+        for cid in show_ids[:12]:
             cr = cr_by_id.get(cid) or {}
             for t in _extract_law_titles(cr, limit=2):
                 if t not in law_titles:
@@ -484,16 +644,19 @@ def build_revision_docx(
 
     sec_red = _p(body)
     _t(_r(sec_red, bold=True), "7) 본문 redline 버전 (필수수정 조항만 표시)")
-    if not must_ids:
+    if not redline_ids:
         pnone = _p(body)
         _t(_r(pnone), "필수수정(redline) 조항이 없습니다.")
-    for cid in must_ids:
+    for cid in redline_ids:
         oc = orig_by_id.get(cid) or {}
         cr = cr_by_id.get(cid) or {}
         tier = tier_by_id.get(cid) or "HIGH"
-        head = (f"[{tier}] " + _clause_label_from_original_clause(oc, style="bracketed")).strip()
-        ph = _p(body)
-        _t(_r(ph, bold=True), head)
+        head_lines = _clause_hierarchy_lines_from_original_clause(oc)
+        if head_lines:
+            head_lines[0] = (f"[{tier}] " + head_lines[0]).strip()
+        for i, line in enumerate(head_lines or [f"[{tier}] {str(oc.get('clause_id') or '')}".strip()]):
+            ph = _p(body)
+            _t(_r(ph, bold=True), (("  " + line) if i > 0 else line))
 
         original_text = str(oc.get("text") or "")
         revised_text = str(cr.get("suggested_rewrite") or "")
@@ -525,22 +688,41 @@ def build_revision_docx(
         oc = orig_by_id.get(cid) or {}
         cr = cr_by_id.get(cid) or {}
         tier = tier_by_id.get(cid) or "MEDIUM"
-        head = (f"[{tier}] " + _clause_label_from_original_clause(oc, style="bracketed")).strip()
-        ph = _p(body)
-        _t(_r(ph, bold=True, color_hex="1F7AE0"), head)
+        head_lines = _clause_hierarchy_lines_from_original_clause(oc)
+        if head_lines:
+            head_lines[0] = (f"[{tier}] " + head_lines[0]).strip()
+        for i, line in enumerate(head_lines or [f"[{tier}] {str(oc.get('clause_id') or '')}".strip()]):
+            ph = _p(body)
+            _t(_r(ph, bold=True, color_hex="1F7AE0"), (("  " + line) if i > 0 else line))
         rr0 = str(cr.get("rewrite_reason") or "").strip()
         dirs0 = cr.get("suggested_direction") if isinstance(cr.get("suggested_direction"), list) else []
+        ot0 = str(oc.get("text") or "")
+        sr0 = str(cr.get("suggested_rewrite") or "").strip()
+        laws0 = _extract_law_titles(cr, limit=3)
+        before_k, _ = _key_phrases(ot0, sr0, limit=2)
         if dirs0:
             p1 = _p(body)
             _t(_r(p1, color_hex="1F7AE0"), "방향: " + " / ".join(str(x) for x in dirs0 if isinstance(x, str) and x.strip())[:180])
+        if before_k:
+            p0b = _p(body)
+            _t(_r(p0b, color_hex="1F7AE0"), "원문 핵심: " + before_k[:220] + ("…" if len(before_k) > 220 else ""))
+        if sr0:
+            p3 = _p(body)
+            _t(_r(p3, color_hex="1F7AE0"), "제안 문안:")
+            for line in sr0.splitlines()[:40]:
+                pl = _p(body)
+                _t(_r(pl, color_hex="1F7AE0"), (line[:260] + ("…" if len(line) > 260 else "")) if line else "")
         if rr0:
             p2 = _p(body)
             _t(_r(p2, color_hex="1F7AE0"), "사유: " + rr0[:320] + ("…" if len(rr0) > 320 else ""))
+        if laws0:
+            p4 = _p(body)
+            _t(_r(p4, color_hex="1F7AE0"), "관련 법령/기준: " + " / ".join(laws0))
         _p(body)
 
     sec_app = _p(body)
-    _t(_r(sec_app, bold=True), "9) 조항별 수정 사유 부록")
-    tbl = _tbl(body, col_widths=[1200, 1800, 1800, 2400, 1600])
+    _t(_r(sec_app, bold=True), "9) 조항별 구체적 수정안 부록")
+    tbl = _tbl(body, col_widths=[1100, 1700, 2600, 2200, 1500])
 
     def add_row(cells: list[list[tuple[str, dict[str, Any]]]]) -> None:
         tr = ET.SubElement(tbl, _w("tr"))
@@ -561,29 +743,47 @@ def build_revision_docx(
     add_row(
         [
             [("조항 위치", {"bold": True})],
-            [("수정 전 핵심 표현", {"bold": True})],
-            [("수정 후 핵심 표현", {"bold": True})],
+            [("원문 핵심 표현", {"bold": True})],
+            [("제안 문안", {"bold": True})],
             [("수정 이유", {"bold": True})],
             [("관련 법령/기준", {"bold": True})],
         ]
     )
-    for cid in changed_clause_ids:
+    if not show_ids:
+        add_row(
+            [
+                [("부록 대상 없음", {})],
+                [("-", {})],
+                [("-", {})],
+                [("-", {})],
+                [("-", {})],
+            ]
+        )
+    for cid in show_ids:
         oc = orig_by_id.get(cid) or {}
         cr = cr_by_id.get(cid) or {}
         tier = tier_by_id.get(cid) or "MEDIUM"
-        left = (f"[{tier}] " + _clause_label_from_original_clause(oc, style="bracketed")).strip()
+        left_lines = _clause_hierarchy_lines_from_original_clause(oc)
+        if left_lines:
+            left_lines[0] = (f"[{tier}] " + left_lines[0]).strip()
+        left_paras = [(line if i == 0 else ("  " + line), {}) for i, line in enumerate(left_lines)] or [
+            (f"[{tier}] {str(oc.get('clause_id') or '')}".strip(), {})
+        ]
 
         original_text = str(oc.get("text") or "")
         revised_text = str(cr.get("suggested_rewrite") or "")
         rr = str(cr.get("rewrite_reason") or "").strip() if isinstance(cr.get("rewrite_reason"), str) else ""
         laws = _extract_law_titles(cr, limit=3)
-        before_k, after_k = _key_phrases(original_text, revised_text, limit=2)
+        before_k, _ = _key_phrases(original_text, revised_text, limit=2)
+        proposed_lines = [(line[:320] + ("…" if len(line) > 320 else ""), {}) for line in revised_text.splitlines()[:18] if line.strip()]
+        if not proposed_lines:
+            proposed_lines = [("(제안 문안 없음)", {})]
 
         add_row(
             [
-                [(left, {})],
+                left_paras,
                 [(before_k, {})],
-                [(after_k, {})],
+                proposed_lines,
                 [(rr[:260] + ("…" if len(rr) > 260 else ""), {})] if rr else [("(사유 없음)", {})],
                 [(" / ".join(laws), {})] if laws else [("-", {})],
             ]
@@ -603,11 +803,11 @@ def build_revision_docx(
             _t(rr, text)
 
     add_row2([("조항", {"bold": True}), ("제목", {"bold": True}), ("표시", {"bold": True})])
-    for cid in changed_clause_ids:
+    for cid in show_ids:
         cr = cr_by_id.get(cid) or {}
         if not (bool(cr.get("high_risk")) or bool(cr.get("approval_required"))):
             continue
-        title_txt = _clause_label_from_original_clause((orig_by_id.get(cid) or {}), style="bracketed")
+        title_txt = " / ".join(_clause_hierarchy_lines_from_original_clause((orig_by_id.get(cid) or {})))
         flag = []
         if bool(cr.get("high_risk")):
             flag.append("HIGH")

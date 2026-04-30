@@ -32,12 +32,27 @@ class LawSearchRerankTest(unittest.TestCase):
                 identifiers={},
                 drf_detail_url="u3",
             ),
+            LawReference(
+                source="대리점법 판촉비",
+                target="law",
+                title="난민법",
+                snippet="난민",
+                identifiers={},
+                drf_detail_url="u4",
+            ),
         ]
         ctx = "위탁판매 대리점 계약이며 판촉비 및 판매장려금 비용 전가가 문제된다."
-        ranked = _rerank_and_filter_references(references=refs, context_text=ctx, matched_rules=[{"rule_id": "RISK-006", "matched_keywords": ["판촉비"]}], max_items=3)
+        ranked = _rerank_and_filter_references(
+            references=refs,
+            context_text=ctx,
+            matched_rules=[{"rule_id": "RISK-006", "matched_keywords": ["판촉비"]}],
+            max_items=3,
+            profile="dealer",
+        )
         titles = [r.title for r in ranked]
         self.assertIn("대리점거래의 공정화에 관한 법률", titles)
         self.assertNotIn("광고 안내", titles)
+        self.assertNotIn("난민법", titles)
 
 
 if __name__ == "__main__":

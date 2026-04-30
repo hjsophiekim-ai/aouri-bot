@@ -38,10 +38,11 @@ ENTITY_KEYWORDS = [
 CONTRACT_TYPE_KEYWORDS = [
     ("NDA/비밀유지", ["nda", "비밀유지", "confidential"]),
     ("앱개발/소프트웨어개발/SI/유지보수/SaaS", ["앱 개발", "소프트웨어 개발", "시스템 개발", "개발용역", "it 용역", "si", "유지보수", "saas", "api 연동", "source code", "산출물", "sla"]),
-    ("개인정보/처리위탁(DPA)", ["처리위탁", "dpa", "data processing", "personal data processing", "수탁", "위탁"]),
+    ("운영대행/위탁운영/공간운영/서비스위탁", ["운영대행", "위탁운영", "운영위탁", "공간운영", "매장운영", "라운지 운영", "시설운영", "시설관리", "관리용역", "운영용역", "서비스위탁"]),
+    ("개인정보/처리위탁(DPA)", ["처리위탁", "dpa", "data processing", "personal data processing", "수탁자", "위탁자"]),
     ("임대차/전대차", ["임대차", "전대차", "lease", "rental"]),
     ("물품공급/구매/매매", ["공급", "구매", "매매", "purchase", "supply", "sales"]),
-    ("대리점/위탁/유통", ["대리점", "유통", "위탁", "dealer", "distributor", "consignment"]),
+    ("대리점/위탁/유통", ["대리점", "유통", "위탁판매", "위탁거래", "dealer", "distributor", "consignment"]),
     ("용역/자문/SOW", ["용역", "자문", "sow", "service", "consulting"]),
     ("공사/도급/하도급", ["공사", "도급", "하도급", "construction", "subcontract"]),
     ("광고/마케팅/협찬", ["광고", "마케팅", "협찬", "ad", "marketing", "sponsor"]),

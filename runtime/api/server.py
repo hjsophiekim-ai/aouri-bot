@@ -24,7 +24,15 @@ from runtime.admin.internal_demo_ui import INTERNAL_DEMO_HTML
 from runtime.admin.internal_demo_chat_ui import INTERNAL_DEMO_CHAT_HTML
 from runtime.db.review_repository import ReviewRepository
 from runtime.rules.loader import RuleLoader
-from runtime.questions.storage import create_session, load_session, run_review_with_session, run_review_with_session_fast, save_answers
+from runtime.questions.storage import (
+    create_session,
+    create_text_session,
+    save_session,
+    load_session,
+    run_review_with_session,
+    run_review_with_session_fast,
+    save_answers,
+)
 from runtime.questions.generator import generate_questions
 from runtime.questions.model import question_to_dict
 from runtime.ep.intake import intake_to_dict, validate_ep_intake
@@ -61,6 +69,8 @@ def _html_response(handler: BaseHTTPRequestHandler, html: str) -> None:
     data = html.encode("utf-8")
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+    handler.send_header("Pragma", "no-cache")
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
@@ -615,8 +625,13 @@ def create_handler(service: RuleQueryService):
             contract_type = body.get("contract_type", "all")
             text = body.get("text", "")
             filename = body.get("filename")
+            review_focus = body.get("review_focus")
+            review_focus = body.get("review_focus")
             answers = body.get("answers") if isinstance(body.get("answers"), dict) else None
+            review_focus = body.get("review_focus")
             persist = body.get("persist") is True
+            session_id0 = body.get("session_id")
+            create_session0 = body.get("create_session")
             ai_mode = str(body.get("ai_mode") or "auto").strip().lower()
             law_mode = str(body.get("law_mode") or "auto").strip().lower()
 
@@ -646,6 +661,7 @@ def create_handler(service: RuleQueryService):
                 "filename": str(filename or ""),
                 "text_sha256": sha256(str(text or "").encode("utf-8", errors="replace")).hexdigest(),
                 "answers": answers or {},
+                "review_focus": (review_focus if isinstance(review_focus, str) else None),
                 "review_mode": review_mode,
                 "ai_mode": ai_mode if review_mode == "deep" else "off",
                 "law_mode": law_mode if review_mode == "deep" else "off",
@@ -672,6 +688,7 @@ def create_handler(service: RuleQueryService):
                     text=str(text),
                     filename=str(filename) if isinstance(filename, str) else None,
                     answers=answers,
+                    review_focus=(review_focus if isinstance(review_focus, str) else None),
                     law_service=None,
                     ai_provider=None,
                     ai_model=None,
@@ -698,6 +715,32 @@ def create_handler(service: RuleQueryService):
                     "used": False,
                     "detail": {"enabled": False, "used": False, "selected_clause_ids": [], "selected_count": 0},
                 }
+                use_session = (isinstance(session_id0, str) and session_id0.strip()) or (create_session0 is True)
+                if use_session:
+                    sid = str(session_id0).strip() if isinstance(session_id0, str) and session_id0.strip() else None
+                    if sid is None:
+                        doc = create_text_session(
+                            entity=str(entity),
+                            contract_type=str(contract_type),
+                            filename=str(filename) if isinstance(filename, str) else None,
+                            text=str(text or ""),
+                            review_focus=(review_focus if isinstance(review_focus, str) else None),
+                            extraction={"success": True, "method": "api_review_fast"},
+                            classification={"entity": str(entity), "contract_type": str(contract_type)},
+                            detected_rule_ids=[],
+                            questions=[],
+                            source="review_analyze_fast",
+                        )
+                        sid = str(doc.get("session_id") or "")
+                    if sid:
+                        _ = save_answers(sid, dict(answers or {}))
+                        doc2 = load_session(sid)
+                        doc2["review_result_fast"] = result
+                        doc2["review_result_fast_sig"] = cache_key
+                        if isinstance(result.get("original_clauses"), list):
+                            doc2["original_clauses"] = result.get("original_clauses")
+                        save_session(doc2)
+                        result["question_session_id"] = sid
                 fast_review_cache[cache_key] = (now, result)
                 if len(fast_review_cache) > fast_review_cache_max:
                     oldest_key = min(fast_review_cache.items(), key=lambda kv: kv[1][0])[0]
@@ -727,6 +770,7 @@ def create_handler(service: RuleQueryService):
                 text=str(text),
                 filename=str(filename) if isinstance(filename, str) else None,
                 answers=answers,
+                review_focus=(review_focus if isinstance(review_focus, str) else None),
                 law_service=law_service,
                 ai_provider=ai_provider,
                 ai_model=cfg.model if ai_provider else None,
@@ -791,6 +835,36 @@ def create_handler(service: RuleQueryService):
                     review_result=result,
                     text=text,
                 )
+            use_session = True
+            if create_session0 is False:
+                use_session = False
+            if isinstance(session_id0, str) and session_id0.strip():
+                use_session = True
+            if use_session:
+                sid = str(session_id0).strip() if isinstance(session_id0, str) and session_id0.strip() else None
+                if sid is None:
+                    doc = create_text_session(
+                        entity=str(entity),
+                        contract_type=str(contract_type),
+                        filename=str(filename) if isinstance(filename, str) else None,
+                        text=str(text or ""),
+                        review_focus=(review_focus if isinstance(review_focus, str) else None),
+                        extraction={"success": True, "method": "api_review_deep"},
+                        classification={"entity": str(entity), "contract_type": str(contract_type)},
+                        detected_rule_ids=[],
+                        questions=[],
+                        source="review_analyze_deep",
+                    )
+                    sid = str(doc.get("session_id") or "")
+                if sid:
+                    _ = save_answers(sid, dict(answers or {}))
+                    doc2 = load_session(sid)
+                    doc2["review_result"] = result
+                    doc2["review_result_sig"] = cache_key
+                    if isinstance(result.get("original_clauses"), list):
+                        doc2["original_clauses"] = result.get("original_clauses")
+                    save_session(doc2)
+                    result["question_session_id"] = sid
 
             deep_review_cache[cache_key] = (now, result)
             if len(deep_review_cache) > deep_review_cache_max:
@@ -1131,41 +1205,25 @@ def create_handler(service: RuleQueryService):
                 except Exception as exc:
                     _json_response(self, HTTPStatus.NOT_FOUND, {"error": str(exc)})
                     return
-                text = str(doc.get("text", "") or "")
-                entity = str(doc.get("entity", "all"))
-                contract_type = str(doc.get("contract_type", "all"))
+                review_result = run_review_with_session(service, session_id)
+                entity = str((review_result.get("input") or {}).get("entity") or doc.get("entity") or "all") if isinstance(review_result, dict) else str(doc.get("entity", "all"))
+                contract_type = str((review_result.get("input") or {}).get("contract_type") or doc.get("contract_type") or "all") if isinstance(review_result, dict) else str(doc.get("contract_type", "all"))
                 filename = (doc.get("input") or {}).get("filename")
-                answers = doc.get("answers") if isinstance(doc.get("answers"), dict) else {}
-                law_cfg = load_law_api_config()
-                law_service = LawSearchService(cfg=law_cfg, cache=law_cache) if law_cfg.enabled and law_cfg.api_key else None
-                cfg = load_ai_config()
-                ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
-
-                bundle = build_clause_level_result(
-                    service=service,
-                    entity=entity,
-                    contract_type=contract_type,
-                    text=text,
-                    filename=str(filename) if isinstance(filename, str) else None,
-                    answers=answers,
-                    law_service=law_service,
-                    ai_provider=ai_provider,
-                    ai_model=cfg.model if ai_provider else None,
-                    ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                    ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
-                    ai_temperature=cfg.temperature if ai_provider else None,
-                    max_clause_law_items=2,
-                )
+                clause_results = review_result.get("clause_results") if isinstance(review_result, dict) else []
+                clause_meta = review_result.get("clause_meta") if isinstance(review_result, dict) else None
                 _json_response(
                     self,
                     HTTPStatus.OK,
                     {
                         "session_id": session_id,
                         "input": {"entity": entity, "contract_type": contract_type, "filename": filename},
-                        "review_summary": bundle.review.get("summary"),
-                        "revision": bundle.revision,
-                        "clause_results": bundle.clause_results,
-                        "meta": bundle.meta,
+                        "review_summary": (review_result.get("summary") if isinstance(review_result, dict) else None),
+                        "revision": {
+                            "summary": {"issue_clause_count": len(clause_results) if isinstance(clause_results, list) else 0},
+                            "items": [],
+                        },
+                        "clause_results": clause_results if isinstance(clause_results, list) else [],
+                        "meta": clause_meta if isinstance(clause_meta, dict) else {},
                     },
                 )
                 return
@@ -1250,6 +1308,7 @@ def create_handler(service: RuleQueryService):
                 entity = str(doc.get("entity", "all"))
                 contract_type = str(doc.get("contract_type", "all"))
                 filename = (doc.get("input") or {}).get("filename")
+                review_focus = (doc.get("input") or {}).get("review_focus")
                 text = str(doc.get("text", "") or "")
                 answers = doc.get("answers") if isinstance(doc.get("answers"), dict) else {}
                 ai_mode = str(body.get("ai_mode") or "auto").strip().lower()
@@ -1270,46 +1329,169 @@ def create_handler(service: RuleQueryService):
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "ai_mode=on but OPENAI_API_KEY is not configured"})
                     return
 
-                bundle = build_clause_level_result(
-                    service=service,
-                    entity=entity,
-                    contract_type=contract_type,
-                    text=text,
-                    filename=str(filename) if isinstance(filename, str) else None,
-                    answers=answers,
-                    law_service=law_service,
-                    ai_provider=ai_provider,
-                    ai_model=cfg.model if ai_provider else None,
-                    ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                    ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
-                    ai_temperature=cfg.temperature if ai_provider else None,
-                    max_clause_law_items=2,
-                )
-                if isinstance(bundle.meta, dict) and bundle.meta.get("docx_allowed") is False:
+                rebuild = body.get("rebuild") is True
+                review_result = doc.get("review_result")
+                if not (isinstance(review_result, dict) and isinstance(review_result.get("clause_results"), list)):
+                    if rebuild:
+                        review_result = run_review_with_session(service, session_id)
+                    else:
+                        _json_response(
+                            self,
+                            HTTPStatus.BAD_REQUEST,
+                            {"error": "missing canonical review_result in session (set rebuild=true to recompute)"},
+                        )
+                        return
+                elif rebuild:
+                    review_result = run_review_with_session(service, session_id)
+
+                clause_meta = review_result.get("clause_meta") if isinstance(review_result, dict) else None
+                if isinstance(clause_meta, dict) and clause_meta.get("docx_allowed") is False:
                     _json_response(
                         self,
                         HTTPStatus.BAD_REQUEST,
-                        {"error": "insufficient contract text for docx generation", "meta": bundle.meta},
+                        {"error": "insufficient contract text for docx generation", "meta": clause_meta},
                     )
                     return
-                original_clauses = [
-                    {
-                        "clause_id": c.clause_id,
-                        "article_number": c.article_number,
-                        "paragraph_number": c.paragraph_number,
-                        "item_number": c.item_number,
-                        "subitem_number": c.subitem_number,
-                        "display_path": c.display_path,
-                        "parent_clause_id": c.parent_clause_id,
-                        "context_text": c.context_text,
-                        "clause_title": c.title,
-                        "text": c.text,
-                    }
-                    for c in (bundle.clauses or [])
+                original_clauses = None
+                if isinstance(review_result, dict) and isinstance(review_result.get("original_clauses"), list):
+                    original_clauses = review_result.get("original_clauses")
+                if not isinstance(original_clauses, list):
+                    original_clauses = doc.get("original_clauses") if isinstance(doc.get("original_clauses"), list) else None
+                if not isinstance(original_clauses, list):
+                    original_clauses = [
+                        {
+                            "clause_id": c.clause_id,
+                            "article_number": c.article_number,
+                            "paragraph_number": c.paragraph_number,
+                            "item_number": c.item_number,
+                            "subitem_number": c.subitem_number,
+                            "display_path": c.display_path,
+                            "parent_clause_id": c.parent_clause_id,
+                            "context_text": c.context_text,
+                            "clause_title": c.title,
+                            "text": c.text,
+                        }
+                        for c in (extract_clauses(text)[0] or [])
+                    ]
+                clause_results_for_docx = review_result.get("clause_results") if isinstance(review_result, dict) else []
+                orig_ids = {str(c.get("clause_id") or "") for c in original_clauses if isinstance(c, dict)}
+                cr_ids = {str(c.get("clause_id") or "") for c in clause_results_for_docx if isinstance(c, dict)}
+                missing_in_original = sorted([cid for cid in cr_ids if cid and cid not in orig_ids])
+                if missing_in_original:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": "consistency_check_failed: clause_id missing in original_clauses", "missing_clause_ids": missing_in_original[:20]},
+                    )
+                    return
+                expected_changed = []
+                if isinstance(clause_meta, dict) and isinstance(clause_meta.get("changed_clause_ids"), list):
+                    expected_changed = [str(x) for x in clause_meta.get("changed_clause_ids") if isinstance(x, str) and x]
+                actual_changed = [
+                    str(cr.get("clause_id") or "")
+                    for cr in clause_results_for_docx
+                    if isinstance(cr, dict) and bool(cr.get("has_rewrite_change")) and str(cr.get("clause_id") or "")
                 ]
+                if expected_changed and set(expected_changed) != set(actual_changed):
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "error": "consistency_check_failed: changed_clause_ids mismatch (UI vs DOCX)",
+                            "expected_changed_clause_ids": expected_changed[:40],
+                            "actual_changed_clause_ids": actual_changed[:40],
+                        },
+                    )
+                    return
+
+                def _risk_tier_from_clause_result(cr: dict[str, Any]) -> str:
+                    if bool(cr.get("approval_required")) or bool(cr.get("high_risk")):
+                        return "HIGH"
+                    rt = cr.get("risk_tier")
+                    if isinstance(rt, str) and rt.strip().upper() in ("HIGH", "MEDIUM", "LOW"):
+                        return rt.strip().upper()
+                    return "MEDIUM" if bool(cr.get("unfavorable_to_us")) else "LOW"
+
+                def _ui_visible(cr: dict[str, Any]) -> bool:
+                    tier = str(cr.get("risk_tier") or "").strip().upper()
+                    if tier not in ("HIGH", "MEDIUM", "LOW"):
+                        tier = _risk_tier_from_clause_result(cr)
+                    return bool(
+                        cr.get("user_focus_hit")
+                        or cr.get("factual_hit")
+                        or cr.get("approval_required")
+                        or cr.get("high_risk")
+                        or tier in ("HIGH", "MEDIUM")
+                    )
+
+                def _docx_should_show(cr: dict[str, Any]) -> bool:
+                    tier = _risk_tier_from_clause_result(cr)
+                    if str(cr.get("display_kind") or "") in ("redline", "guidance", "keep"):
+                        return True
+                    if bool(cr.get("user_focus_hit")) or bool(cr.get("factual_hit")):
+                        return True
+                    if bool(cr.get("approval_required")) or bool(cr.get("high_risk")):
+                        return True
+                    if tier in ("HIGH", "MEDIUM"):
+                        return True
+                    if bool(cr.get("has_rewrite_change")):
+                        return True
+                    sr = cr.get("suggested_rewrite")
+                    if isinstance(sr, str) and sr.strip():
+                        return True
+                    return False
+
+                ui_ids = {
+                    str(cr.get("clause_id") or "")
+                    for cr in clause_results_for_docx
+                    if isinstance(cr, dict) and _ui_visible(cr) and str(cr.get("clause_id") or "")
+                }
+                docx_ids = {
+                    str(cr.get("clause_id") or "")
+                    for cr in clause_results_for_docx
+                    if isinstance(cr, dict) and _docx_should_show(cr) and str(cr.get("clause_id") or "")
+                }
+                missing_in_docx = sorted([cid for cid in ui_ids if cid not in docx_ids])
+                if missing_in_docx:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "error": "consistency_check_failed: UI-visible clause missing in DOCX",
+                            "missing_clause_ids": missing_in_docx[:30],
+                            "ui_visible_count": len(ui_ids),
+                            "docx_show_count": len(docx_ids),
+                        },
+                    )
+                    return
+                missing_rewrite = []
+                for cr in clause_results_for_docx:
+                    if not isinstance(cr, dict):
+                        continue
+                    cid = str(cr.get("clause_id") or "")
+                    if not cid or cid not in ui_ids:
+                        continue
+                    if bool(cr.get("keep_as_is")):
+                        continue
+                    tier = _risk_tier_from_clause_result(cr)
+                    if tier not in ("HIGH", "MEDIUM"):
+                        continue
+                    sr = cr.get("suggested_rewrite")
+                    if not (isinstance(sr, str) and sr.strip()):
+                        missing_rewrite.append(f"{cid}:{tier}")
+                if missing_rewrite:
+                    _json_response(
+                        self,
+                        HTTPStatus.BAD_REQUEST,
+                        {
+                            "error": "consistency_check_failed: missing suggested_rewrite for UI-visible clause",
+                            "missing": missing_rewrite[:40],
+                        },
+                    )
+                    return
                 detected_rule_ids = [
                     r.get("rule_id")
-                    for r in (bundle.review.get("matched_rules") or [])
+                    for r in (review_result.get("matched_rules") or [])
                     if isinstance(r, dict) and isinstance(r.get("rule_id"), str)
                 ]
                 contract_law_search = None
@@ -1320,12 +1502,12 @@ def create_handler(service: RuleQueryService):
                             entity=entity,
                             contract_type=contract_type,
                             text=text,
-                            matched_rules=bundle.review.get("matched_rules") if isinstance(bundle.review, dict) else None,
+                            matched_rules=review_result.get("matched_rules") if isinstance(review_result, dict) else None,
                             scope="contract",
                             max_per_type=2,
                             context={
-                                "review_posture": (bundle.meta.get("review_posture") if isinstance(bundle.meta, dict) else None),
-                                "party_role": (bundle.meta.get("party_role") if isinstance(bundle.meta, dict) else None),
+                                "review_posture": (clause_meta.get("review_posture") if isinstance(clause_meta, dict) else None),
+                                "party_role": (clause_meta.get("party_role") if isinstance(clause_meta, dict) else None),
                             },
                         )
                     except Exception:
@@ -1338,8 +1520,9 @@ def create_handler(service: RuleQueryService):
                     detected_rule_ids=detected_rule_ids,
                     law_topics=law_topics,
                     contract_text=text,
-                    clause_results=bundle.clause_results,
-                    max_questions=7,
+                    clause_results=review_result.get("clause_results") if isinstance(review_result, dict) else None,
+                    max_questions=5,
+                    review_focus=(review_focus if isinstance(review_focus, str) else None),
                 )
                 try:
                     docx_bytes = build_revision_docx(
@@ -1347,10 +1530,12 @@ def create_handler(service: RuleQueryService):
                         contract_type=contract_type,
                         filename=str(filename) if isinstance(filename, str) else None,
                         original_clauses=original_clauses,
-                        clause_results=bundle.clause_results,
-                        review_summary=(bundle.review.get("summary") if isinstance(bundle.review, dict) and isinstance(bundle.review.get("summary"), dict) else None),
+                        clause_results=clause_results_for_docx,
+                        review_summary=(review_result.get("summary") if isinstance(review_result, dict) and isinstance(review_result.get("summary"), dict) else None),
                         law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
                         questions=[question_to_dict(q) for q in qs],
+                        answers=(answers if isinstance(answers, dict) else None),
+                        final_review_context=(clause_meta.get("final_review_context") if isinstance(clause_meta, dict) else None),
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
@@ -1368,25 +1553,11 @@ def create_handler(service: RuleQueryService):
             original_clauses = body.get("original_clauses")
             meta = body.get("input") if isinstance(body.get("input"), dict) else {}
             if not isinstance(clause_results, list):
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "session_id or clause_results required"})
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "session_id is required for docx (or provide clause_results+original_clauses explicitly)"})
                 return
             if not isinstance(original_clauses, list):
-                if clause_results:
-                    original_clauses = [
-                        {
-                            "clause_id": str(cr.get("clause_id") or ""),
-                            "clause_title": str(cr.get("clause_title") or ""),
-                            "text": str(cr.get("original_text") or ""),
-                        }
-                        for cr in clause_results
-                        if isinstance(cr, dict)
-                    ]
-                else:
-                    contract_text = body.get("contract_text") or body.get("text") or ""
-                    if isinstance(contract_text, str) and contract_text.strip():
-                        original_clauses = [{"clause_id": "KR-000", "article_number": "", "clause_title": "(전체)", "text": contract_text}]
-                    else:
-                        original_clauses = []
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "original_clauses is required when session_id is not provided"})
+                return
             approx_text_len = sum(len(str(c.get("text") or "")) for c in original_clauses if isinstance(c, dict))
             if approx_text_len < 120:
                 _json_response(
@@ -1450,6 +1621,8 @@ def create_handler(service: RuleQueryService):
                     review_summary=(review.get("summary") if isinstance(review, dict) and isinstance(review.get("summary"), dict) else None),
                     law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
                     questions=[question_to_dict(q) for q in qs],
+                    answers=None,
+                    final_review_context=None,
                 )
             except Exception as exc:
                 _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
@@ -1483,6 +1656,7 @@ def create_handler(service: RuleQueryService):
                     text=text,
                     filename=filename,
                     answers=None,
+                    review_focus=(review_focus if isinstance(review_focus, str) else None),
                 )
             )
             law_search = None
@@ -1514,6 +1688,7 @@ def create_handler(service: RuleQueryService):
                 text=str(text),
                 filename=str(filename) if isinstance(filename, str) else None,
                 answers=None,
+                review_focus=(review_focus if isinstance(review_focus, str) else None),
                 law_service=None,
                 ai_provider=None,
                 ai_model=None,
@@ -1529,7 +1704,8 @@ def create_handler(service: RuleQueryService):
                 law_topics=law_topics,
                 contract_text=str(text),
                 clause_results=clause_bundle.clause_results,
-                max_questions=7,
+                max_questions=5,
+                review_focus=(review_focus if isinstance(review_focus, str) else None),
             )
             q_items = [question_to_dict(q) for q in questions]
             ai_meta: dict[str, Any] | None = None
@@ -1564,7 +1740,7 @@ def create_handler(service: RuleQueryService):
                         timeout_sec=cfg.timeout_sec,
                         max_tokens=min(cfg.max_tokens, 600),
                         temperature=cfg.temperature,
-                        max_questions=7,
+                            max_questions=5,
                     )
                 q_items, pol_meta = polish_questions(
                     provider=provider,
@@ -1577,13 +1753,28 @@ def create_handler(service: RuleQueryService):
                     temperature=cfg.temperature,
                 )
                 ai_meta = {"prioritize": pri_meta, "polish": pol_meta}
+            if isinstance(q_items, list):
+                q_items = q_items[:5]
+            session_doc = create_text_session(
+                entity=str(entity),
+                contract_type=str(contract_type),
+                filename=str(filename) if isinstance(filename, str) else None,
+                text=str(text or ""),
+                review_focus=(review_focus if isinstance(review_focus, str) else None),
+                extraction={"success": True, "method": "api_text"},
+                classification={"entity": str(entity), "contract_type": str(contract_type)},
+                detected_rule_ids=[str(x) for x in detected_rule_ids if isinstance(x, str)],
+                questions=list(q_items) if isinstance(q_items, list) else [],
+                source="questions_generate",
+            )
             _json_response(
                 self,
                 HTTPStatus.OK,
                 {
-                    "input": {"entity": entity, "contract_type": contract_type, "filename": filename},
+                    "input": {"entity": entity, "contract_type": contract_type, "filename": filename, "review_focus": (review_focus if isinstance(review_focus, str) else None)},
+                    "question_session_id": session_doc.get("session_id"),
                     "detected_rule_ids": detected_rule_ids,
-                    "count": len(questions),
+                    "count": len(q_items) if isinstance(q_items, list) else 0,
                     "questions": q_items,
                     "law_search": law_search,
                     "ai": ai_meta,
@@ -1921,6 +2112,7 @@ def create_handler(service: RuleQueryService):
                 filename = file_item.get("filename") or "uploaded"
                 entity = (fields.get("entity") or "").strip() or None
                 contract_type = (fields.get("contract_type") or "").strip() or None
+                review_focus = (fields.get("review_focus") or "").strip() or None
 
                 suffix = ""
                 if "." in filename:
@@ -1978,6 +2170,7 @@ def create_handler(service: RuleQueryService):
                             "contract_type_source": cls.contract_type_source,
                             "is_inferred": cls.is_inferred,
                         },
+                        review_focus=review_focus,
                         intake={},
                         source="upload",
                     )
@@ -2005,6 +2198,7 @@ def create_handler(service: RuleQueryService):
                             "question_session_id": session["session_id"],
                             "detected_rule_ids": session["detected_rule_ids"],
                             "questions": session["questions"],
+                            "review_focus": (review_focus or None),
                         },
                     )
             except Exception as exc:

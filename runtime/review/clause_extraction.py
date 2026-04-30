@@ -353,7 +353,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             head = (m.group(1) or "").strip()
             name = (m.group(2) or "").strip()
             rest = (m.group(3) or "").strip()
-            title = " ".join(x for x in [head, name, rest] if x).strip()
+            title = " ".join(x for x in [name, rest] if x).strip() or head
             titles[i] = title
             num = re.sub(r"[^\d의\s]", "", head)
             ids[i] = "KR-" + _normalize_clause_id(num)

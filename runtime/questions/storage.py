@@ -16,6 +16,7 @@ from runtime.law.search_service import LawSearchService
 from runtime.questions.generator import generate_questions
 from runtime.questions.model import question_to_dict
 from runtime.services.query_service import ReviewInput, RuleQueryService
+from runtime.review.clause_extraction import extract_clauses
 from runtime.review.clause_level import build_clause_level_result
 
 
@@ -71,6 +72,7 @@ def create_session(
     extraction: dict[str, Any],
     text: str,
     classification: dict[str, Any],
+    review_focus: str | None = None,
     intake: dict[str, Any] | None = None,
     source: str = "upload",
 ) -> dict[str, Any]:
@@ -81,6 +83,7 @@ def create_session(
         text=str(text),
         filename=str(filename) if isinstance(filename, str) else None,
         answers=None,
+        review_focus=review_focus,
         law_service=None,
         ai_provider=None,
         ai_model=None,
@@ -89,6 +92,21 @@ def create_session(
         ai_temperature=None,
         max_clause_law_items=0,
     )
+    original_clauses = [
+        {
+            "clause_id": c.clause_id,
+            "article_number": c.article_number,
+            "paragraph_number": c.paragraph_number,
+            "item_number": c.item_number,
+            "subitem_number": c.subitem_number,
+            "display_path": c.display_path,
+            "parent_clause_id": c.parent_clause_id,
+            "context_text": c.context_text,
+            "clause_title": c.title,
+            "text": c.text,
+        }
+        for c in (bundle.clauses or [])
+    ]
     pre = bundle.review
     detected_ids = [r.get("rule_id") for r in pre.get("matched_rules", []) if isinstance(r.get("rule_id"), str)]
     qs = generate_questions(
@@ -98,7 +116,8 @@ def create_session(
         law_topics=None,
         contract_text=text,
         clause_results=bundle.clause_results,
-        max_questions=7,
+        max_questions=5,
+        review_focus=review_focus,
     )
 
     now = _utc_now_iso()
@@ -109,7 +128,7 @@ def create_session(
         "updated_at": now,
         "rules_sha256": _rules_sha256(),
         "source": source,
-        "input": {"filename": filename},
+        "input": {"filename": filename, "review_focus": (review_focus or None)},
         "intake": dict(intake or {}),
         "extraction": dict(extraction),
         "classification": dict(classification),
@@ -117,9 +136,68 @@ def create_session(
         "questions": [question_to_dict(q) for q in qs],
         "answers": {},
         "review_result": None,
+        "original_clauses": original_clauses,
         "text": text,
         "entity": entity,
         "contract_type": contract_type,
+    }
+    save_session(doc)
+    return doc
+
+
+def create_text_session(
+    *,
+    entity: str,
+    contract_type: str,
+    filename: str | None,
+    text: str,
+    review_focus: str | None,
+    extraction: dict[str, Any] | None = None,
+    classification: dict[str, Any] | None = None,
+    detected_rule_ids: list[str] | None = None,
+    questions: list[dict[str, Any]] | None = None,
+    intake: dict[str, Any] | None = None,
+    source: str = "api_text",
+) -> dict[str, Any]:
+    now = _utc_now_iso()
+    session_id = uuid4().hex
+    clauses, _ = extract_clauses(str(text or ""))
+    original_clauses = [
+        {
+            "clause_id": c.clause_id,
+            "article_number": c.article_number,
+            "paragraph_number": c.paragraph_number,
+            "item_number": c.item_number,
+            "subitem_number": c.subitem_number,
+            "display_path": c.display_path,
+            "parent_clause_id": c.parent_clause_id,
+            "context_text": c.context_text,
+            "clause_title": c.title,
+            "text": c.text,
+        }
+        for c in (clauses or [])
+    ]
+    doc = {
+        "session_id": session_id,
+        "created_at": now,
+        "updated_at": now,
+        "rules_sha256": _rules_sha256(),
+        "source": source,
+        "input": {"filename": filename, "review_focus": (review_focus or None)},
+        "intake": dict(intake or {}),
+        "extraction": dict(extraction or {"success": True, "method": "api_text"}),
+        "classification": dict(classification or {"entity": entity, "contract_type": contract_type}),
+        "detected_rule_ids": [str(x) for x in (detected_rule_ids or []) if isinstance(x, str) and x.strip()],
+        "questions": list(questions or []),
+        "answers": {},
+        "review_result": None,
+        "review_result_sig": None,
+        "review_result_fast": None,
+        "review_result_fast_sig": None,
+        "original_clauses": original_clauses,
+        "text": str(text or ""),
+        "entity": str(entity or "all"),
+        "contract_type": str(contract_type or "all"),
     }
     save_session(doc)
     return doc
@@ -139,6 +217,7 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
     entity = doc.get("entity", "all")
     contract_type = doc.get("contract_type", "all")
     filename = (doc.get("input") or {}).get("filename")
+    review_focus = (doc.get("input") or {}).get("review_focus")
     answers = doc.get("answers") or {}
     base_sig = sha256(
         json.dumps(
@@ -148,6 +227,7 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
                 "filename": filename,
                 "text_sha256": sha256(str(text).encode("utf-8", errors="replace")).hexdigest(),
                 "answers": answers if isinstance(answers, dict) else {},
+                "review_focus": review_focus if isinstance(review_focus, str) else None,
                 "mode": "deep",
             },
             ensure_ascii=False,
@@ -168,6 +248,7 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
         text=str(text),
         filename=str(filename) if isinstance(filename, str) else None,
         answers=answers if isinstance(answers, dict) else None,
+        review_focus=review_focus if isinstance(review_focus, str) else None,
         law_service=law_service,
         ai_provider=ai_provider,
         ai_model=cfg.model if ai_provider else None,
@@ -179,6 +260,25 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
     result = dict(bundle.review)
     result["clause_results"] = bundle.clause_results
     result["clause_meta"] = bundle.meta
+    original_clauses = doc.get("original_clauses")
+    if not isinstance(original_clauses, list) or not original_clauses:
+        original_clauses = [
+            {
+                "clause_id": c.clause_id,
+                "article_number": c.article_number,
+                "paragraph_number": c.paragraph_number,
+                "item_number": c.item_number,
+                "subitem_number": c.subitem_number,
+                "display_path": c.display_path,
+                "parent_clause_id": c.parent_clause_id,
+                "context_text": c.context_text,
+                "clause_title": c.title,
+                "text": c.text,
+            }
+            for c in (bundle.clauses or [])
+        ]
+        doc["original_clauses"] = original_clauses
+    result["original_clauses"] = original_clauses
     meta_ai = (bundle.meta.get("ai") if isinstance(bundle.meta, dict) else None) if isinstance(bundle.meta, dict) else None
     ai_enabled = bool(ai_provider) and cfg.provider == "openai"
     ai_used = bool(isinstance(meta_ai, dict) and meta_ai.get("used"))
@@ -202,6 +302,7 @@ def run_review_with_session_fast(service: RuleQueryService, session_id: str) -> 
     entity = doc.get("entity", "all")
     contract_type = doc.get("contract_type", "all")
     filename = (doc.get("input") or {}).get("filename")
+    review_focus = (doc.get("input") or {}).get("review_focus")
     answers = doc.get("answers") or {}
     base_sig = sha256(
         json.dumps(
@@ -211,6 +312,7 @@ def run_review_with_session_fast(service: RuleQueryService, session_id: str) -> 
                 "filename": filename,
                 "text_sha256": sha256(str(text).encode("utf-8", errors="replace")).hexdigest(),
                 "answers": answers if isinstance(answers, dict) else {},
+                "review_focus": review_focus if isinstance(review_focus, str) else None,
                 "mode": "fast",
             },
             ensure_ascii=False,
@@ -227,6 +329,7 @@ def run_review_with_session_fast(service: RuleQueryService, session_id: str) -> 
         text=str(text),
         filename=str(filename) if isinstance(filename, str) else None,
         answers=answers if isinstance(answers, dict) else None,
+        review_focus=review_focus if isinstance(review_focus, str) else None,
         law_service=None,
         ai_provider=None,
         ai_model=None,
@@ -238,6 +341,25 @@ def run_review_with_session_fast(service: RuleQueryService, session_id: str) -> 
     result = dict(bundle.review)
     result["clause_results"] = bundle.clause_results
     result["clause_meta"] = bundle.meta
+    original_clauses = doc.get("original_clauses")
+    if not isinstance(original_clauses, list) or not original_clauses:
+        original_clauses = [
+            {
+                "clause_id": c.clause_id,
+                "article_number": c.article_number,
+                "paragraph_number": c.paragraph_number,
+                "item_number": c.item_number,
+                "subitem_number": c.subitem_number,
+                "display_path": c.display_path,
+                "parent_clause_id": c.parent_clause_id,
+                "context_text": c.context_text,
+                "clause_title": c.title,
+                "text": c.text,
+            }
+            for c in (bundle.clauses or [])
+        ]
+        doc["original_clauses"] = original_clauses
+    result["original_clauses"] = original_clauses
     result["law_search"] = {
         "enabled": False,
         "note": "fast_mode",

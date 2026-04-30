@@ -6,6 +6,7 @@ from typing import Any
 
 from runtime.review.party_role import PartyRole
 from runtime.review.korean_polish import polish_korean_legal_style
+from runtime.review.jurisdiction import classify_jurisdiction_profile
 
 
 @dataclass(frozen=True)
@@ -517,6 +518,7 @@ def propose_clause_specific_rewrite(
     applied_rules: list[dict[str, Any]],
     posture: str = "neutral",
     party: PartyRole | None = None,
+    contract_context: dict[str, Any] | None = None,
 ) -> RewriteProposal | None:
     text = _norm_ws(clause_text)
     if not text:
@@ -562,6 +564,18 @@ def propose_clause_specific_rewrite(
             p = _rewrite_app_010_data(text, posture=posture, party=party)
         elif rid == "APP-011":
             p = _rewrite_app_011_handover(text, posture=posture, party=party)
+        elif rid == "C-001":
+            p = _rewrite_c_001_settlement(text, posture=posture, party=party)
+        elif rid == "ACT-004":
+            jur = None
+            if isinstance(contract_context, dict):
+                j = contract_context.get("jurisdiction")
+                if isinstance(j, dict) and isinstance(j.get("kind"), str):
+                    jur = j
+            if jur is None:
+                jp = classify_jurisdiction_profile(text=str(contract_context.get("contract_text") if isinstance(contract_context, dict) else "") or text)
+                jur = jp.to_dict()
+            p = _rewrite_act_004_dispute(text, posture=posture, party=party, jur=jur)
 
         if p:
             proposals.append(p)
@@ -591,4 +605,57 @@ def propose_clause_specific_rewrite(
         rewrite_reason=polish_korean_legal_style(" / ".join(merged_reasons))[:900],
         reason_codes=merged_reason_codes,
     )
+
+
+def _rewrite_act_004_dispute(text: str, *, posture: str, party: PartyRole | None, jur: dict[str, object]) -> RewriteProposal | None:
+    original = _norm_ws(text)
+    if not original:
+        return None
+    kind = str(jur.get("kind") or "")
+    is_domestic = kind == "domestic_korea"
+    if not (re.search(r"(준거법|관할|재판|전속관할|합의관할|중재|조정|분쟁)", original) or re.search(r"(governing law|jurisdiction|arbitration)", original, flags=re.IGNORECASE)):
+        return None
+
+    our = "당사"
+    if party is not None:
+        our = "당사"
+
+    if is_domestic:
+        if ("민사소송법" in original and "관할" in original) or ("전속관할" in original) or ("합의관할" in original) or ("관할법원" in original):
+            return None
+        if ("서울중앙지방법원" in original and "전속" in original) or ("서울중앙지방법원" in original and "관할" in original):
+            return None
+        has_governing = bool(re.search(r"(대한민국\s*법률|준거법|governing\s+law)", original, flags=re.IGNORECASE))
+        venue_line = "본 계약과 관련하여 발생하는 분쟁에 관한 관할법원은 민사소송법 등 관련 법령에 따른 관할법원으로 한다."
+        if has_governing:
+            patched = _norm_ws(original + "\n" + venue_line)
+        else:
+            patched = _norm_ws(original + "\n" + venue_line)
+        reason = "국내 계약 분쟁조항은 ‘해외 집행’ 논리보다 관할(전속관할/합의관할/민사소송법상 관할) 구조를 중심으로 점검."
+        return RewriteProposal(suggested_rewrite=patched, rewrite_reason=reason, reason_codes=["ACT-004"])
+
+    has_governing = bool(re.search(r"(준거법|governing\s+law)", original, flags=re.IGNORECASE))
+    has_forum = bool(re.search(r"(전속관할|합의관할|관할\s*법원|jurisdiction|중재|arbitration)", original, flags=re.IGNORECASE))
+    if has_governing and has_forum:
+        return None
+    add = "준거법과 분쟁해결 방식(관할 또는 중재)을 명시한다.\n- 준거법: [협의한 법률]\n- 관할 또는 중재: [관할법원/중재기관·중재지]"
+    out = original + "\n" + add
+    reason = "해외 거래에서는 준거법·관할/중재를 명확히 하고 집행 가능성, 비용, 기간 리스크를 함께 고려한다."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["ACT-004"])
+
+
+def _rewrite_c_001_settlement(text: str, *, posture: str, party: PartyRole | None) -> RewriteProposal | None:
+    original = _norm_ws(text)
+    if not original:
+        return None
+    if not re.search(r"(정산|상계|공제|차감|대금|지급|invoice|세금계산서)", original, flags=re.IGNORECASE):
+        return None
+    if ("산식" in original or "정산기준" in original or "공제사유" in original or "증빙" in original) and ("기한" in original or "기간" in original):
+        return None
+    ins = "정산은 산식·정산주기·정산기한을 명시하고, 상계/공제는 사유를 제한적으로 열거하며, 증빙 요구는 목적·범위를 합리적으로 제한한다."
+    out = original
+    if ins not in out:
+        out = out + "\n" + ins
+    reason = "정산/상계/공제는 대금 분쟁의 핵심이므로 산식·사유·증빙·기한을 조항 본문 기준으로 명확화."
+    return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["C-001"])
 

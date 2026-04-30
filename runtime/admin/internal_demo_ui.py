@@ -80,7 +80,7 @@ INTERNAL_DEMO_HTML = """<!doctype html>
     .avatarSm { width: 22px; height: 22px; border-radius: 8px; border: 1px solid var(--line); background: #fff; }
 
     .qbox { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fff; }
-    .qtitle { font-weight: 900; }
+    .qtitle { font-weight: 900; white-space: pre-line; }
     .qdesc { margin-top: 4px; font-size: 12px; color: var(--muted); }
 
     .cards { display:grid; grid-template-columns: 1fr; gap: 10px; }
@@ -182,6 +182,11 @@ INTERNAL_DEMO_HTML = """<!doctype html>
           <div class="row" style="justify-content:space-between;">
             <h2 class="h2">검토 결과</h2>
             <span class="badge badgeBlue"><img class="avatarSm" src="/static/aouribot.png" alt="aouribot" /><span id="resultCopy">아직 검토 전이에요</span></span>
+          </div>
+          <div class="row" id="progressRow" style="margin-top:10px; display:none;">
+            <span class="badge badgeBlue" id="progressStage">진행: -</span>
+            <span class="badge" id="progressEta">남은 시간: -</span>
+            <span class="badge" id="progressElapsed">경과: 0s</span>
           </div>
           <div class="cards">
             <div class="card mini">
@@ -290,6 +295,42 @@ INTERNAL_DEMO_HTML = """<!doctype html>
   <script>
     let lastReview = null;
     let lastQuestions = [];
+    let analyzeState = { active:false, startedAt:0, expectedTotalSec:40, timer:null };
+
+    function showProgress(show) {
+      document.getElementById('progressRow').style.display = show ? 'flex' : 'none';
+    }
+
+    function _sec(n) {
+      const x = Math.max(0, Math.round(Number(n || 0)));
+      return `${x}s`;
+    }
+
+    function startProgress(stage, expectedTotalSec) {
+      analyzeState.active = true;
+      analyzeState.startedAt = Date.now();
+      analyzeState.expectedTotalSec = Math.max(20, Math.min(60, Number(expectedTotalSec || 40)));
+      showProgress(true);
+      document.getElementById('progressStage').innerText = `진행: ${stage || '-'}`;
+      if (analyzeState.timer) clearInterval(analyzeState.timer);
+      analyzeState.timer = setInterval(() => {
+        if (!analyzeState.active) return;
+        const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
+        const remain = Math.max(0, analyzeState.expectedTotalSec - elapsed);
+        document.getElementById('progressElapsed').innerText = `경과: ${_sec(elapsed)}`;
+        document.getElementById('progressEta').innerText = `남은 시간: 약 ${_sec(remain)}`;
+      }, 250);
+    }
+
+    function setProgressStage(stage) {
+      document.getElementById('progressStage').innerText = `진행: ${stage || '-'}`;
+    }
+
+    function stopProgress() {
+      analyzeState.active = false;
+      if (analyzeState.timer) clearInterval(analyzeState.timer);
+      analyzeState.timer = null;
+    }
 
     function switchTab(name) {
       for (const id of ['Summary','Revision','Draft']) {
@@ -303,6 +344,38 @@ INTERNAL_DEMO_HTML = """<!doctype html>
 
     function escapeHtml(s) {
       return (s || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+    }
+
+    function cleanClauseTitle(it) {
+      const dp0 = String((it && (it.display_path || it.clause_id)) || '').trim();
+      let t0 = String((it && it.clause_title) || '').trim();
+      if (dp0 && t0 && t0.startsWith(dp0 + ' ')) t0 = t0.slice(dp0.length).trim();
+      if (dp0 && t0 && t0.startsWith(dp0)) t0 = t0.slice(dp0.length).trim();
+      if (dp0 && t0) {
+        const first = t0.split(' ')[0] || '';
+        const isKrTok = (/^제\\s*\\d{1,4}\\s*조$/.test(first) || /^제\\s*\\d{1,4}\\s*항$/.test(first) || /^\\d{1,4}\\s*호$/.test(first) || /^[가-하]\\s*목$/.test(first));
+        if (isKrTok && dp0.includes(first)) t0 = t0.slice(first.length).trim();
+      }
+      if (t0.startsWith('[') && t0.endsWith(']')) t0 = t0.slice(1, -1).trim();
+      return t0;
+    }
+
+    function formatClauseLabel(it) {
+      const title = cleanClauseTitle(it);
+      const a = String((it && it.article_number) || '').trim();
+      const p = String((it && it.paragraph_number) || '').trim();
+      const i = String((it && it.item_number) || '').trim();
+      const s = String((it && it.subitem_number) || '').trim();
+      const lines = [];
+      if (a) lines.push(`제${a}조${title ? ` [${title}]` : ''}`);
+      else {
+        const dp0 = String((it && (it.display_path || it.clause_id)) || '').trim();
+        lines.push((dp0 ? (dp0 + (title ? ` [${title}]` : '')) : (title || '조항')).trim());
+      }
+      if (p) lines.push(`제${p}항`);
+      if (i) lines.push(`제${i}호`);
+      if (s) lines.push(`${s}목`);
+      return lines.join('\\n');
     }
 
     function getBasePayload() {
@@ -396,12 +469,38 @@ INTERNAL_DEMO_HTML = """<!doctype html>
     async function runAnalyzeWithAnswers(answers) {
       const payload = getBasePayload();
       payload.answers = answers || {};
-      const res = await fetch('/api/review/analyze', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
-      const data = await res.json();
-      lastReview = data;
-      document.getElementById('out').innerText = JSON.stringify(data, null, 2);
-      renderSummary(data);
-      return data;
+      document.getElementById('resultCopy').innerText = '좋아요. 이제 검토 결과를 정리해볼게요.';
+      startProgress('규칙 분석', 40);
+
+      const fastRes = await fetch('/api/review/analyze_fast', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
+      const fast = await fastRes.json();
+      lastReview = fast;
+      document.getElementById('out').innerText = JSON.stringify(fast, null, 2);
+      renderSummary(fast);
+
+      const meta = (fast && fast.clause_meta) ? fast.clause_meta : {};
+      const clauseCount = Number(meta.clause_count || 0) || (Array.isArray(fast && fast.clause_results) ? fast.clause_results.length : 0);
+      const textLen = Number(meta.text_length || 0) || (String(payload.text || '').length);
+      analyzeState.expectedTotalSec = Math.max(20, Math.min(60, 18 + Math.round(clauseCount * 2.1) + (textLen > 9000 ? 10 : 0)));
+
+      setProgressStage('법령/AI 정밀 검토');
+      fetch('/api/review/analyze_deep', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) })
+        .then(r => r.json())
+        .then(deep => {
+          lastReview = deep;
+          document.getElementById('out').innerText = JSON.stringify(deep, null, 2);
+          renderSummary(deep);
+          document.getElementById('resultCopy').innerText = '검토가 완료되었어요';
+          setProgressStage('완료');
+          stopProgress();
+        })
+        .catch(() => {
+          document.getElementById('resultCopy').innerText = '정밀 검토 중 오류가 발생했어요. 재시도해 주세요.';
+          setProgressStage('오류');
+          stopProgress();
+        });
+
+      return fast;
     }
 
     async function runAnalyze() {
@@ -449,7 +548,7 @@ INTERNAL_DEMO_HTML = """<!doctype html>
         const tags = [];
         if (it.high_risk) tags.push('HIGH_RISK');
         if (it.approval_required) tags.push('APPROVAL_REQUIRED');
-        box.innerHTML = `<div class="row" style="justify-content:space-between;"><div class="qtitle">${escapeHtml(it.clause_title || it.clause_id)}</div><div class="muted small">${tags.join(' ')}</div></div>`;
+        box.innerHTML = `<div class="row" style="justify-content:space-between;"><div class="qtitle">${escapeHtml(formatClauseLabel(it))}</div><div class="muted small">${tags.join(' ')}</div></div>`;
         const pre = document.createElement('pre');
         pre.innerText = it.original_clause || '';
         box.appendChild(pre);

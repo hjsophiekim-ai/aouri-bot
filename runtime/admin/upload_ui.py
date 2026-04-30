@@ -29,6 +29,9 @@ UPLOAD_HTML = """<!doctype html>
       <input id="entity" placeholder="entity (비우면 자동추정)" />
       <input id="contractType" placeholder="contract_type (비우면 자동추정)" />
     </div>
+    <div class="row">
+      <textarea id="reviewFocus" placeholder="중점 검토 내용(예: 대리점법상 불이익제공/경영간섭/비용전가/해지 남용 등)"></textarea>
+    </div>
     <div class="muted warn">entity/contract_type을 비우면 텍스트+파일명 기반으로 추정합니다(정확도 제한).</div>
   </div>
 
@@ -83,6 +86,7 @@ UPLOAD_HTML = """<!doctype html>
       fd.append('file', f);
       fd.append('entity', document.getElementById('entity').value || '');
       fd.append('contract_type', document.getElementById('contractType').value || '');
+      fd.append('review_focus', document.getElementById('reviewFocus').value || '');
 
       const res = await fetch('/api/upload', { method: 'POST', body: fd });
       const data = await res.json();
