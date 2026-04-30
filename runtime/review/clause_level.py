@@ -454,7 +454,6 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
             continue
         # 이미 1차 dedup에서 처리된 항목은 재처리하지 않음 (멱등성)
         if bool(cr.get("dedup_suppressed")) or bool(cr.get("article_review_anchor")):
-            # 이미 suppressed된 항목은 seen_rewrites에만 등록
             sr_existing = cr.get("suggested_rewrite")
             if isinstance(sr_existing, str) and sr_existing.strip():
                 seen_rewrites.append(_norm_for_sim(sr_existing))
@@ -466,26 +465,82 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
 
     # 포괄적 리스크 범주 (개별 항마다 반복 금지 대상)
     _BROAD_RISK_TOPICS = {
-        "dealer_unfair",
-        "cost_burden",
-        "payment_settlement",
-        "termination",
-        "personal_data",
-        "safety",
+        "dealer_unfair", "cost_burden", "payment_settlement",
+        "termination", "personal_data", "safety",
     }
     _BROAD_RISK_CODES = {
-        "RISK-006", "RISK-005", "RISK-002", "RISK-001",
-        "DEALER-001", "C-001",
+        "RISK-006", "RISK-005", "RISK-002", "RISK-001", "DEALER-001", "C-001",
     }
 
+    # 조 제목 기반 topic 추론 (항 본문 키워드가 없어도 조 제목으로 판단)
+    _TITLE_TOPIC_MAP: list[tuple[list[str], str]] = [
+        (["불공정행위", "불공정 행위", "각종 불공정", "불이익 제공", "거래상 지위", "경영간섭"], "dealer_unfair"),
+        (["비용", "판촉비", "광고비", "반품비", "원상회복", "비용분담", "비용 부담"], "cost_burden"),
+        (["정산", "상계", "공제", "대금", "지급"], "payment_settlement"),
+        (["해지", "계약해지", "종료", "중도해지"], "termination"),
+        (["개인정보", "정보보호", "처리위탁"], "personal_data"),
+        (["안전", "산업안전", "중대재해"], "safety"),
+    ]
+
+    def _infer_topic_from_title(title: str) -> str | None:
+        t = (title or "").strip()
+        if not t:
+            return None
+        for keywords, topic in _TITLE_TOPIC_MAP:
+            if any(k in t for k in keywords):
+                return topic
+        return None
+
+    def _suppress_secondary(
+        cr: dict[str, Any],
+        anchor: dict[str, Any],
+        an: str,
+        anchor_pn: str,
+        anchor_dp: str,
+    ) -> None:
+        """secondary 항목을 suppressed 처리하고 참조 메시지를 설정한다."""
+        pn_ref = anchor_pn if anchor_pn else anchor_dp
+        cr["suggested_rewrite"] = None
+        old_reason = str(cr.get("rewrite_reason") or "").strip()
+        ref_msg = (
+            f"위 제{pn_ref}항의 수정안과 동일한 리스크가 존재하므로 통합 관리 필요. "
+            f"(제{an}조 전체를 [Article Review] 기준으로 검토하십시오.)"
+        )
+        cr["rewrite_reason"] = (old_reason + " / " + ref_msg).strip(" / ") if old_reason else ref_msg
+        cr["article_review_ref"] = anchor.get("clause_id") or anchor_dp
+        cr["dedup_suppressed"] = True
+        cr["changed_segments"] = []
+
     for an, group in article_groups.items():
+        if not group:
+            continue
+
+        # ── 조 제목 기반 topic 통일 ──────────────────────────────────────────
+        group_titles = [str(cr.get("clause_title") or "") for cr in group]
+        dominant_title = group_titles[0] if group_titles else ""
+        title_topic = _infer_topic_from_title(dominant_title)
+
+        # ── 지침 1: 동일 조 내 리스크 동일성 판단 ──────────────────────────
+        group_risk_codes: set[str] = set()
+        group_topics: set[str] = set()
+        for cr in group:
+            for ar in (cr.get("applied_rules") or []):
+                if isinstance(ar, dict) and isinstance(ar.get("rule_id"), str):
+                    group_risk_codes.add(str(ar["rule_id"]))
+            t = str(cr.get("clause_topic") or "")
+            if t and t != "other":
+                group_topics.add(t)
+        if title_topic:
+            group_topics.add(title_topic)
+
+        has_broad_risk = bool(group_risk_codes & _BROAD_RISK_CODES) or bool(group_topics & _BROAD_RISK_TOPICS)
+
+        # ── 단일 항: 중복 검사만 적용 ────────────────────────────────────────
         if len(group) < 2:
-            # 단일 항: 중복 검사만 적용
             cr = group[0]
             sr = cr.get("suggested_rewrite")
             if isinstance(sr, str) and sr.strip():
                 if _is_duplicate_rewrite(sr):
-                    # 인라인 수정으로 전환
                     ot = str(cr.get("original_text") or "")
                     cr["suggested_rewrite"] = _to_inline_rewrite(ot, sr)
                     cr["rewrite_reason"] = (
@@ -496,22 +551,7 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
                     seen_rewrites.append(_norm_for_sim(sr))
             continue
 
-        # ── 지침 1: 동일 조 내 리스크 동일성 판단 ──────────────────────────
-        # 각 항의 risk_codes, clause_topic 수집
-        group_risk_codes: set[str] = set()
-        group_topics: set[str] = set()
-        for cr in group:
-            for ar in (cr.get("applied_rules") or []):
-                if isinstance(ar, dict) and isinstance(ar.get("rule_id"), str):
-                    group_risk_codes.add(str(ar["rule_id"]))
-            t = str(cr.get("clause_topic") or "")
-            if t:
-                group_topics.add(t)
-
-        has_broad_risk = bool(group_risk_codes & _BROAD_RISK_CODES) or bool(group_topics & _BROAD_RISK_TOPICS)
-
         # ── 지침 2: 대표 항(anchor) 선정 ────────────────────────────────────
-        # 우선순위: approval_required > high_risk > risk_tier HIGH > must_fix > 첫 번째 항
         def _anchor_score(cr: dict[str, Any]) -> int:
             s = 0
             if bool(cr.get("approval_required")):
@@ -529,7 +569,7 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
                 s += 20
             pn = str(cr.get("paragraph_number") or "")
             if pn.isdigit():
-                s -= int(pn)  # 낮은 항 번호 우선
+                s -= int(pn)
             return s
 
         sorted_group = sorted(group, key=lambda x: -_anchor_score(x))
@@ -549,7 +589,6 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
             else:
                 seen_rewrites.append(_norm_for_sim(anchor_sr))
 
-        # anchor에 article_review_anchor 마킹
         anchor["article_review_anchor"] = True
         anchor_pn = str(anchor.get("paragraph_number") or "")
         anchor_dp = str(anchor.get("display_path") or anchor.get("clause_id") or "")
@@ -568,32 +607,20 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
             anchor["article_review_comment"] = article_review_comment
 
         # ── 지침 2: 나머지 항(secondary) 처리 ──────────────────────────────
+        anchor_sr_norm = _norm_for_sim(str(anchor.get("suggested_rewrite") or ""))
+        anchor_rr_norm = _norm_for_sim(str(anchor.get("rewrite_reason") or ""))
+
         for cr in secondaries:
             cr_sr = cr.get("suggested_rewrite")
-            if not (isinstance(cr_sr, str) and cr_sr.strip()):
-                continue
+            cr_rr = str(cr.get("rewrite_reason") or "")
 
-            # 중복 검사: anchor와 80% 이상 유사하면 참조 메시지로 대체
-            anchor_norm = _norm_for_sim(str(anchor.get("suggested_rewrite") or ""))
-            cr_norm = _norm_for_sim(cr_sr)
-            sim = _sim_ratio(anchor_norm, cr_norm)
-
-            if sim >= 0.80:
-                # 지침 2: 참조 메시지로 대체
-                pn_ref = anchor_pn if anchor_pn else anchor_dp
-                cr["suggested_rewrite"] = None
-                old_reason = str(cr.get("rewrite_reason") or "").strip()
-                ref_msg = (
-                    f"위 제{pn_ref}항의 수정안과 동일한 리스크가 존재하므로 통합 관리 필요. "
-                    f"({an}조 전체를 [Article Review] 기준으로 검토하십시오.)"
-                )
-                cr["rewrite_reason"] = (old_reason + " / " + ref_msg).strip(" / ") if old_reason else ref_msg
-                cr["article_review_ref"] = anchor.get("clause_id") or anchor_dp
-                cr["dedup_suppressed"] = True
-                cr["changed_segments"] = []
-            else:
-                # 유사도 낮음: 독립 수정안 유지하되 전역 중복 검사 적용
-                if _is_duplicate_rewrite(cr_sr):
+            # 케이스 A: suggested_rewrite가 있는 경우
+            if isinstance(cr_sr, str) and cr_sr.strip():
+                cr_norm = _norm_for_sim(cr_sr)
+                sim_sr = _sim_ratio(anchor_sr_norm, cr_norm) if anchor_sr_norm else 0.0
+                if sim_sr >= 0.80:
+                    _suppress_secondary(cr, anchor, an, anchor_pn, anchor_dp)
+                elif _is_duplicate_rewrite(cr_sr):
                     ot = str(cr.get("original_text") or "")
                     cr["suggested_rewrite"] = _to_inline_rewrite(ot, cr_sr)
                     cr["rewrite_reason"] = (
@@ -602,6 +629,18 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
                     cr["dedup_inline"] = True
                 else:
                     seen_rewrites.append(_norm_for_sim(cr_sr))
+
+            # 케이스 B: suggested_rewrite 없지만 rewrite_reason이 anchor와 유사
+            elif cr_rr.strip() and anchor_rr_norm:
+                sim_rr = _sim_ratio(anchor_rr_norm, _norm_for_sim(cr_rr))
+                if sim_rr >= 0.75:
+                    _suppress_secondary(cr, anchor, an, anchor_pn, anchor_dp)
+
+            # 케이스 C: 같은 조, broad_risk 범주, suggested_rewrite/reason 모두 없음
+            # → 조 제목이 포괄적 리스크 범주이면 무조건 참조 메시지 추가
+            elif has_broad_risk and title_topic:
+                _suppress_secondary(cr, anchor, an, anchor_pn, anchor_dp)
+
 def _article_int(v: Any) -> int | None:
     s = str(v or "").strip()
     if not s:
