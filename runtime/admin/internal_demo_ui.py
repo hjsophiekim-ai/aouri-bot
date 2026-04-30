@@ -309,16 +309,23 @@ INTERNAL_DEMO_HTML = """<!doctype html>
     function startProgress(stage, expectedTotalSec) {
       analyzeState.active = true;
       analyzeState.startedAt = Date.now();
-      analyzeState.expectedTotalSec = Math.max(20, Math.min(60, Number(expectedTotalSec || 40)));
+      analyzeState.expectedTotalSec = Math.max(20, Math.min(180, Number(expectedTotalSec || 60)));
       showProgress(true);
       document.getElementById('progressStage').innerText = `진행: ${stage || '-'}`;
       if (analyzeState.timer) clearInterval(analyzeState.timer);
       analyzeState.timer = setInterval(() => {
         if (!analyzeState.active) return;
         const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
+        // 남은 시간이 경과 시간을 따라가도록 동적 연장
+        if (elapsed > analyzeState.expectedTotalSec * 0.9) {
+          analyzeState.expectedTotalSec = Math.ceil(elapsed * 1.3 + 10);
+        }
         const remain = Math.max(0, analyzeState.expectedTotalSec - elapsed);
         document.getElementById('progressElapsed').innerText = `경과: ${_sec(elapsed)}`;
-        document.getElementById('progressEta').innerText = `남은 시간: 약 ${_sec(remain)}`;
+        // 남은 시간이 0이 되어도 완료 전이면 "처리 중..." 표시
+        document.getElementById('progressEta').innerText = remain <= 0
+          ? '남은 시간: 처리 중...'
+          : `남은 시간: 약 ${_sec(remain)}`;
       }, 250);
     }
 
@@ -481,7 +488,7 @@ INTERNAL_DEMO_HTML = """<!doctype html>
       const meta = (fast && fast.clause_meta) ? fast.clause_meta : {};
       const clauseCount = Number(meta.clause_count || 0) || (Array.isArray(fast && fast.clause_results) ? fast.clause_results.length : 0);
       const textLen = Number(meta.text_length || 0) || (String(payload.text || '').length);
-      analyzeState.expectedTotalSec = Math.max(20, Math.min(60, 18 + Math.round(clauseCount * 2.1) + (textLen > 9000 ? 10 : 0)));
+      analyzeState.expectedTotalSec = Math.max(20, Math.min(180, 18 + Math.round(clauseCount * 2.1) + (textLen > 9000 ? 15 : 0)));
 
       setProgressStage('법령/AI 정밀 검토');
       fetch('/api/review/analyze_deep', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) })

@@ -763,6 +763,7 @@ def create_handler(service: RuleQueryService):
                 _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "ai_mode=on but OPENAI_API_KEY is not configured"})
                 return
 
+            _deep_t0 = time.perf_counter()
             bundle = build_clause_level_result(
                 service=service,
                 entity=str(entity),
@@ -774,15 +775,16 @@ def create_handler(service: RuleQueryService):
                 law_service=law_service,
                 ai_provider=ai_provider,
                 ai_model=cfg.model if ai_provider else None,
-                ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                ai_max_tokens=min(max(cfg.max_tokens, 1800), 2800) if ai_provider else None,
+                ai_timeout_sec=min(cfg.timeout_sec, 45.0) if ai_provider else None,
+                ai_max_tokens=min(max(cfg.max_tokens, 1200), 2000) if ai_provider else None,
                 ai_temperature=cfg.temperature if ai_provider else None,
-                max_clause_law_items=2,
+                max_clause_law_items=1,
             )
             result = dict(bundle.review)
             result["mode"] = "deep"
             result["clause_results"] = bundle.clause_results
             result["clause_meta"] = bundle.meta
+            result["review_elapsed_sec"] = round(time.perf_counter() - _deep_t0, 2)
             if law_service is not None:
                 try:
                     result["law_search"] = law_service.search_for_review(
@@ -792,7 +794,7 @@ def create_handler(service: RuleQueryService):
                         matched_rules=(bundle.review.get("matched_rules") if isinstance(bundle.review, dict) else None),
                         scope="contract",
                         max_per_type=2,
-                        time_budget_sec=3.0,
+                        time_budget_sec=2.0,
                         context={
                             "review_posture": (bundle.meta.get("review_posture") if isinstance(bundle.meta, dict) else None),
                             "party_role": (bundle.meta.get("party_role") if isinstance(bundle.meta, dict) else None),

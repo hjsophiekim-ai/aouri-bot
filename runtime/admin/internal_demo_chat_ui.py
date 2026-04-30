@@ -481,6 +481,10 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
     function _computeEtaSec() {
       const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
+      // expectedTotalSec이 실제 경과보다 작아지면 동적으로 연장
+      if (elapsed > analyzeState.expectedTotalSec * 0.9 && !analyzeState.deepDone) {
+        analyzeState.expectedTotalSec = Math.ceil(elapsed * 1.3 + 10);
+      }
       const remain = Math.max(0, analyzeState.expectedTotalSec - elapsed);
       return Math.round(remain);
     }
@@ -488,7 +492,11 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     function updateAnalyzeHeader() {
       const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
       const stepText = `진행 ${Math.min(analyzeState.stageIndex + 1, 5)}/5`;
-      const etaText = `남은 시간: 약 ${_sec(_computeEtaSec())}`;
+      const etaSec = _computeEtaSec();
+      // 남은 시간이 0이 되어도 완료 전이면 "처리 중..." 표시
+      const etaText = (!analyzeState.deepDone && etaSec <= 0)
+        ? '남은 시간: 처리 중...'
+        : `남은 시간: 약 ${_sec(etaSec)}`;
       const elapsedText = `경과: ${_sec(elapsed)}`;
       for (const id of ['analyzeElapsedBadge', 'resultAnalyzeElapsedBadge']) {
         const el = document.getElementById(id);
@@ -537,7 +545,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       analyzeState.lastError = null;
       analyzeState.retryFn = null;
       analyzeState.startedAt = Date.now();
-      analyzeState.expectedTotalSec = Math.max(20, Math.min(60, Number(expectedTotalSec || 40)));
+      analyzeState.expectedTotalSec = Math.max(20, Math.min(180, Number(expectedTotalSec || 60)));
       renderAnalyzeSteps();
       showAnalyzePanel(true);
       for (const id of ['btnCancelAnalyze', 'btnCancelAnalyze2']) {
@@ -811,7 +819,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const meta = (reviewResult && reviewResult.clause_meta) ? reviewResult.clause_meta : {};
         const clauseCount = Number(meta.clause_count || 0) || (Array.isArray(reviewResult && reviewResult.clause_results) ? reviewResult.clause_results.length : 0);
         const textLen = Number(meta.text_length || 0) || (String(analyzePayload.text || '').length);
-        const expected = Math.max(20, Math.min(60, 18 + Math.round(clauseCount * 2.1) + (textLen > 9000 ? 10 : 0)));
+        const expected = Math.max(20, Math.min(180, 18 + Math.round(clauseCount * 2.1) + (textLen > 9000 ? 15 : 0)));
         analyzeState.expectedTotalSec = expected;
 
         showStage('stageResult');
@@ -857,6 +865,12 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
             reviewResult = deepResult;
             analyzeState.deepDone = true;
+            // 실제 서버 소요 시간으로 expectedTotalSec 보정 (타이머 정확도 향상)
+            if (deepResult && typeof deepResult.review_elapsed_sec === 'number') {
+              const actualSec = deepResult.review_elapsed_sec;
+              const elapsed = (Date.now() - analyzeState.startedAt) / 1000.0;
+              analyzeState.expectedTotalSec = Math.ceil(Math.max(elapsed, actualSec) + 1);
+            }
             revisionResult = {
               revision: { summary: { issue_clause_count: Number((deepResult.clause_meta || {}).issue_clause_count || 0) } },
               clause_results: Array.isArray(deepResult.clause_results) ? deepResult.clause_results : [],

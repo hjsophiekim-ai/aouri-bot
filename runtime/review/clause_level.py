@@ -397,6 +397,7 @@ def _build_article_review_comment(
 def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]]) -> None:
     """
     [반복 코멘트 생성 방지] 4가지 지침을 clause_results에 적용한다.
+    이미 dedup_suppressed=True인 항목은 재처리하지 않는다(멱등성 보장).
 
     지침 1. 조(Article) 단위 통합 판단
         - 같은 조(article_number) 내 여러 항이 동일 핵심 리스크를 가지면
@@ -446,10 +447,17 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
         return (original_text.rstrip() + inline_note).strip()
 
     # ── 지침 1·2·4: 조 단위 그룹화 ─────────────────────────────────────────
-    # article_number 기준으로 그룹화
+    # article_number 기준으로 그룹화 (이미 suppressed된 항목은 제외)
     article_groups: dict[str, list[dict[str, Any]]] = {}
     for cr in clause_results:
         if not isinstance(cr, dict):
+            continue
+        # 이미 1차 dedup에서 처리된 항목은 재처리하지 않음 (멱등성)
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("article_review_anchor")):
+            # 이미 suppressed된 항목은 seen_rewrites에만 등록
+            sr_existing = cr.get("suggested_rewrite")
+            if isinstance(sr_existing, str) and sr_existing.strip():
+                seen_rewrites.append(_norm_for_sim(sr_existing))
             continue
         an = str(cr.get("article_number") or "").strip()
         if not an:
@@ -1346,7 +1354,15 @@ def build_clause_level_result(
     shortlist_target = min(len(scored_for_ai), max(12, int(desired)))
     deep_review_shortlist = scored_for_ai[: max(0, shortlist_target)]
     deep_review_shortlist_ids = [str(cr.get("clause_id") or "") for cr in deep_review_shortlist if str(cr.get("clause_id") or "")]
+    # -----------------------------------------------------------------------
+    # [반복 코멘트 생성 방지] 1차 dedup: AI shortlist 구성 전에 미리 적용
+    # → AI가 dedup_suppressed 항목에 새 rewrite를 생성하지 않도록 사전 차단
+    # -----------------------------------------------------------------------
+    _apply_article_dedup_and_consolidation(clause_results)
+
     selected = deep_review_shortlist[: max(0, desired)]
+    # dedup_suppressed 항목은 AI 처리 대상에서 제외
+    selected = [cr for cr in selected if not bool(cr.get("dedup_suppressed"))]
     selected_ids = [str(cr.get("clause_id") or "") for cr in selected if str(cr.get("clause_id") or "")]
     selected_id_set = set(selected_ids)
     for cr in clause_results:
@@ -1535,6 +1551,9 @@ def build_clause_level_result(
                     cid = cr.get("clause_id")
                     upd = by_id.get(cid) if isinstance(cid, str) else None
                     if not upd:
+                        continue
+                    # dedup_suppressed 항목은 AI 수정안을 적용하지 않는다
+                    if bool(cr.get("dedup_suppressed")):
                         continue
                     rr = upd.get("rewrite_reason")
                     sr = upd.get("suggested_rewrite")
@@ -1759,11 +1778,9 @@ def build_clause_level_result(
             cr["review_tier"] = "NOTE"
 
     # -----------------------------------------------------------------------
-    # [반복 코멘트 생성 방지] 4가지 지침 적용
-    # 1. 조(Article) 단위 통합 판단
-    # 2. 대표 항 지정 (나머지 항은 참조 메시지로 대체)
-    # 3. 중복 검사(De-duplication): suggested_rewrite 80% 이상 유사 시 인라인 수정
-    # 4. 리스크 범주화: 포괄적 내용은 [Article Review] 섹션으로 통합
+    # [반복 코멘트 생성 방지] 2차 dedup: AI 처리 후 재적용
+    # → AI가 새로 생성한 rewrite 중 중복/유사 항목을 최종 정리
+    # → 이미 suppressed된 항목은 멱등성 보장으로 재처리하지 않음
     # -----------------------------------------------------------------------
     _apply_article_dedup_and_consolidation(clause_results)
 
