@@ -151,11 +151,21 @@ def suggest_revisions(
         recommended_rewrite = proposal.suggested_rewrite if proposal else None
         rewrite_reason = proposal.rewrite_reason if proposal else None
         reason_codes = proposal.reason_codes if proposal else []
+        changed_segments = list(proposal.changed_segments) if proposal and proposal.changed_segments else []
         rewrite_topics = infer_rewrite_topics(rewrite_text=recommended_rewrite, reason_codes=reason_codes)
         if recommended_rewrite and not is_topic_compatible(clause_topic=clause_topic, rewrite_topics=rewrite_topics):
             recommended_rewrite = None
+            changed_segments = []
             if not (isinstance(rewrite_reason, str) and rewrite_reason.strip()):
                 rewrite_reason = "조항 주제와 무관한 수정문안은 제외(guardrail)."
+
+        # risk_tier 산정: HIGH / MEDIUM / LOW
+        from runtime.review.rewrite_engine import _infer_risk_tier
+        risk_tier = _infer_risk_tier(
+            reason_codes=reason_codes,
+            text=str(c.text or ""),
+        )
+
         unfavorable_to_us = _infer_unfavorable_to_us(
             clause_text=str(c.text or ""),
             applied_rules=applied_rules,
@@ -184,6 +194,8 @@ def suggest_revisions(
                 "recommended_rewrite": recommended_rewrite,
                 "rewrite_reason": rewrite_reason,
                 "rewrite_reason_codes": reason_codes,
+                "risk_tier": risk_tier,
+                "changed_segments": changed_segments,
                 "clause_topic": clause_topic if clause_topic != TOPIC_OTHER else None,
                 "high_risk": high_risk,
                 "approval_required": approval_required,

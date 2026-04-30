@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import difflib as _difflib
 import json
 import re
 from dataclasses import dataclass
@@ -289,127 +290,310 @@ def _key_terms_for_contract_type(contract_type: str) -> list[str]:
         return []
     if any(k in ct for k in ("대리점", "유통", "위탁거래", "위탁판매", "판매대행", "dealer", "distributor", "consignment")):
         return [
-            "기본원칙",
-            "공정거래",
-            "준수",
-            "동반성장",
-            "불공정",
-            "불이익",
-            "거래상",
-            "지위",
-            "경영",
-            "간섭",
-            "영업",
-            "자율",
-            "해지",
-            "종료",
-            "물량",
-            "공급",
-            "중단",
-            "불이익조치",
-            "비용",
-            "비용부담",
-            "판촉",
-            "광고",
-            "장려금",
-            "반품",
-            "원상회복",
-            "정산",
-            "상계",
-            "공제",
-            "증빙",
-            "자료",
-            "확인",
-            "개인정보",
-            "고객정보",
-            "분쟁해결",
+            "기본원칙", "공정거래", "준수", "동반성장", "불공정", "불이익", "거래상", "지위", "경영", "간섭",
+            "영업", "자율", "해지", "종료", "물량", "공급", "중단", "불이익조치", "비용", "비용부담",
+            "판촉", "광고", "장려금", "반품", "원상회복", "정산", "상계", "공제", "증빙", "자료",
+            "확인", "개인정보", "고객정보", "분쟁해결",
         ]
     if any(k in ct for k in ("운영대행", "위탁운영", "운영위탁", "공간운영", "매장운영", "서비스위탁", "관리용역", "운영용역")):
         return [
-            "업무범위",
-            "운영",
-            "대행",
-            "성과",
-            "KPI",
-            "보고",
-            "자료제출",
-            "검수",
-            "점검",
-            "인력",
-            "배치",
-            "교대",
-            "교육",
-            "책임자",
-            "정산",
-            "수수료",
-            "용역비",
-            "상계",
-            "공제",
-            "증빙",
-            "하도급",
-            "재위탁",
-            "승인",
-            "안전",
-            "산업안전",
-            "개인정보",
-            "기밀",
-            "해지",
-            "인수인계",
+            "업무범위", "운영", "대행", "성과", "KPI", "보고", "자료제출", "검수", "점검", "인력",
+            "배치", "교대", "교육", "책임자", "정산", "수수료", "용역비", "상계", "공제", "증빙",
+            "하도급", "재위탁", "승인", "안전", "산업안전", "개인정보", "기밀", "해지", "인수인계",
         ]
     if any(k in ct for k in ("앱개발", "소프트웨어", "SI", "유지보수", "SaaS", "IT", "API")):
         return [
-            "목적",
-            "범위",
-            "수행",
-            "사양",
-            "SOW",
-            "검수",
-            "간주검수",
-            "지연",
-            "지체",
-            "지체상금",
-            "마일스톤",
-            "산출물",
-            "소스코드",
-            "저작권",
-            "지식재산",
-            "IP",
-            "제3자",
-            "오픈소스",
-            "라이선스",
-            "보안",
-            "개인정보",
-            "위탁",
-            "국외이전",
-            "하자",
-            "유지보수",
-            "SLA",
-            "장애",
-            "해지",
-            "종료",
-            "인수인계",
-            "데이터",
-            "분쟁",
-            "관할",
+            "목적", "범위", "수행", "사양", "SOW", "검수", "간주검수", "지연", "지체", "지체상금",
+            "마일스톤", "산출물", "소스코드", "저작권", "지식재산", "IP", "제3자", "오픈소스",
+            "라이선스", "보안", "개인정보", "위탁", "국외이전", "하자", "유지보수", "SLA", "장애",
+            "해지", "종료", "인수인계", "데이터", "분쟁", "관할",
         ]
     if any(k in ct for k in ("구매", "설치", "납품", "장비", "물품", "공급")):
         return [
-            "검수",
-            "하자",
-            "보증",
-            "지연",
-            "지체",
-            "지체상금",
-            "안전",
-            "책임제한",
-            "손해배상",
-            "해지",
-            "분쟁",
-            "관할",
+            "검수", "하자", "보증", "지연", "지체", "지체상금", "안전", "책임제한", "손해배상",
+            "해지", "분쟁", "관할",
+        ]
+    return []
+
+    ct = (contract_type or "").strip()
+    if not ct:
+        return []
+    if any(k in ct for k in ("대리점", "유통", "위탁거래", "위탁판매", "판매대행", "dealer", "distributor", "consignment")):
+        return [
+            "기본원칙", "공정거래", "준수", "동반성장", "불공정", "불이익", "거래상", "지위", "경영", "간섭",
+            "영업", "자율", "해지", "종료", "물량", "공급", "중단", "불이익조치", "비용", "비용부담",
+            "판촉", "광고", "장려금", "반품", "원상회복", "정산", "상계", "공제", "증빙", "자료",
+            "확인", "개인정보", "고객정보", "분쟁해결",
+        ]
+    if any(k in ct for k in ("운영대행", "위탁운영", "운영위탁", "공간운영", "매장운영", "서비스위탁", "관리용역", "운영용역")):
+        return [
+            "업무범위", "운영", "대행", "성과", "KPI", "보고", "자료제출", "검수", "점검", "인력",
+            "배치", "교대", "교육", "책임자", "정산", "수수료", "용역비", "상계", "공제", "증빙",
+            "하도급", "재위탁", "승인", "안전", "산업안전", "개인정보", "기밀", "해지", "인수인계",
+        ]
+    if any(k in ct for k in ("앱개발", "소프트웨어", "SI", "유지보수", "SaaS", "IT", "API")):
+        return [
+            "목적", "범위", "수행", "사양", "SOW", "검수", "간주검수", "지연", "지체", "지체상금",
+            "마일스톤", "산출물", "소스코드", "저작권", "지식재산", "IP", "제3자", "오픈소스",
+            "라이선스", "보안", "개인정보", "위탁", "국외이전", "하자", "유지보수", "SLA", "장애",
+            "해지", "종료", "인수인계", "데이터", "분쟁", "관할",
+        ]
+    if any(k in ct for k in ("구매", "설치", "납품", "장비", "물품", "공급")):
+        return [
+            "검수", "하자", "보증", "지연", "지체", "지체상금", "안전", "책임제한", "손해배상",
+            "해지", "분쟁", "관할",
         ]
     return []
 
 
+# ---------------------------------------------------------------------------
+# [반복 코멘트 생성 방지] 조(Article) 단위 통합 판단 + 중복 제거 + Article Review
+# ---------------------------------------------------------------------------
+
+
+def _sim_ratio(a: str, b: str) -> float:
+    """두 문자열의 유사도(0~1)를 반환한다."""
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    return _difflib.SequenceMatcher(None, a[:600], b[:600]).ratio()
+
+
+def _norm_for_sim(s: str) -> str:
+    """유사도 비교용 정규화."""
+    x = re.sub(r"[\s\r\n\t]+", " ", (s or "").strip().lower())
+    x = re.sub(r"[^\w가-힣]+", " ", x)
+    return x.strip()[:600]
+
+
+def _build_article_review_comment(
+    article_number: str | None,
+    article_title: str | None,
+    risk_codes: list[str],
+    risk_topics: list[str],
+) -> str:
+    """
+    조(Article) 전체를 묶는 [Article Review] 통합 코멘트를 생성한다.
+    포괄적 리스크(불공정행위 금지 등)는 개별 항마다 반복하지 않고 여기에 한 번만 기술한다.
+    """
+    art = f"제{article_number}조" if article_number else "해당 조"
+    title_part = f" [{article_title}]" if article_title else ""
+    codes_str = " / ".join(risk_codes[:5]) if risk_codes else ""
+    topics_str = " / ".join(risk_topics[:4]) if risk_topics else ""
+
+    lines = [f"[Article Review] {art}{title_part}"]
+    if codes_str:
+        lines.append(f"  · 적용 규칙: {codes_str}")
+    if topics_str:
+        lines.append(f"  · 리스크 범주: {topics_str}")
+    lines.append(
+        f"  · 본 조 내 여러 항에 동일한 리스크가 존재합니다. "
+        f"대표 항의 수정안을 기준으로 통합 관리하십시오."
+    )
+    return "\n".join(lines)
+
+
+def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]]) -> None:
+    """
+    [반복 코멘트 생성 방지] 4가지 지침을 clause_results에 적용한다.
+
+    지침 1. 조(Article) 단위 통합 판단
+        - 같은 조(article_number) 내 여러 항이 동일 핵심 리스크를 가지면
+          코멘트는 단 한 번(대표 항)만 생성한다.
+
+    지침 2. 대표 항 지정
+        - 리스크가 가장 잘 드러나는 항을 anchor로 지정하고,
+          나머지 항에는 "위 제N항의 수정안과 동일한 리스크가 존재하므로 통합 관리 필요"
+          메시지로 대체한다.
+
+    지침 3. 중복 검사(De-duplication)
+        - suggested_rewrite 문구가 이미 다른 조항에서 사용된 문구와 80% 이상 유사하면
+          해당 문구를 다시 출력하지 않고 인라인 수정 방식만 사용한다.
+
+    지침 4. 리스크 범주화
+        - "불공정행위 금지"처럼 포괄적인 내용은 개별 항마다 언급하지 않고
+          조 전체를 묶어 [Article Review] 섹션으로 통합하여 한 번에 기술한다.
+    """
+    if not clause_results:
+        return
+
+    # ── 지침 3: 전역 중복 검사 ──────────────────────────────────────────────
+    # 이미 출력된 suggested_rewrite 목록을 추적하여 80% 이상 유사 시 인라인 수정으로 전환
+    seen_rewrites: list[str] = []
+
+    def _is_duplicate_rewrite(text: str) -> bool:
+        norm = _norm_for_sim(text)
+        for seen in seen_rewrites:
+            if _sim_ratio(norm, seen) >= 0.80:
+                return True
+        return False
+
+    def _to_inline_rewrite(original_text: str, suggested: str) -> str:
+        """
+        중복 판정된 경우 suggested_rewrite를 원문에 직접 녹여내는 인라인 수정으로 변환한다.
+        원문에 없는 핵심 추가 문구만 괄호로 삽입한다.
+        """
+        orig_norm = _norm_for_sim(original_text)
+        sug_norm = _norm_for_sim(suggested)
+        # 추가된 핵심 단어 추출
+        orig_words = set(re.findall(r"[가-힣A-Za-z0-9]+", orig_norm))
+        sug_words = set(re.findall(r"[가-힣A-Za-z0-9]+", sug_norm))
+        new_words = [w for w in sug_words - orig_words if len(w) >= 2][:6]
+        if not new_words:
+            return original_text
+        inline_note = " (단, " + " · ".join(new_words[:4]) + " 조건 포함)"
+        return (original_text.rstrip() + inline_note).strip()
+
+    # ── 지침 1·2·4: 조 단위 그룹화 ─────────────────────────────────────────
+    # article_number 기준으로 그룹화
+    article_groups: dict[str, list[dict[str, Any]]] = {}
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        an = str(cr.get("article_number") or "").strip()
+        if not an:
+            continue
+        article_groups.setdefault(an, []).append(cr)
+
+    # 포괄적 리스크 범주 (개별 항마다 반복 금지 대상)
+    _BROAD_RISK_TOPICS = {
+        "dealer_unfair",
+        "cost_burden",
+        "payment_settlement",
+        "termination",
+        "personal_data",
+        "safety",
+    }
+    _BROAD_RISK_CODES = {
+        "RISK-006", "RISK-005", "RISK-002", "RISK-001",
+        "DEALER-001", "C-001",
+    }
+
+    for an, group in article_groups.items():
+        if len(group) < 2:
+            # 단일 항: 중복 검사만 적용
+            cr = group[0]
+            sr = cr.get("suggested_rewrite")
+            if isinstance(sr, str) and sr.strip():
+                if _is_duplicate_rewrite(sr):
+                    # 인라인 수정으로 전환
+                    ot = str(cr.get("original_text") or "")
+                    cr["suggested_rewrite"] = _to_inline_rewrite(ot, sr)
+                    cr["rewrite_reason"] = (
+                        (str(cr.get("rewrite_reason") or "") + " [중복 수정안 → 인라인 수정으로 전환]").strip()
+                    )
+                    cr["dedup_inline"] = True
+                else:
+                    seen_rewrites.append(_norm_for_sim(sr))
+            continue
+
+        # ── 지침 1: 동일 조 내 리스크 동일성 판단 ──────────────────────────
+        # 각 항의 risk_codes, clause_topic 수집
+        group_risk_codes: set[str] = set()
+        group_topics: set[str] = set()
+        for cr in group:
+            for ar in (cr.get("applied_rules") or []):
+                if isinstance(ar, dict) and isinstance(ar.get("rule_id"), str):
+                    group_risk_codes.add(str(ar["rule_id"]))
+            t = str(cr.get("clause_topic") or "")
+            if t:
+                group_topics.add(t)
+
+        has_broad_risk = bool(group_risk_codes & _BROAD_RISK_CODES) or bool(group_topics & _BROAD_RISK_TOPICS)
+
+        # ── 지침 2: 대표 항(anchor) 선정 ────────────────────────────────────
+        # 우선순위: approval_required > high_risk > risk_tier HIGH > must_fix > 첫 번째 항
+        def _anchor_score(cr: dict[str, Any]) -> int:
+            s = 0
+            if bool(cr.get("approval_required")):
+                s += 100
+            if bool(cr.get("high_risk")):
+                s += 80
+            if str(cr.get("risk_tier") or "").upper() == "HIGH":
+                s += 60
+            if bool(cr.get("must_fix")):
+                s += 40
+            if bool(cr.get("user_focus_hit")):
+                s += 30
+            sr = cr.get("suggested_rewrite")
+            if isinstance(sr, str) and sr.strip():
+                s += 20
+            pn = str(cr.get("paragraph_number") or "")
+            if pn.isdigit():
+                s -= int(pn)  # 낮은 항 번호 우선
+            return s
+
+        sorted_group = sorted(group, key=lambda x: -_anchor_score(x))
+        anchor = sorted_group[0]
+        secondaries = sorted_group[1:]
+
+        # anchor의 suggested_rewrite 중복 검사
+        anchor_sr = anchor.get("suggested_rewrite")
+        if isinstance(anchor_sr, str) and anchor_sr.strip():
+            if _is_duplicate_rewrite(anchor_sr):
+                ot = str(anchor.get("original_text") or "")
+                anchor["suggested_rewrite"] = _to_inline_rewrite(ot, anchor_sr)
+                anchor["rewrite_reason"] = (
+                    (str(anchor.get("rewrite_reason") or "") + " [중복 수정안 → 인라인 수정으로 전환]").strip()
+                )
+                anchor["dedup_inline"] = True
+            else:
+                seen_rewrites.append(_norm_for_sim(anchor_sr))
+
+        # anchor에 article_review_anchor 마킹
+        anchor["article_review_anchor"] = True
+        anchor_pn = str(anchor.get("paragraph_number") or "")
+        anchor_dp = str(anchor.get("display_path") or anchor.get("clause_id") or "")
+
+        # ── 지침 4: [Article Review] 통합 코멘트 생성 ───────────────────────
+        if has_broad_risk:
+            article_title = str(anchor.get("clause_title") or "").strip()
+            risk_codes_list = sorted(group_risk_codes & _BROAD_RISK_CODES)
+            risk_topics_list = sorted(group_topics & _BROAD_RISK_TOPICS)
+            article_review_comment = _build_article_review_comment(
+                article_number=an,
+                article_title=article_title,
+                risk_codes=risk_codes_list,
+                risk_topics=risk_topics_list,
+            )
+            anchor["article_review_comment"] = article_review_comment
+
+        # ── 지침 2: 나머지 항(secondary) 처리 ──────────────────────────────
+        for cr in secondaries:
+            cr_sr = cr.get("suggested_rewrite")
+            if not (isinstance(cr_sr, str) and cr_sr.strip()):
+                continue
+
+            # 중복 검사: anchor와 80% 이상 유사하면 참조 메시지로 대체
+            anchor_norm = _norm_for_sim(str(anchor.get("suggested_rewrite") or ""))
+            cr_norm = _norm_for_sim(cr_sr)
+            sim = _sim_ratio(anchor_norm, cr_norm)
+
+            if sim >= 0.80:
+                # 지침 2: 참조 메시지로 대체
+                pn_ref = anchor_pn if anchor_pn else anchor_dp
+                cr["suggested_rewrite"] = None
+                old_reason = str(cr.get("rewrite_reason") or "").strip()
+                ref_msg = (
+                    f"위 제{pn_ref}항의 수정안과 동일한 리스크가 존재하므로 통합 관리 필요. "
+                    f"({an}조 전체를 [Article Review] 기준으로 검토하십시오.)"
+                )
+                cr["rewrite_reason"] = (old_reason + " / " + ref_msg).strip(" / ") if old_reason else ref_msg
+                cr["article_review_ref"] = anchor.get("clause_id") or anchor_dp
+                cr["dedup_suppressed"] = True
+                cr["changed_segments"] = []
+            else:
+                # 유사도 낮음: 독립 수정안 유지하되 전역 중복 검사 적용
+                if _is_duplicate_rewrite(cr_sr):
+                    ot = str(cr.get("original_text") or "")
+                    cr["suggested_rewrite"] = _to_inline_rewrite(ot, cr_sr)
+                    cr["rewrite_reason"] = (
+                        (str(cr.get("rewrite_reason") or "") + " [중복 수정안 → 인라인 수정으로 전환]").strip()
+                    )
+                    cr["dedup_inline"] = True
+                else:
+                    seen_rewrites.append(_norm_for_sim(cr_sr))
 def _article_int(v: Any) -> int | None:
     s = str(v or "").strip()
     if not s:
@@ -1573,6 +1757,15 @@ def build_clause_level_result(
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
             cr["review_tier"] = "NOTE"
+
+    # -----------------------------------------------------------------------
+    # [반복 코멘트 생성 방지] 4가지 지침 적용
+    # 1. 조(Article) 단위 통합 판단
+    # 2. 대표 항 지정 (나머지 항은 참조 메시지로 대체)
+    # 3. 중복 검사(De-duplication): suggested_rewrite 80% 이상 유사 시 인라인 수정
+    # 4. 리스크 범주화: 포괄적 내용은 [Article Review] 섹션으로 통합
+    # -----------------------------------------------------------------------
+    _apply_article_dedup_and_consolidation(clause_results)
 
     for cr in clause_results:
         if not isinstance(cr, dict):

@@ -700,6 +700,22 @@ def build_revision_docx(
         sr0 = str(cr.get("suggested_rewrite") or "").strip()
         laws0 = _extract_law_titles(cr, limit=3)
         before_k, _ = _key_phrases(ot0, sr0, limit=2)
+
+        # [Article Review] 통합 코멘트 출력 (지침 4: 포괄적 리스크 범주화)
+        arc = str(cr.get("article_review_comment") or "").strip()
+        if arc and bool(cr.get("article_review_anchor")):
+            parc = _p(body)
+            _t(_r(parc, bold=True, color_hex="7B2D8B"), arc[:400])
+
+        # 참조 메시지 출력 (지침 2: 대표 항 외 나머지 항)
+        if bool(cr.get("dedup_suppressed")) and bool(cr.get("article_review_ref")):
+            ref_id = str(cr.get("article_review_ref") or "")
+            pref = _p(body)
+            _t(_r(pref, color_hex="888888"),
+               "→ " + ref_id + " 조항의 수정안과 동일한 리스크. 통합 관리 필요.")
+            _p(body)
+            continue
+
         if dirs0:
             p1 = _p(body)
             _t(_r(p1, color_hex="1F7AE0"), "방향: " + " / ".join(str(x) for x in dirs0 if isinstance(x, str) and x.strip())[:180])
@@ -707,8 +723,10 @@ def build_revision_docx(
             p0b = _p(body)
             _t(_r(p0b, color_hex="1F7AE0"), "원문 핵심: " + before_k[:220] + ("…" if len(before_k) > 220 else ""))
         if sr0:
+            # 인라인 수정 여부 표시 (지침 3)
+            inline_label = " [인라인 수정]" if bool(cr.get("dedup_inline")) else ""
             p3 = _p(body)
-            _t(_r(p3, color_hex="1F7AE0"), "제안 문안:")
+            _t(_r(p3, color_hex="1F7AE0"), "제안 문안" + inline_label + ":")
             for line in sr0.splitlines()[:40]:
                 pl = _p(body)
                 _t(_r(pl, color_hex="1F7AE0"), (line[:260] + ("…" if len(line) > 260 else "")) if line else "")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from runtime.review.party_role import PartyRole
@@ -9,11 +9,251 @@ from runtime.review.korean_polish import polish_korean_legal_style
 from runtime.review.jurisdiction import classify_jurisdiction_profile
 
 
+# ---------------------------------------------------------------------------
+# 시디즈(SIDIZ) 사내 변호사 / 유통·대리점법 전문 변호사 역할
+# ---------------------------------------------------------------------------
+# 검토 원칙:
+#   1단계 (독소 제거): "무제한", "즉시", "일방적으로", "최종적" 등을
+#                      "합리적인 범위 내에서", "최고 후", "상호 합의된" 등으로 치환
+#   2단계 (방어권 삽입): 이의제기권 + 자료검토권 + 상계권 세트 구성
+#   3단계 (스타일 교정): korean_polish 고도 법률 문어체 적용
+# ---------------------------------------------------------------------------
+
+# 독소 표현 → 방어 표현 치환 테이블 (1단계)
+_TOXIN_REPLACEMENTS: list[tuple[str, str]] = [
+    (r"무제한\s*책임", "합리적인 범위 내의 책임(상한 적용)"),
+    (r"무제한으로", "합리적인 범위 내에서"),
+    (r"무제한\s*으로", "합리적인 범위 내에서"),
+    (r"즉시\s*해지", "상당한 기간을 정하여 최고한 후 해지"),
+    (r"즉시\s*종료", "상당한 기간을 정하여 최고한 후 종료"),
+    (r"즉시\s*지급", "청구일로부터 합리적인 기간 내에 지급"),
+    (r"즉시\s*반환", "계약 종료일로부터 합리적인 기간 내에 반환"),
+    (r"즉시\s*배상", "귀책 확정 후 합리적인 기간 내에 배상"),
+    (r"일방적으로\s*결정", "상호 합의된 절차에 따라 결정"),
+    (r"일방적으로\s*변경", "당사의 사전 서면 동의를 득하여 변경"),
+    (r"일방적으로\s*해지", "본 계약에서 정한 절차에 따라 해지"),
+    (r"일방적으로", "상호 합의된 절차에 따라"),
+    (r"최종적으로\s*결정", "관련 법령 및 본 계약에서 정한 절차에 따라 결정"),
+    (r"최종적\s*결정권", "본 계약에서 정한 절차에 따른 결정권"),
+    (r"임의로\s*변경", "당사의 사전 서면 동의를 득하여 변경"),
+    (r"임의로\s*해지", "본 계약에서 정한 절차에 따라 해지"),
+    (r"임의로", "본 계약에서 정한 절차에 따라"),
+    (r"모든\s*손해를\s*배상", "직접손해(간접손해·특별손해·영업손실 제외)를 배상"),
+    (r"모든\s*비용을\s*부담", "사전 서면 합의된 항목에 한하여 비용을 부담"),
+    (r"전적으로\s*책임", "귀책 범위 내에서 책임"),
+    (r"무조건\s*", "본 계약에서 정한 요건 충족 시 "),
+]
+
+# 대리점법 제18조 경영간섭 위험 패턴
+_MGMT_INTERFERENCE_PATTERNS: list[str] = [
+    r"의\s*지시에\s*따른다",
+    r"의\s*지시에\s*따라",
+    r"의\s*지시를\s*따른다",
+    r"의\s*지시를\s*따라야",
+    r"의\s*지시\s*사항을\s*이행",
+    r"가격을\s*(?:지정|결정|통제|강제)",
+    r"판매가격을\s*(?:지정|결정|통제|강제)",
+    r"인사\s*(?:에\s*관여|를\s*지시|를\s*통제)",
+    r"노무\s*(?:에\s*관여|를\s*지시|를\s*통제)",
+    r"영업\s*방침을\s*(?:지시|강제|통제)",
+    r"경영에\s*(?:관여|간섭|개입)",
+]
+
+
+def _apply_toxin_removal(text: str) -> tuple[str, list[dict[str, str]]]:
+    """1단계: 독소 표현을 방어 표현으로 치환하고 변경 세그먼트를 반환한다."""
+    s = text
+    segments: list[dict[str, str]] = []
+    for pattern, replacement in _TOXIN_REPLACEMENTS:
+        new_s = re.sub(pattern, replacement, s)
+        if new_s != s:
+            # 변경된 원문 추출
+            m = re.search(pattern, s)
+            before_text = m.group(0) if m else pattern
+            segments.append({"before": before_text, "after": replacement})
+            s = new_s
+    return s, segments
+
+
+def _insert_defense_rights(text: str, *, posture: str, our: str, cp: str) -> tuple[str, list[dict[str, str]]]:
+    """2단계: 이의제기권 + 자료검토권 + 상계권 세트를 삽입한다."""
+    segments: list[dict[str, str]] = []
+    s = text
+
+    # 이의제기권 삽입 조건: 청구·배상·공제·감액 관련 조항
+    if re.search(r"(청구|배상|공제|감액|차감|부과|벌금|위약금|지체상금)", s):
+        defense_clause = (
+            f" {our}는 상대방의 청구에 대하여 이의제기권을 보유하며, "
+            f"청구 수령일로부터 14일 이내에 서면으로 이의를 제기할 수 있다."
+        )
+        if "이의제기권" not in s:
+            s = s + defense_clause
+            segments.append({"before": "(이의제기권 없음)", "after": defense_clause.strip()})
+
+    # 자료검토권 삽입 조건: 정산·비용·수수료·판촉비 관련 조항
+    if re.search(r"(정산|비용|수수료|판촉비|광고비|반품비|원가|단가)", s):
+        audit_clause = (
+            f" {our}는 관련 산출 근거 및 증빙 자료의 제출을 요구할 수 있으며, "
+            f"{cp}는 요청일로부터 7영업일 이내에 이를 제공하여야 한다."
+        )
+        if "자료" not in s or "제출" not in s:
+            s = s + audit_clause
+            segments.append({"before": "(자료검토권 없음)", "after": audit_clause.strip()})
+
+    # 상계권 삽입 조건: 대금·지급·정산 관련 조항
+    if re.search(r"(대금|지급|정산|상계|공제)", s):
+        offset_clause = (
+            f" {our}는 {cp}에 대한 확정 채권을 자동채무와 상계할 수 있으며, "
+            f"상계 통지는 서면으로 한다."
+        )
+        if "상계" not in s:
+            s = s + offset_clause
+            segments.append({"before": "(상계권 없음)", "after": offset_clause.strip()})
+
+    return s, segments
+
+
+def _detect_mgmt_interference_risk(text: str) -> list[str]:
+    """대리점법 제18조 경영간섭 위험 패턴을 감지하고 해당 패턴 목록을 반환한다."""
+    found: list[str] = []
+    for pat in _MGMT_INTERFERENCE_PATTERNS:
+        if re.search(pat, text):
+            found.append(pat)
+    return found
+
+
+def _rewrite_mgmt_interference(text: str, *, our: str, cp: str) -> RewriteProposal | None:
+    """
+    대리점법 제18조 경영간섭 위험 조항을 무력화한다.
+    '지시' 표현을 '품질 유지 및 소비자 보호를 위한 최소한의 기준 제시'로 치환하여
+    경영간섭으로 오해받지 않으면서도 브랜드 가이드라인을 강제할 수 있는 구조로 재설계한다.
+    """
+    original = _norm_ws(text)
+    if not original:
+        return None
+
+    interference_patterns = _detect_mgmt_interference_risk(original)
+    if not interference_patterns:
+        return None
+
+    s = original
+    changed_segs: list[dict[str, str]] = []
+
+    # 지시 → 품질 가이드라인 기준 제시로 치환
+    replacements = [
+        (r"(갑|을|당사|시디즈|SIDIZ)\s*의\s*지시에\s*따른다",
+         r"\1이 제시한 품질 유지 및 소비자 보호를 위한 최소한의 기준을 존중하되, "
+         r"인사·노무·가격 결정의 독립성을 보장하는 범위 내에서 협의한다"),
+        (r"(갑|을|당사|시디즈|SIDIZ)\s*의\s*지시에\s*따라",
+         r"\1이 제시한 품질 가이드라인의 범위 내에서"),
+        (r"(갑|을|당사|시디즈|SIDIZ)\s*의\s*지시를\s*따른다",
+         r"\1이 제시한 품질 유지 기준을 존중하되, 경영 독립성을 침해하지 아니하는 범위 내에서 협의한다"),
+        (r"(갑|을|당사|시디즈|SIDIZ)\s*의\s*지시를\s*따라야",
+         r"\1이 제시한 품질 가이드라인을 준수하여야"),
+        (r"가격을\s*(지정|결정|통제|강제)한다",
+         "품질 유지 및 소비자 보호를 위한 권장 가격 기준을 제시할 수 있으며, "
+         "최종 판매가격 결정권은 대리점에 귀속한다"),
+        (r"판매가격을\s*(지정|결정|통제|강제)한다",
+         "소비자 보호를 위한 권장 소비자가격(RRP)을 제시할 수 있으며, "
+         "최종 판매가격 결정권은 대리점에 귀속한다"),
+        (r"인사에\s*관여",
+         "품질 유지를 위한 최소한의 자격 기준을 제시"),
+        (r"경영에\s*(관여|간섭|개입)한다",
+         "품질 유지 및 소비자 보호를 위한 최소한의 기준을 제시하되, "
+         "대리점의 경영 독립성을 침해하지 아니한다"),
+    ]
+
+    for pat, repl in replacements:
+        new_s = re.sub(pat, repl, s)
+        if new_s != s:
+            m = re.search(pat, s)
+            before_text = m.group(0) if m else pat
+            changed_segs.append({"before": before_text, "after": re.sub(r"\\1", "", repl).strip()})
+            s = new_s
+
+    # 브랜드 가이드라인 강제 조항 추가 (경영간섭 방어 문구)
+    brand_clause = (
+        " 단, 시디즈가 제시하는 브랜드 가이드라인(매장 인테리어 기준, 제품 진열 방식, "
+        "고객 응대 품질 기준 등)은 품질 유지 및 소비자 보호를 위한 최소한의 기준으로서 "
+        "대리점법 제18조의 경영간섭에 해당하지 아니하며, 대리점은 이를 준수하여야 한다."
+    )
+    if "브랜드 가이드라인" not in s and "품질 유지" not in s:
+        s = s + brand_clause
+        changed_segs.append({"before": "(브랜드 가이드라인 강제 조항 없음)", "after": brand_clause.strip()})
+
+    reason = (
+        "해당 조항의 '지시' 표현은 대리점법 제18조(경영간섭 금지)에 저촉될 구체적 위험이 있음. "
+        "동조는 공급업자가 대리점의 인사·노무·가격 결정 등 경영 활동에 관여하는 행위를 금지하며, "
+        "'지시에 따른다'는 문구는 그 자체로 경영간섭의 증거로 활용될 수 있음. "
+        "이를 '품질 유지 및 소비자 보호를 위한 최소한의 기준 제시'로 치환하여 "
+        "브랜드 가이드라인 강제력은 유지하되 경영간섭 리스크를 차단함."
+    )
+    return RewriteProposal(
+        suggested_rewrite=_norm_ws(s),
+        rewrite_reason=reason,
+        reason_codes=["DEALER-001"],
+        changed_segments=changed_segs,
+    )
+
+
+def _infer_risk_tier(*, reason_codes: list[str], text: str) -> str:
+    """
+    risk_tier를 산정한다.
+    HIGH: 실질적 경영권 침해 및 금전적 손실 가능성
+    MEDIUM: 절차적 불이익 또는 조건부 리스크
+    LOW: 표현 개선 권고 수준
+    """
+    high_codes = {"RISK-001", "RISK-002", "RISK-004", "RISK-005", "RISK-006",
+                  "DEALER-001", "APP-001", "APP-007", "ACT-004"}
+    medium_codes = {"RISK-003", "APP-002", "APP-003", "APP-004", "APP-006",
+                    "APP-009", "APP-010", "APP-011", "C-001"}
+
+    for c in reason_codes:
+        if c in high_codes:
+            return "HIGH (실질적 경영권 침해 및 금전적 손실 가능성)"
+
+    # 텍스트 기반 HIGH 판정
+    high_text_patterns = [
+        r"무제한", r"즉시\s*해지", r"일방적", r"모든\s*손해", r"전적으로\s*책임",
+        r"지시에\s*따른다", r"경영에\s*관여", r"가격을\s*(지정|통제|강제)",
+    ]
+    for pat in high_text_patterns:
+        if re.search(pat, text):
+            return "HIGH (실질적 경영권 침해 및 금전적 손실 가능성)"
+
+    for c in reason_codes:
+        if c in medium_codes:
+            return "MEDIUM (절차적 불이익 또는 조건부 리스크)"
+
+    return "LOW (표현 개선 권고)"
+
+
+def _extract_changed_segments(original: str, rewritten: str) -> list[dict[str, str]]:
+    """원문과 수정문을 비교하여 변경된 세그먼트를 추출한다."""
+    segments: list[dict[str, str]] = []
+    orig_sents = _split_sentences(original)
+    new_sents = _split_sentences(rewritten)
+
+    # 추가된 문장 감지
+    orig_set = set(orig_sents)
+    for s in new_sents:
+        if s not in orig_set and len(s) > 10:
+            segments.append({"before": "(없음)", "after": s})
+
+    # 변경된 문장 감지 (길이 기반 매칭)
+    for i, (o, n) in enumerate(zip(orig_sents, new_sents)):
+        if o != n and len(o) > 5:
+            segments.append({"before": o, "after": n})
+
+    return segments[:8]  # 최대 8개 세그먼트
+
+
 @dataclass(frozen=True)
 class RewriteProposal:
     suggested_rewrite: str
     rewrite_reason: str
     reason_codes: list[str]
+    changed_segments: list[dict[str, str]] = field(default_factory=list)
 
 
 def _norm_ws(s: str) -> str:
@@ -82,31 +322,63 @@ def _rewrite_risk_001_liability_cap(text: str, *, matched_keywords: list[str], p
         r"영업\s*손실",
     ]
     sents = _split_sentences(original)
+    changed_segs: list[dict[str, str]] = []
 
     def repl(s: str) -> str:
         ns = s
-        ns = re.sub(r"무제한\s*책임", "책임(상한 적용)", ns)
-        ns = re.sub(r"\bwithout\s+limitation\b", "subject to the liability cap", ns, flags=re.IGNORECASE)
-        ns = re.sub(r"\bunlimited\b", "capped", ns, flags=re.IGNORECASE)
+        # 1단계: 독소 표현 직접 치환
+        new_ns = re.sub(r"무제한\s*책임", "합리적인 범위 내의 책임(상한 적용)", ns)
+        if new_ns != ns:
+            changed_segs.append({"before": "무제한 책임", "after": "합리적인 범위 내의 책임(상한 적용)"})
+            ns = new_ns
+        new_ns = re.sub(r"모든\s*손해를\s*배상", "직접손해(간접손해·특별손해·영업손실 제외)를 배상", ns)
+        if new_ns != ns:
+            changed_segs.append({"before": "모든 손해를 배상", "after": "직접손해(간접손해·특별손해·영업손실 제외)를 배상"})
+            ns = new_ns
+        new_ns = re.sub(r"\bwithout\s+limitation\b", "subject to the liability cap set forth herein", ns, flags=re.IGNORECASE)
+        if new_ns != ns:
+            changed_segs.append({"before": "without limitation", "after": "subject to the liability cap set forth herein"})
+            ns = new_ns
+        new_ns = re.sub(r"\bunlimited\b", "capped at the contract value", ns, flags=re.IGNORECASE)
+        if new_ns != ns:
+            changed_segs.append({"before": "unlimited", "after": "capped at the contract value"})
+            ns = new_ns
+        # 책임 상한 문구 삽입
+        cap_clause = " 단, 각 당사자의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며, 간접손해·특별손해·영업손실은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
         if ns == s:
-            ns = s + " 단, 각 당사자의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며 간접손해/특별손해/영업손실 등은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
+            ns = s + cap_clause
+            changed_segs.append({"before": "(책임 상한 없음)", "after": cap_clause.strip()})
         else:
-            ns = ns + " (각 당사자의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며 간접손해/특별손해/영업손실 등은 제외. 단, 고의·중과실 및 강행법규상 책임 제외)"
+            ns = ns + " (총 책임 상한: 계약금액 또는 연간 총 대금. 간접손해·특별손해·영업손실 제외. 고의·중과실 및 강행법규상 책임 제외)"
         return ns
 
     patched, changed = _patch_sentence(sentences=sents, target_patterns=pats, replace_fn=repl)
     if changed:
-        reason = "책임 범위가 과도하게 넓게 해석될 수 있는 표현이 있어(예: " + ", ".join(matched_keywords[:3]) + "), 책임 상한과 간접손해 제외를 명시하도록 조정."
-        return RewriteProposal(suggested_rewrite=_norm_ws(" ".join(patched)), rewrite_reason=reason, reason_codes=["RISK-001"])
+        reason = (
+            "해당 조항의 '" + ", ".join(matched_keywords[:3]) + "' 표현은 책임 범위를 무제한으로 확장할 위험이 있음. "
+            "민법 제393조 및 계약 실무상 책임 상한(계약금액 기준)과 간접손해·특별손해·영업손실 제외를 "
+            "조항 문장 내에 직접 삽입하여 과도한 손해배상 청구를 차단함."
+        )
+        return RewriteProposal(
+            suggested_rewrite=_norm_ws(" ".join(patched)),
+            rewrite_reason=reason,
+            reason_codes=["RISK-001"],
+            changed_segments=changed_segs,
+        )
     if posture == "buyer_favorable":
-        suffix = " 단, 당사의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며 간접손해/특별손해/영업손실 등은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
+        suffix = " 단, 당사의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며, 간접손해·특별손해·영업손실은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
     elif posture == "seller_favorable":
-        suffix = " 단, 상대방(구매자)의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며 간접손해/특별손해/영업손실 등은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
+        suffix = " 단, 상대방(구매자)의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며, 간접손해·특별손해·영업손실은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
     else:
-        suffix = " 단, 각 당사자의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며 간접손해/특별손해/영업손실 등은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
+        suffix = " 단, 각 당사자의 총 책임은 계약금액(또는 연간 총 대금)을 상한으로 하며, 간접손해·특별손해·영업손실은 제외한다(고의·중과실 및 강행법규상 책임 제외)."
     suggested = _norm_ws(original + suffix)
-    reason = "책임 상한/간접손해 제외가 명확히 보이지 않아, 책임 범위가 과도하게 확장될 위험이 있어 보완."
-    return RewriteProposal(suggested_rewrite=suggested, rewrite_reason=reason, reason_codes=["RISK-001"])
+    reason = "책임 상한 및 간접손해 제외가 명시되지 않아 책임 범위가 과도하게 확장될 위험이 있으므로, 상한 조건을 조항 내에 직접 삽입하여 보완함."
+    return RewriteProposal(
+        suggested_rewrite=suggested,
+        rewrite_reason=reason,
+        reason_codes=["RISK-001"],
+        changed_segments=[{"before": "(책임 상한 없음)", "after": suffix.strip()}],
+    )
 
 
 def _rewrite_risk_002_indemnity(text: str, *, matched_keywords: list[str], posture: str) -> RewriteProposal | None:
@@ -123,30 +395,68 @@ def _rewrite_risk_002_indemnity(text: str, *, matched_keywords: list[str], postu
     ]
     sents = _split_sentences(original)
     party_style = _pick_party_style(original)
+    changed_segs: list[dict[str, str]] = []
 
     def repl(s: str) -> str:
         ns = s
+        # 1단계: 일방 면책 → 상호주의로 치환
         if party_style == "KR-AB":
-            ns = re.sub(r"(을은\s*갑을\s*면책(?:한다|함))", "각 당사자는 상대방을 합리적인 범위에서 면책", ns)
+            new_ns = re.sub(r"(을은\s*갑을\s*면책(?:한다|함))", "각 당사자는 상대방을 합리적인 범위에서 면책", ns)
+            if new_ns != ns:
+                changed_segs.append({"before": "을은 갑을 면책", "after": "각 당사자는 상대방을 합리적인 범위에서 면책"})
+                ns = new_ns
+        # 2단계: 이의제기권 + 방어권 + 승인 절차 삽입
+        procedure_clause = (
+            " (제3자 청구에 따른 배상은 상호주의를 원칙으로 하며, "
+            "①통지: 청구 수령 후 즉시 상대방에게 서면 통지, "
+            "②방어권: 통지받은 당사자는 자신의 비용으로 방어에 참여할 권리를 가짐, "
+            "③승인: 합의·변제는 상대방의 사전 서면 승인 없이 불가, "
+            "④이의제기권: 배상 청구에 대하여 14일 이내 서면 이의 가능, "
+            "⑤범위·한도: 귀책 범위 내로 제한)"
+        )
         if ns == s:
-            ns = s + " (제3자 청구에 따른 배상은 상호주의를 원칙으로 하며, 통지·방어권·합의/변제 승인 절차를 포함하고, 범위·사유·한도를 합리적으로 제한한다.)"
+            ns = s + procedure_clause
+            changed_segs.append({"before": "(면책 절차 없음)", "after": procedure_clause.strip()})
         else:
-            ns = ns + " (제3자 청구 배상: 통지·방어권·승인 절차 포함, 범위·한도 합리적 제한)"
+            ns = ns + " (통지·방어권·승인·이의제기권·범위 한도 포함)"
         return ns
 
     patched, changed = _patch_sentence(sentences=sents, target_patterns=pats, replace_fn=repl)
     if changed:
-        reason = "면책/배상 조항이 일방 부담 또는 절차 부재로 해석될 소지가 있어(예: " + ", ".join(matched_keywords[:3]) + "), 상호주의 및 제3자 청구 절차(통지·방어권·승인)를 명시."
-        return RewriteProposal(suggested_rewrite=_norm_ws(" ".join(patched)), rewrite_reason=reason, reason_codes=["RISK-002"])
+        reason = (
+            "면책·배상 조항이 일방 부담 또는 절차 부재로 해석될 소지가 있음(예: " + ", ".join(matched_keywords[:3]) + "). "
+            "상호주의 원칙과 제3자 청구 절차(통지·방어권·승인·이의제기권)를 조항 문장 내에 직접 삽입하여 "
+            "일방적 배상 청구 리스크를 차단함."
+        )
+        return RewriteProposal(
+            suggested_rewrite=_norm_ws(" ".join(patched)),
+            rewrite_reason=reason,
+            reason_codes=["RISK-002"],
+            changed_segments=changed_segs,
+        )
     if posture == "buyer_favorable":
-        suffix = " (제3자 청구에 따른 배상은 상대방(공급자/시공자)의 귀책 범위 내에서 당사를 방어·면책하는 구조를 기본으로 하며, 통지·방어권·합의/변제 승인 절차를 포함하고, 범위·사유·한도를 합리적으로 규정한다.)"
+        suffix = (
+            " (제3자 청구에 따른 배상은 상대방(공급자/시공자)의 귀책 범위 내에서 당사를 방어·면책하는 구조를 기본으로 하며, "
+            "통지·방어권·합의/변제 승인·이의제기권 절차를 포함하고, 범위·사유·한도를 합리적으로 규정한다.)"
+        )
     elif posture == "seller_favorable":
-        suffix = " (제3자 청구에 따른 배상은 상대방(구매자)의 귀책 범위 내에서 당사를 방어·면책하는 구조를 기본으로 하며, 통지·방어권·합의/변제 승인 절차를 포함하고, 범위·사유·한도를 합리적으로 규정한다.)"
+        suffix = (
+            " (제3자 청구에 따른 배상은 상대방(구매자)의 귀책 범위 내에서 당사를 방어·면책하는 구조를 기본으로 하며, "
+            "통지·방어권·합의/변제 승인·이의제기권 절차를 포함하고, 범위·사유·한도를 합리적으로 규정한다.)"
+        )
     else:
-        suffix = " (제3자 청구에 따른 배상은 상호주의를 원칙으로 하며, 통지·방어권·합의/변제 승인 절차를 포함하고, 범위·사유·한도를 합리적으로 제한한다.)"
+        suffix = (
+            " (제3자 청구에 따른 배상은 상호주의를 원칙으로 하며, "
+            "통지·방어권·합의/변제 승인·이의제기권 절차를 포함하고, 범위·사유·한도를 합리적으로 제한한다.)"
+        )
     suggested = _norm_ws(original + suffix)
-    reason = "면책/제3자 청구 배상 조항의 절차(통지·방어권·승인)와 상호주의가 명확히 드러나지 않아 보완."
-    return RewriteProposal(suggested_rewrite=suggested, rewrite_reason=reason, reason_codes=["RISK-002"])
+    reason = "면책·제3자 청구 배상 조항의 절차(통지·방어권·승인·이의제기권)와 상호주의가 명확히 드러나지 않아 보완함."
+    return RewriteProposal(
+        suggested_rewrite=suggested,
+        rewrite_reason=reason,
+        reason_codes=["RISK-002"],
+        changed_segments=[{"before": "(면책 절차 없음)", "after": suffix.strip()}],
+    )
 
 
 def _rewrite_risk_004_tech_data(text: str, *, matched_keywords: list[str], posture: str) -> RewriteProposal | None:
@@ -162,29 +472,63 @@ def _rewrite_risk_004_tech_data(text: str, *, matched_keywords: list[str], postu
         r"confidential\s+information",
     ]
     sents = _split_sentences(original)
+    changed_segs: list[dict[str, str]] = []
 
     def repl(s: str) -> str:
         ns = s
+        # 1단계: 포괄적 자료 제공 요구 → 목적·범위 특정으로 치환
+        new_ns = re.sub(r"기술자료를\s*제공(?:한다|하여야|해야)", "기술자료를 목적·범위·기간을 특정하여 최소한으로 제공하여야", ns)
+        if new_ns != ns:
+            changed_segs.append({"before": "기술자료를 제공", "after": "기술자료를 목적·범위·기간을 특정하여 최소한으로 제공하여야"})
+            ns = new_ns
+        # 2단계: 자료검토권 + 반환·파기 조건 삽입
+        control_clause = (
+            " (기술자료 제공 시: ①목적·범위·기간 특정 및 최소 제공 원칙, "
+            "②계약 종료 또는 목적 달성 시 즉시 반환·파기 및 파기 확인서 제출, "
+            "③제3자 제공·재사용·역설계 금지, "
+            "④보안조치 의무 및 위반 시 손해배상, "
+            "⑤당사의 자료검토권: 제공 자료의 사용 현황을 연 1회 이상 점검할 수 있음)"
+        )
         if ns == s:
-            ns = (
-                s
-                + " (기술자료 제공은 목적·범위·기간을 특정하고 최소한으로 제공하며, 반환/파기, 제3자 제공 금지, 보안조치 및 위반 시 손해배상 기준을 포함한다.)"
-            )
+            ns = s + control_clause
+            changed_segs.append({"before": "(기술자료 통제 조건 없음)", "after": control_clause.strip()})
         else:
-            ns = ns + " (목적·범위·기간 특정, 최소 제공, 반환/파기, 제3자 제공 금지, 보안조치)"
+            ns = ns + " (목적·범위·기간 특정, 최소 제공, 반환/파기, 제3자 제공 금지, 보안조치, 자료검토권)"
         return ns
 
     patched, changed = _patch_sentence(sentences=sents, target_patterns=pats, replace_fn=repl)
     if changed:
-        reason = "기술자료 제공 요구가 목적/범위/보안/반환 조건 없이 포괄적으로 해석될 수 있어(예: " + ", ".join(matched_keywords[:3]) + "), 제공 조건과 제한을 명확화."
-        return RewriteProposal(suggested_rewrite=_norm_ws(" ".join(patched)), rewrite_reason=reason, reason_codes=["RISK-004"])
+        reason = (
+            "기술자료 제공 요구가 목적·범위·보안·반환 조건 없이 포괄적으로 해석될 수 있음(예: " + ", ".join(matched_keywords[:3]) + "). "
+            "하도급법 제12조의3(기술자료 제공 요구 금지) 및 대리점법상 불이익 제공 금지 규정에 따라 "
+            "제공 조건(목적·범위·기간)과 통제 수단(반환·파기·자료검토권)을 조항 내에 직접 삽입함."
+        )
+        return RewriteProposal(
+            suggested_rewrite=_norm_ws(" ".join(patched)),
+            rewrite_reason=reason,
+            reason_codes=["RISK-004"],
+            changed_segments=changed_segs,
+        )
     if posture == "buyer_favorable":
-        suffix = " (당사가 제공하는 기술자료/원가자료/소스 등은 목적·범위·기간을 특정해 최소한으로 제공하며, 반환/파기, 재사용·역설계 금지, 제3자 제공 금지, 보안조치 및 위반 시 손해배상 기준을 포함한다.)"
+        suffix = (
+            " (당사가 제공하는 기술자료·원가자료·소스 등은 목적·범위·기간을 특정하여 최소한으로 제공하며, "
+            "반환·파기, 재사용·역설계 금지, 제3자 제공 금지, 보안조치 및 위반 시 손해배상 기준을 포함하고, "
+            "당사의 자료검토권을 보유한다.)"
+        )
     else:
-        suffix = " (기술자료 제공은 목적·범위·기간을 특정하고 최소한으로 제공하며, 반환/파기, 제3자 제공 금지, 보안조치 및 위반 시 손해배상 기준을 포함한다.)"
+        suffix = (
+            " (기술자료 제공은 목적·범위·기간을 특정하여 최소한으로 제공하며, "
+            "반환·파기, 제3자 제공 금지, 보안조치 및 위반 시 손해배상 기준을 포함하고, "
+            "당사의 자료검토권을 보유한다.)"
+        )
     suggested = _norm_ws(original + suffix)
-    reason = "기술자료 제공의 목적/범위/보안/반환 조건이 불명확할 수 있어 최소 통제 문구를 추가."
-    return RewriteProposal(suggested_rewrite=suggested, rewrite_reason=reason, reason_codes=["RISK-004"])
+    reason = "기술자료 제공의 목적·범위·보안·반환 조건 및 자료검토권이 불명확하여 최소 통제 문구를 삽입함."
+    return RewriteProposal(
+        suggested_rewrite=suggested,
+        rewrite_reason=reason,
+        reason_codes=["RISK-004"],
+        changed_segments=[{"before": "(기술자료 통제 조건 없음)", "after": suffix.strip()}],
+    )
 
 
 def _rewrite_risk_005_price_reduction(text: str, *, matched_keywords: list[str], posture: str) -> RewriteProposal | None:
@@ -200,23 +544,57 @@ def _rewrite_risk_005_price_reduction(text: str, *, matched_keywords: list[str],
         r"price\s+reduction",
     ]
     sents = _split_sentences(original)
+    changed_segs: list[dict[str, str]] = []
 
     def repl(s: str) -> str:
         ns = s
+        # 1단계: 일방적 단가 조정 → 사전 협의·서면 합의로 치환
+        new_ns = re.sub(r"일방적으로\s*(단가|가격|대금)를?\s*(조정|감액|변경)(?:한다|할\s*수\s*있다)",
+                        r"사전 협의 및 서면 합의에 의하여만 \1를 \2할 수 있다", ns)
+        if new_ns != ns:
+            changed_segs.append({"before": "일방적으로 단가를 조정", "after": "사전 협의 및 서면 합의에 의하여만 단가를 조정할 수 있다"})
+            ns = new_ns
+        # 2단계: 이의제기권 + 자료검토권 삽입
+        control_clause = (
+            " (단가 조정·감액 시: ①객관적 사유(원가 변동, 시장 가격 변동 등)에 한정, "
+            "②사전 협의 및 서면 합의 필수, "
+            "③감액 범위·기간·산식·근거 명시, "
+            "④당사의 이의제기권: 조정 통보 수령 후 14일 이내 서면 이의 가능, "
+            "⑤당사의 자료검토권: 산출 근거 자료 제출 요구 가능)"
+        )
         if ns == s:
-            ns = s + " (단가 조정/감액은 객관적 사유에 한정하고, 사전 협의 및 서면 합의로만 가능하며, 범위·기간·산식·근거를 명시한다.)"
+            ns = s + control_clause
+            changed_segs.append({"before": "(단가 조정 통제 조건 없음)", "after": control_clause.strip()})
         else:
-            ns = ns + " (객관적 사유 + 사전협의/서면합의 + 산식/근거 명시)"
+            ns = ns + " (객관적 사유 + 사전협의/서면합의 + 산식/근거 명시 + 이의제기권 + 자료검토권)"
         return ns
 
     patched, changed = _patch_sentence(sentences=sents, target_patterns=pats, replace_fn=repl)
     if changed:
-        reason = "단가 감액/조정이 일방적으로 적용될 수 있는 표현이 있어(예: " + ", ".join(matched_keywords[:3]) + "), 객관적 요건과 서면합의 및 산식/근거를 명시."
-        return RewriteProposal(suggested_rewrite=_norm_ws(" ".join(patched)), rewrite_reason=reason, reason_codes=["RISK-005"])
-    suffix = " (단가 조정/감액은 객관적 사유에 한정하고, 사전 협의 및 서면 합의로만 가능하며, 범위·기간·산식·근거를 명시한다.)"
+        reason = (
+            "단가 감액·조정이 일방적으로 적용될 수 있는 표현이 있음(예: " + ", ".join(matched_keywords[:3]) + "). "
+            "대리점법 제6조(불이익 제공 금지) 및 하도급법 제11조(부당한 단가 인하 금지)에 따라 "
+            "객관적 요건·서면합의·산식·근거·이의제기권·자료검토권을 조항 내에 직접 삽입함."
+        )
+        return RewriteProposal(
+            suggested_rewrite=_norm_ws(" ".join(patched)),
+            rewrite_reason=reason,
+            reason_codes=["RISK-005"],
+            changed_segments=changed_segs,
+        )
+    suffix = (
+        " (단가 조정·감액은 객관적 사유에 한정하고, 사전 협의 및 서면 합의로만 가능하며, "
+        "범위·기간·산식·근거를 명시한다. 당사는 조정 통보 수령 후 14일 이내 서면으로 이의를 제기할 수 있으며, "
+        "산출 근거 자료의 제출을 요구할 수 있다.)"
+    )
     suggested = _norm_ws(original + suffix)
-    reason = "단가 조정/감액의 객관적 요건·절차(사전협의/서면합의)·산식/근거가 불명확할 수 있어 보완."
-    return RewriteProposal(suggested_rewrite=suggested, rewrite_reason=reason, reason_codes=["RISK-005"])
+    reason = "단가 조정·감액의 객관적 요건·절차(사전협의/서면합의)·산식·근거·이의제기권·자료검토권이 불명확하여 보완함."
+    return RewriteProposal(
+        suggested_rewrite=suggested,
+        rewrite_reason=reason,
+        reason_codes=["RISK-005"],
+        changed_segments=[{"before": "(단가 조정 통제 조건 없음)", "after": suffix.strip()}],
+    )
 
 
 def _rewrite_risk_006_cost_shift(text: str, *, matched_keywords: list[str], posture: str) -> RewriteProposal | None:
@@ -233,26 +611,64 @@ def _rewrite_risk_006_cost_shift(text: str, *, matched_keywords: list[str], post
         r"marketing\s+fee",
     ]
     sents = _split_sentences(original)
+    changed_segs: list[dict[str, str]] = []
 
     def repl(s: str) -> str:
         ns = s
+        # 1단계: 포괄적 비용 부담 → 사전 서면 합의 조건으로 치환
+        new_ns = re.sub(r"(판촉비|광고비|반품비|수수료|비용)를?\s*부담(?:한다|하여야|해야)",
+                        r"\1을 사전 서면 합의된 항목·상한·정산 기준에 따라 부담하여야", ns)
+        if new_ns != ns:
+            changed_segs.append({"before": "비용을 부담", "after": "비용을 사전 서면 합의된 항목·상한·정산 기준에 따라 부담하여야"})
+            ns = new_ns
+        # 2단계: 이의제기권 + 자료검토권 + 상계권 세트 삽입
+        defense_clause = (
+            " (비용 부담 시: ①사전 서면 합의된 항목에 한정, "
+            "②항목별 상한·정산 기준·증빙 명시, "
+            "③일방 전가 금지, "
+            "④당사의 이의제기권: 비용 청구 수령 후 14일 이내 서면 이의 가능, "
+            "⑤당사의 자료검토권: 산출 근거 및 증빙 자료 제출 요구 가능, "
+            "⑥당사의 상계권: 확정 채권을 자동채무와 상계 가능)"
+        )
         if ns == s:
-            ns = s + " (비용 부담 항목은 사전 서면 합의된 경우에 한하며, 항목별 상한·정산 기준·증빙을 명시하고 일방 전가를 금지한다.)"
+            ns = s + defense_clause
+            changed_segs.append({"before": "(비용 전가 통제 조건 없음)", "after": defense_clause.strip()})
         else:
-            ns = ns + " (사전 서면합의 + 항목별 상한/정산/증빙 + 일방전가 금지)"
+            ns = ns + " (사전 서면합의 + 항목별 상한/정산/증빙 + 일방전가 금지 + 이의제기권 + 자료검토권 + 상계권)"
         return ns
 
     patched, changed = _patch_sentence(sentences=sents, target_patterns=pats, replace_fn=repl)
     if changed:
-        reason = "비용 부담/전가가 포괄적으로 해석될 소지가 있어(예: " + ", ".join(matched_keywords[:3]) + "), 항목별 상한·정산/증빙과 사전 서면합의 요건을 명시."
-        return RewriteProposal(suggested_rewrite=_norm_ws(" ".join(patched)), rewrite_reason=reason, reason_codes=["RISK-006"])
+        reason = (
+            "비용 부담·전가가 포괄적으로 해석될 소지가 있음(예: " + ", ".join(matched_keywords[:3]) + "). "
+            "대리점법 제6조(불이익 제공 금지) 및 제7조(경제적 이익 제공 강요 금지)에 따라 "
+            "항목별 상한·정산·증빙·사전 서면합의 요건과 이의제기권·자료검토권·상계권을 조항 내에 직접 삽입함."
+        )
+        return RewriteProposal(
+            suggested_rewrite=_norm_ws(" ".join(patched)),
+            rewrite_reason=reason,
+            reason_codes=["RISK-006"],
+            changed_segments=changed_segs,
+        )
     if posture == "buyer_favorable":
-        suffix = " (추가 비용/판촉비/광고비/반품비 등은 사전 서면 합의된 경우에 한하여 발생하며, 항목별 상한·정산 기준·증빙을 명시한다. 상대방의 과실/지시/하자/지연으로 발생한 비용은 상대방이 부담한다.)"
+        suffix = (
+            " (추가 비용·판촉비·광고비·반품비 등은 사전 서면 합의된 경우에 한하여 발생하며, "
+            "항목별 상한·정산 기준·증빙을 명시한다. 상대방의 과실·지시·하자·지연으로 발생한 비용은 상대방이 부담한다. "
+            "당사는 이의제기권·자료검토권·상계권을 보유한다.)"
+        )
     else:
-        suffix = " (비용 부담 항목은 사전 서면 합의된 경우에 한하며, 항목별 상한·정산 기준·증빙을 명시하고 일방 전가를 금지한다.)"
+        suffix = (
+            " (비용 부담 항목은 사전 서면 합의된 경우에 한하며, 항목별 상한·정산 기준·증빙을 명시하고 일방 전가를 금지한다. "
+            "당사는 이의제기권·자료검토권·상계권을 보유한다.)"
+        )
     suggested = _norm_ws(original + suffix)
-    reason = "판촉비/광고비/반품 등 비용 부담 조항의 항목별 기준(상한·정산·증빙)과 사전 서면합의 요건이 불명확할 수 있어 보완."
-    return RewriteProposal(suggested_rewrite=suggested, rewrite_reason=reason, reason_codes=["RISK-006"])
+    reason = "판촉비·광고비·반품 등 비용 부담 조항의 항목별 기준(상한·정산·증빙)과 사전 서면합의 요건 및 방어권 세트가 불명확하여 보완함."
+    return RewriteProposal(
+        suggested_rewrite=suggested,
+        rewrite_reason=reason,
+        reason_codes=["RISK-006"],
+        changed_segments=[{"before": "(비용 전가 통제 조건 없음)", "after": suffix.strip()}],
+    )
 
 
 def _rewrite_safety_gap(text: str, *, posture: str) -> RewriteProposal | None:
@@ -526,6 +942,21 @@ def propose_clause_specific_rewrite(
 
     proposals: list[RewriteProposal] = []
     rids = {str(ar.get("rule_id") or "") for ar in applied_rules if isinstance(ar, dict)}
+
+    # -----------------------------------------------------------------------
+    # 0단계: 독소 표현 일괄 제거 (전처리)
+    # -----------------------------------------------------------------------
+    detoxed_text, toxin_segs = _apply_toxin_removal(text)
+
+    # -----------------------------------------------------------------------
+    # 1단계: 대리점법 제18조 경영간섭 위험 감지 및 방어 (DEALER-001)
+    # -----------------------------------------------------------------------
+    our = _party_term(party, which="our")
+    cp = _party_term(party, which="counterparty")
+    mgmt_proposal = _rewrite_mgmt_interference(detoxed_text, our=our, cp=cp)
+    if mgmt_proposal:
+        proposals.append(mgmt_proposal)
+
     for ar in applied_rules:
         if not isinstance(ar, dict):
             continue
@@ -537,35 +968,35 @@ def propose_clause_specific_rewrite(
 
         p: RewriteProposal | None = None
         if rid == "RISK-001":
-            p = _rewrite_risk_001_liability_cap(text, matched_keywords=mk, posture=posture)
+            p = _rewrite_risk_001_liability_cap(detoxed_text, matched_keywords=mk, posture=posture)
         elif rid == "RISK-002":
-            p = _rewrite_risk_002_indemnity(text, matched_keywords=mk, posture=posture)
+            p = _rewrite_risk_002_indemnity(detoxed_text, matched_keywords=mk, posture=posture)
         elif rid == "RISK-004":
-            p = _rewrite_risk_004_tech_data(text, matched_keywords=mk, posture=posture)
+            p = _rewrite_risk_004_tech_data(detoxed_text, matched_keywords=mk, posture=posture)
         elif rid == "RISK-005":
-            p = _rewrite_risk_005_price_reduction(text, matched_keywords=mk, posture=posture)
+            p = _rewrite_risk_005_price_reduction(detoxed_text, matched_keywords=mk, posture=posture)
         elif rid == "RISK-006":
-            p = _rewrite_risk_006_cost_shift(text, matched_keywords=mk, posture=posture)
+            p = _rewrite_risk_006_cost_shift(detoxed_text, matched_keywords=mk, posture=posture)
         elif rid == "APP-001":
-            p = _rewrite_app_001_ip(text, posture=posture, party=party)
+            p = _rewrite_app_001_ip(detoxed_text, posture=posture, party=party)
         elif rid == "APP-002":
-            p = _rewrite_app_002_oss(text, posture=posture, party=party)
+            p = _rewrite_app_002_oss(detoxed_text, posture=posture, party=party)
         elif rid == "APP-003":
-            p = _rewrite_app_003_sow(text, posture=posture, party=party)
+            p = _rewrite_app_003_sow(detoxed_text, posture=posture, party=party)
         elif rid == "APP-004":
-            p = _rewrite_app_004_acceptance(text, posture=posture, party=party)
+            p = _rewrite_app_004_acceptance(detoxed_text, posture=posture, party=party)
         elif rid == "APP-006":
-            p = _rewrite_app_006_sla(text, posture=posture, party=party)
+            p = _rewrite_app_006_sla(detoxed_text, posture=posture, party=party)
         elif rid == "APP-007":
-            p = _rewrite_app_007_security(text, posture=posture, party=party)
+            p = _rewrite_app_007_security(detoxed_text, posture=posture, party=party)
         elif rid == "APP-009":
-            p = _rewrite_app_009_subcontract(text, posture=posture, party=party)
+            p = _rewrite_app_009_subcontract(detoxed_text, posture=posture, party=party)
         elif rid == "APP-010":
-            p = _rewrite_app_010_data(text, posture=posture, party=party)
+            p = _rewrite_app_010_data(detoxed_text, posture=posture, party=party)
         elif rid == "APP-011":
-            p = _rewrite_app_011_handover(text, posture=posture, party=party)
+            p = _rewrite_app_011_handover(detoxed_text, posture=posture, party=party)
         elif rid == "C-001":
-            p = _rewrite_c_001_settlement(text, posture=posture, party=party)
+            p = _rewrite_c_001_settlement(detoxed_text, posture=posture, party=party)
         elif rid == "ACT-004":
             jur = None
             if isinstance(contract_context, dict):
@@ -573,24 +1004,39 @@ def propose_clause_specific_rewrite(
                 if isinstance(j, dict) and isinstance(j.get("kind"), str):
                     jur = j
             if jur is None:
-                jp = classify_jurisdiction_profile(text=str(contract_context.get("contract_text") if isinstance(contract_context, dict) else "") or text)
+                jp = classify_jurisdiction_profile(text=str(contract_context.get("contract_text") if isinstance(contract_context, dict) else "") or detoxed_text)
                 jur = jp.to_dict()
-            p = _rewrite_act_004_dispute(text, posture=posture, party=party, jur=jur)
+            p = _rewrite_act_004_dispute(detoxed_text, posture=posture, party=party, jur=jur)
 
         if p:
             proposals.append(p)
 
     if not proposals and any(r in rids for r in ("RISK-003", "ACT-010")):
-        p2 = _rewrite_safety_gap(text, posture=posture)
+        p2 = _rewrite_safety_gap(detoxed_text, posture=posture)
         if p2:
             proposals.append(p2)
+
+    # 독소 제거만 있고 다른 proposal이 없는 경우에도 결과 반환
+    if not proposals and toxin_segs:
+        reason = "독소 표현(무제한·즉시·일방적으로 등)을 방어 표현으로 치환함."
+        return RewriteProposal(
+            suggested_rewrite=polish_korean_legal_style(_norm_ws(detoxed_text)),
+            rewrite_reason=reason,
+            reason_codes=["TOXIN-REMOVAL"],
+            changed_segments=toxin_segs,
+        )
 
     if not proposals:
         return None
 
+    # -----------------------------------------------------------------------
+    # 병합: reason_codes, reasons, changed_segments 통합
+    # -----------------------------------------------------------------------
     merged_reason_codes: list[str] = []
     merged_reasons: list[str] = []
+    merged_segments: list[dict[str, str]] = list(toxin_segs)  # 독소 제거 세그먼트 포함
     out_text = proposals[0].suggested_rewrite
+
     for p in proposals:
         if p.suggested_rewrite and p.suggested_rewrite != out_text:
             out_text = p.suggested_rewrite
@@ -599,11 +1045,27 @@ def propose_clause_specific_rewrite(
                 merged_reason_codes.append(c)
         if p.rewrite_reason and p.rewrite_reason not in merged_reasons:
             merged_reasons.append(p.rewrite_reason)
+        for seg in (p.changed_segments or []):
+            if seg not in merged_segments:
+                merged_segments.append(seg)
+
+    # 텍스트 기반 추가 세그먼트 추출
+    auto_segs = _extract_changed_segments(text, out_text)
+    for seg in auto_segs:
+        if seg not in merged_segments:
+            merged_segments.append(seg)
+
+    # risk_tier 산정
+    risk_tier = _infer_risk_tier(reason_codes=merged_reason_codes, text=text)
+
+    final_rewrite = polish_korean_legal_style(_norm_ws(out_text))
+    final_reason = polish_korean_legal_style(" / ".join(merged_reasons))[:900]
 
     return RewriteProposal(
-        suggested_rewrite=polish_korean_legal_style(_norm_ws(out_text)),
-        rewrite_reason=polish_korean_legal_style(" / ".join(merged_reasons))[:900],
+        suggested_rewrite=final_rewrite,
+        rewrite_reason=final_reason,
         reason_codes=merged_reason_codes,
+        changed_segments=merged_segments[:10],
     )
 
 

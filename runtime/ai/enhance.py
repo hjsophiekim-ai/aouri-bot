@@ -237,18 +237,42 @@ def polish_revision(
                 "original_clause": str(it.get("original_clause") or "")[:900],
                 "high_risk": bool(it.get("high_risk")),
                 "approval_required": bool(it.get("approval_required")),
+                "risk_tier": it.get("risk_tier", ""),
                 "suggested_direction": it.get("suggested_direction") if isinstance(it.get("suggested_direction"), list) else [],
                 "recommended_rewrite": it.get("recommended_rewrite"),
                 "fallback_text": it.get("fallback_text") if isinstance(it.get("fallback_text"), list) else [],
                 "applied_rules": it.get("applied_rules") if isinstance(it.get("applied_rules"), list) else [],
+                "changed_segments": it.get("changed_segments") if isinstance(it.get("changed_segments"), list) else [],
             }
         )
 
+    # -----------------------------------------------------------------------
+    # 시디즈(SIDIZ) 사내 변호사 / 유통·대리점법 전문 변호사 역할
+    # -----------------------------------------------------------------------
     system = (
-        "너는 계약서 조항 수정 제안 문구를 한국어로 더 자연스럽게 다듬는 도우미다. "
-        "판정(고위험/결재필요)이나 rule_id 구조는 바꾸지 말고, "
-        "recommended_rewrite와 suggested_direction만 다듬어라. "
-        "출력은 JSON 배열만, 각 원소는 clause_id/recommended_rewrite/suggested_direction만 포함하라."
+        "당신은 대한민국 대형 로펌의 유통·대리점법 전문 변호사이자 시디즈(SIDIZ)의 사내 변호사입니다. "
+        "단순한 문구 추가가 아니라, 상대방이 제시한 독소 조항을 무력화하고 당사의 실질적 이익을 방어하는 "
+        "'전략적 수정'을 수행하십시오.\n\n"
+        "## 검토 원칙\n"
+        "1. 단순 템플릿 지양: 조항 끝에 [추가]라고 붙이는 방식은 하수입니다. "
+        "원문의 문장 구조를 해체하고, 당사에게 유리한 조건을 '전제 조건'이나 '예외 조항'으로 문장 내에 직접 삽입하십시오.\n"
+        "2. 실질적 리스크 포착: '협의하여 정한다'와 같은 모호한 문구는 "
+        "'당사의 사전 서면 승인을 득하여야 하며, 불성립 시 당사의 결정에 따른다'와 같이 강한 통제권으로 치환하십시오.\n"
+        "3. 시디즈 비즈니스 특화: 대리점 계약 시 '경영간섭'으로 오해받지 않으면서도 "
+        "'브랜드 가이드라인'을 강제할 수 있는 정교한 표현 "
+        "(예: '품질 유지 및 소비자 보호를 위한 최소한의 기준 제시')을 사용하십시오.\n"
+        "4. 가드레일 유연화: 조항의 제목이 무엇이든, 해당 문구에 숨겨진 '비용 전가'나 "
+        "'책임 무제한' 리스크가 있다면 주제에 구애받지 말고 방어 문구를 설계하십시오.\n\n"
+        "## 수정 단계\n"
+        "1단계 (독소 제거): '무제한', '즉시', '일방적으로', '최종적' 등의 표현을 "
+        "'합리적인 범위 내에서', '최고 후', '상호 합의된' 등으로 즉시 수정.\n"
+        "2단계 (방어권 삽입): 상대방의 청구권에 대해 당사의 이의제기권·자료검토권·상계권을 반드시 세트로 구성.\n"
+        "3단계 (스타일 교정): 고도의 법률 문어체를 사용하여 권위 있는 문장으로 완성.\n\n"
+        "## 출력 규칙\n"
+        "- 판정(high_risk/approval_required/risk_tier)이나 rule_id 구조는 절대 변경하지 마십시오.\n"
+        "- recommended_rewrite와 suggested_direction만 다듬으십시오.\n"
+        "- changed_segments는 before/after 쌍으로 실제 변경된 핵심 문구만 포함하십시오.\n"
+        "- 출력은 JSON 배열만, 각 원소는 clause_id/recommended_rewrite/suggested_direction/changed_segments만 포함하십시오."
     )
     user = json.dumps(
         {"entity": entity, "contract_type": contract_type, "items": compact_items},
@@ -289,10 +313,18 @@ def polish_revision(
             nit = dict(it)
             rr = upd.get("recommended_rewrite")
             sd = upd.get("suggested_direction")
+            cs = upd.get("changed_segments")
             if isinstance(rr, str) and rr.strip():
                 nit["recommended_rewrite"] = rr.strip()
             if isinstance(sd, list):
                 nit["suggested_direction"] = [str(x).strip() for x in sd if str(x).strip()][:6]
+            # changed_segments: AI가 반환한 경우 병합, 없으면 기존 유지
+            if isinstance(cs, list) and cs:
+                existing = list(nit.get("changed_segments") or [])
+                for seg in cs:
+                    if isinstance(seg, dict) and seg not in existing:
+                        existing.append(seg)
+                nit["changed_segments"] = existing[:10]
             out_items.append(nit)
         else:
             out_items.append(it)
