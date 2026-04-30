@@ -1147,6 +1147,9 @@ def build_clause_level_result(
             )
 
     if prof.profile == "dealer_consignment":
+        # 조(article) 단위로 첫 번째 항에만 rewrite를 생성한다.
+        # 같은 조의 나머지 항은 dedup에서 처리하므로 여기서 중복 생성하지 않는다.
+        _seen_articles_for_dealer: set[str] = set()
         for cr in clause_results:
             if not isinstance(cr, dict):
                 continue
@@ -1160,7 +1163,13 @@ def build_clause_level_result(
             if not ot.strip():
                 continue
             ct0 = str(cr.get("clause_topic") or "").strip()
+            # 조 번호 추출 (같은 조의 두 번째 항부터는 건너뜀)
+            _an = str(cr.get("article_number") or "").strip()
             if ct0 == "payment_settlement":
+                _key = f"payment_{_an}"
+                if _key in _seen_articles_for_dealer:
+                    continue
+                _seen_articles_for_dealer.add(_key)
                 add = (
                     "\n\n[추가]\n"
                     "① 정산은 항목별 산식과 기준에 따라 이루어지며, 공제/상계는 계약 또는 사전 서면합의에 근거한 경우에 한한다.\n"
@@ -1180,6 +1189,10 @@ def build_clause_level_result(
             if a is None:
                 continue
             if a in (23, 24):
+                _key = f"termination_{_an}"
+                if _key in _seen_articles_for_dealer:
+                    continue
+                _seen_articles_for_dealer.add(_key)
                 add = (
                     "\n\n[추가]\n"
                     "① 갑은 을의 본 계약상 의무 위반이 객관적으로 중대하고 회복 곤란한 경우에 한하여 계약을 해지할 수 있다.\n"
@@ -1200,6 +1213,10 @@ def build_clause_level_result(
                 cr["must_fix"] = True
                 cr["review_tier"] = "MUST"
             elif a == 21 or ("불공정" in title or "불이익" in title):
+                _key = f"unfair_{_an}"
+                if _key in _seen_articles_for_dealer:
+                    continue
+                _seen_articles_for_dealer.add(_key)
                 add = (
                     "\n\n[추가]\n"
                     "① 갑은 을에게 거래상 지위를 이용하여 부당하게 불이익을 제공하거나, 부당한 비용을 전가하거나, 거래조건을 일방적으로 변경하여서는 아니 된다.\n"
@@ -1217,6 +1234,10 @@ def build_clause_level_result(
                 cr["must_fix"] = True
                 cr["review_tier"] = "MUST"
             elif a == 14 or ("인력" in title or "채용" in title or "교육" in title):
+                _key = f"staff_{_an}"
+                if _key in _seen_articles_for_dealer:
+                    continue
+                _seen_articles_for_dealer.add(_key)
                 add = (
                     "\n\n[추가]\n"
                     "① 을의 인력 채용·배치·평가·징계 등 인사관리는 을의 책임과 재량에 따른다.\n"
@@ -1232,6 +1253,10 @@ def build_clause_level_result(
                 cr["must_fix"] = False
                 cr["review_tier"] = "SUGGEST"
             elif a in (11, 17) or ("광고" in title or "판촉" in title or "비용" in title):
+                _key = f"cost_{_an}"
+                if _key in _seen_articles_for_dealer:
+                    continue
+                _seen_articles_for_dealer.add(_key)
                 add = (
                     "\n\n[추가]\n"
                     "① 판촉비/광고비/반품비/원상회복 비용 등 을이 부담하는 비용 항목은 사전에 항목별로 서면 합의하며, 상한(캡) 및 산정 기준을 명확히 한다.\n"
@@ -1247,6 +1272,10 @@ def build_clause_level_result(
                 cr["must_fix"] = False
                 cr["review_tier"] = "SUGGEST"
             elif a in (8, 9, 10) or ("정산" in title or "상계" in title or "공제" in title):
+                _key = f"settlement_{_an}"
+                if _key in _seen_articles_for_dealer:
+                    continue
+                _seen_articles_for_dealer.add(_key)
                 add = (
                     "\n\n[추가]\n"
                     "① 정산은 항목별 산식과 기준에 따라 이루어지며, 공제/상계는 계약 또는 사전 서면합의에 근거한 경우에 한한다.\n"
