@@ -375,6 +375,9 @@ def build_revision_docx(
         tier = tier_by_id.get(cid) or "LOW"
         if bool(cr.get("keep_as_is")):
             continue
+        # dedup_suppressed 항목은 suggested_rewrite가 None이어도 정상
+        if bool(cr.get("dedup_suppressed")):
+            continue
         if tier in ("HIGH", "MEDIUM"):
             sr = cr.get("suggested_rewrite")
             if not (isinstance(sr, str) and sr.strip()):
