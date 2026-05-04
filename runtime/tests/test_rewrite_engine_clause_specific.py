@@ -52,6 +52,31 @@ class ClauseSpecificRewriteTest(unittest.TestCase):
         self.assertIn("30일", p.suggested_rewrite)
         self.assertIn("발주자", p.suggested_rewrite)
 
+    def test_fursys_rental_picks_enforced(self) -> None:
+        party = PartyRole(
+            our_role="rental_provider",
+            counterparty_role="renter",
+            our_label="갑",
+            counterparty_label="을",
+            counterparty_is_large_standard_provider=False,
+            signals=["test"],
+        )
+        clause = "고객은 중도해지 시 위약금을 부담하며, 연체 시 추심을 진행한다."
+        p = propose_clause_specific_rewrite(clause_text=clause, applied_rules=[], party=party)
+        self.assertIsNotNone(p)
+        assert p is not None
+        self.assertIn("소유권", p.suggested_rewrite)
+        self.assertIn("10%", p.suggested_rewrite)
+        self.assertTrue(p.rewrite_reason.strip())
+
+    def test_dealer_price_approval_to_consultation(self) -> None:
+        clause = "대리점은 판매가격 변경에 대하여 사전 승인을 받아야 한다."
+        applied_rules = [{"rule_id": "DEALER-001", "matched_keywords": ["판매가격", "승인"]}]
+        p = propose_clause_specific_rewrite(clause_text=clause, applied_rules=applied_rules)
+        self.assertIsNotNone(p)
+        assert p is not None
+        self.assertIn("사전 협의", p.suggested_rewrite)
+
 
 if __name__ == "__main__":
     unittest.main()

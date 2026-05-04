@@ -47,6 +47,23 @@ def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dic
             our_role = "contractor"
             counterparty_role = "ordering_party"
             signals.append("entity_fursys_construction_override")
+        if any(k in ct for k in ("렌탈", "렌트", "구독", "구독서비스")) or _has_any(
+            t,
+            [
+                "렌탈료",
+                "월 렌탈료",
+                "구독료",
+                "정기결제",
+                "자동결제",
+                "반납",
+                "회수",
+                "소유권은",
+                "청약철회",
+            ],
+        ):
+            our_role = "rental_provider"
+            counterparty_role = "renter"
+            signals.append("entity_fursys_rental_override")
 
     if any(k in ct for k in ("구매", "매매", "물품공급/구매/매매", "장비공급", "물품구매")) or _has_any(t, ["구매자", "매수인", "발주자"]):
         our_role = "buyer"
@@ -91,6 +108,10 @@ def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dic
             our_label = "을"
             counter_label = counter_label or "갑"
             signals.append("entity_fursys_label_contractor")
+        if our_label is None and our_role == "rental_provider":
+            our_label = "갑"
+            counter_label = counter_label or "을"
+            signals.append("entity_fursys_label_rental_provider")
 
     counterparty_is_large = any(m in t for m in _LG_MARKERS) or ("LG" in (ct or ""))
     if counterparty_is_large:
@@ -114,7 +135,7 @@ def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dic
 def infer_review_posture(*, party: PartyRole, contract_type: str, text: str) -> str:
     if party.our_role in ("buyer", "ordering_party"):
         return "buyer_favorable"
-    if party.our_role in ("seller", "supplier", "contractor"):
+    if party.our_role in ("seller", "supplier", "contractor", "rental_provider"):
         return "seller_favorable"
     if _looks_like_purchase_installation(contract_type, text):
         return "buyer_favorable"

@@ -1968,7 +1968,18 @@ def build_clause_level_result(
                 "cost_burden": 18,
                 "dispute": 6,
             }
-            tw = topic_weight_supplier if our_role1 == "supplier" else (topic_weight_contractor if our_role1 == "contractor" else {})
+            topic_weight_rental = {
+                "payment_settlement": 40,
+                "termination": 34,
+                "personal_data": 28,
+                "other": 20,
+                "dispute": 6,
+            }
+            tw = (
+                topic_weight_supplier
+                if our_role1 == "supplier"
+                else (topic_weight_contractor if our_role1 == "contractor" else (topic_weight_rental if our_role1 == "rental_provider" else {}))
+            )
 
             def _score_high(cr: dict[str, Any]) -> int:
                 s = 0

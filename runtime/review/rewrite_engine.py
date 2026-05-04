@@ -53,6 +53,7 @@ _MGMT_INTERFERENCE_PATTERNS: list[str] = [
     r"의\s*지시\s*사항을\s*이행",
     r"가격을\s*(?:지정|결정|통제|강제)",
     r"판매가격을\s*(?:지정|결정|통제|강제)",
+    r"(판매가격|가격).{0,20}(승인|사전\s*승인|승인을\s*받)",
     r"인사\s*(?:에\s*관여|를\s*지시|를\s*통제)",
     r"노무\s*(?:에\s*관여|를\s*지시|를\s*통제)",
     r"영업\s*방침을\s*(?:지시|강제|통제)",
@@ -156,6 +157,10 @@ def _rewrite_mgmt_interference(text: str, *, our: str, cp: str) -> RewritePropos
         (r"판매가격을\s*(지정|결정|통제|강제)한다",
          "소비자 보호를 위한 권장 소비자가격(RRP)을 제시할 수 있으며, "
          "최종 판매가격 결정권은 대리점에 귀속한다"),
+        (r"(판매가격|가격)\s*(?:변경|결정|설정)?\s*(?:에\s*대하여)?\s*(?:사전\s*)?승인",
+         r"\1 변경/결정에 관하여 사전 협의"),
+        (r"(판매가격|가격)\s*(?:변경|결정|설정)?\s*시\s*(?:사전\s*)?승인을\s*받",
+         r"\1 변경/결정 시 사전 협의하"),
         (r"인사에\s*관여",
          "품질 유지를 위한 최소한의 자격 기준을 제시"),
         (r"경영에\s*(관여|간섭|개입)한다",
@@ -204,7 +209,7 @@ def _infer_risk_tier(*, reason_codes: list[str], text: str) -> str:
     LOW: 표현 개선 권고 수준
     """
     high_codes = {"RISK-001", "RISK-002", "RISK-004", "RISK-005", "RISK-006",
-                  "DEALER-001", "APP-001", "APP-007", "ACT-004", "FURSYS-CT-001"}
+                  "DEALER-001", "APP-001", "APP-007", "ACT-004", "FURSYS-CT-001", "FURSYS-RENT-001"}
     medium_codes = {"RISK-003", "APP-002", "APP-003", "APP-004", "APP-006",
                     "APP-009", "APP-010", "APP-011", "C-001"}
 
@@ -961,6 +966,10 @@ def propose_clause_specific_rewrite(
     if contractor_proposal:
         proposals.append(contractor_proposal)
 
+    rental_proposal = _rewrite_fursys_rental_picks(detoxed_text, party=party)
+    if rental_proposal:
+        proposals.append(rental_proposal)
+
     for ar in applied_rules:
         if not isinstance(ar, dict):
             continue
@@ -1123,6 +1132,57 @@ def _rewrite_fursys_contractor_picks(text: str, *, party: PartyRole | None) -> R
         suggested_rewrite=out,
         rewrite_reason=reason,
         reason_codes=["FURSYS-CT-001"],
+        changed_segments=changed[:10],
+    )
+
+
+def _rewrite_fursys_rental_picks(text: str, *, party: PartyRole | None) -> RewriteProposal | None:
+    original = _norm_ws(text)
+    if not original:
+        return None
+    if party is None or party.our_role != "rental_provider":
+        return None
+
+    out = original
+    changed: list[dict[str, str]] = []
+    reasons: list[str] = []
+
+    if _has_any(out, ["소유권", "임의", "양도", "담보", "처분"]) and "소유권" in out:
+        pass
+    else:
+        add = " 렌탈 기간 동안 목적물의 소유권은 렌탈업자(퍼시스)에 존속하며, 고객은 목적물을 임의로 처분·양도·담보 제공할 수 없다."
+        out = _norm_ws(out + "\n" + add)
+        changed.append({"before": "(소유권/임의처분 금지 명시 없음)", "after": add.strip()})
+        reasons.append("자산 소유권을 명확히 하고 임의 처분을 방지.")
+
+    if "위약금" in out or "중도해지" in out:
+        if "10%" not in out:
+            add = " 중도해지 위약금은 실제 손해를 초과하지 않는 범위에서 산정하며, 잔여 렌탈료의 10%를 상한으로 한다."
+            out = _norm_ws(out + "\n" + add)
+            changed.append({"before": "(중도해지 위약금 상한 없음)", "after": add.strip()})
+            reasons.append("중도해지 위약금이 과도해 약관 리스크로 확대되지 않도록 상한을 명시.")
+
+    if "청약철회" in out:
+        if _has_any(out, ["불가", "제한", "불인정", "포기"]) and "방해" not in out:
+            add = " 청약철회권의 행사 절차를 과도하게 제한하거나 방해하지 않으며, 법령상 제한 사유가 있는 경우에만 예외를 둔다."
+            out = _norm_ws(out + "\n" + add)
+            changed.append({"before": "(청약철회 절차 방해 가능)", "after": add.strip()})
+            reasons.append("청약철회권 침해로 평가될 소지를 줄이기 위해 행사 절차를 정리.")
+
+    if _has_any(out, ["신용정보", "채권추심", "추심", "연체", "위탁"]) and ("동의" not in out or "고지" not in out):
+        add = " 렌탈료 연체에 따른 채권추심 위탁 또는 신용정보의 조회·제공이 필요한 경우, 관련 법령에 따른 사전 고지 및 적법한 동의를 전제로 한다."
+        out = _norm_ws(out + "\n" + add)
+        changed.append({"before": "(추심/신용정보 동의·고지 전제 없음)", "after": add.strip()})
+        reasons.append("채권추심·신용정보 처리의 적법 절차를 명확히 함.")
+
+    if not changed:
+        return None
+
+    reason = " / ".join(reasons)[:900]
+    return RewriteProposal(
+        suggested_rewrite=out,
+        rewrite_reason=reason,
+        reason_codes=["FURSYS-RENT-001"],
         changed_segments=changed[:10],
     )
 
