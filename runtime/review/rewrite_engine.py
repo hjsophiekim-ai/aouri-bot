@@ -1101,6 +1101,25 @@ def _rewrite_fursys_contractor_picks(text: str, *, party: PartyRole | None) -> R
             out = out2
             reasons.append("지체상금 일 0.3%는 과도하므로 일 0.1% 이하로 조정.")
 
+    if re.search(r"(연체이자|지연이자|지연손해금)", out):
+        m = re.search(r"(연|년)\s*([0-9]{1,2})\s*%", out)
+        if m:
+            try:
+                rate = int(m.group(2))
+            except Exception:
+                rate = None
+            if rate is not None and rate < 6:
+                out2 = re.sub(re.escape(m.group(0)), f"{m.group(1)} 6%", out, count=1)
+                if out2 != out:
+                    changed.append({"before": m.group(0), "after": f"{m.group(1)} 6%"})
+                    out = out2
+                    reasons.append("연체이자율이 낮아 상법상 연 6% 수준으로 상향.")
+        elif "6%" not in out:
+            add = " 연체이자(지연이자)율은 상법상 연 6%를 하한으로 한다."
+            out = _norm_ws(out + "\n" + add)
+            changed.append({"before": "(연체이자율 기준 없음)", "after": add.strip()})
+            reasons.append("연체이자율의 하한을 상법상 연 6%로 명확화.")
+
     if re.search(r"(상계|공제|차감)", out) and ("확정" not in out or "채권" not in out):
         add = (
             " 공제/상계는 상대방에 대한 확정 채권이 존재하고, 사유·금액·산정 기준에 관하여 사전 서면 합의한 경우에 한하여 허용한다."
@@ -1111,10 +1130,10 @@ def _rewrite_fursys_contractor_picks(text: str, *, party: PartyRole | None) -> R
             reasons.append("도급인의 임의 공제/상계(수수료 차감 등)를 방지하기 위해 확정 채권 및 사전 서면합의 요건을 추가.")
 
     if re.search(r"(해지|종료)", out) and ("최고" in out or "즉시" in out) and ("30일" not in out):
-        add = " 해지 전 위반 사항을 특정하여 30일 이상의 기간을 정해 서면으로 최고하고, 상대방에게 시정 기회를 부여한다."
+        add = " 해지 전 위반 사항을 특정하여 30일 이상의 기간을 정해 서면으로 최고하고, 2회 이상 시정 기회를 부여한다."
         out = _norm_ws(out + "\n" + add)
         changed.append({"before": "(30일 서면 최고 절차 없음)", "after": add.strip()})
-        reasons.append("도급인의 일방적 즉시 해지권 남용을 방지하기 위해 30일 이상의 서면 최고·시정 절차를 삽입.")
+        reasons.append("도급인의 일방적 즉시 해지권 남용을 방지하기 위해 30일 이상의 서면 최고 및 2회 이상 시정 절차를 삽입.")
 
     if re.search(r"(안전|안전사고|산업안전|중대재해|안전관리|작업중지|현장|시공|공사|산안법)", out) and ("발주자" not in out or "현장" not in out or "하자" not in out):
         add = (

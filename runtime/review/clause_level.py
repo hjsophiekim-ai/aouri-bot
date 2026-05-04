@@ -957,6 +957,15 @@ def build_clause_level_result(
             must_fix = False
             review_tier = "NOTE"
 
+        a_i = _article_int(article_number) or _article_int(clause_id) or _article_int(it.get("display_path")) or _article_int(clause_title)
+        if (a_i in (1, 3)) or ("목적" in str(clause_title or "")) or ("정의" in str(clause_title or "")):
+            suggested_rewrite = None
+            if not (isinstance(rewrite_reason, str) and rewrite_reason.strip()):
+                rewrite_reason = "목적/정의 조항은 조항 본연의 의미 확인에 그치고, 비용/안전/정산 등 실무적 의무를 삽입하는 수정안은 생성하지 않음."
+            risk_tier = "LOW"
+            must_fix = False
+            review_tier = "NOTE"
+
         clause_results.append(
             {
                 "clause_id": clause_id,
@@ -983,8 +992,8 @@ def build_clause_level_result(
                 "rewrite_reason": rewrite_reason,
                 "suggested_direction": it.get("suggested_direction") if isinstance(it.get("suggested_direction"), list) else [],
                 "suggested_rewrite": suggested_rewrite,
-                "approval_required": bool(it.get("approval_required")) if not keep_as_is else False,
-                "high_risk": bool(it.get("high_risk")) if not keep_as_is else False,
+                "approval_required": bool(it.get("approval_required")) if not (keep_as_is or (a_i in (1, 3)) or ("목적" in str(clause_title or "")) or ("정의" in str(clause_title or ""))) else False,
+                "high_risk": bool(it.get("high_risk")) if not (keep_as_is or (a_i in (1, 3)) or ("목적" in str(clause_title or "")) or ("정의" in str(clause_title or ""))) else False,
                 "risk_tier": risk_tier,
                 "must_fix": must_fix,
                 "review_tier": review_tier,
@@ -1770,7 +1779,7 @@ def build_clause_level_result(
             add = (
                 "\n\n[추가]\n"
                 "① 해지(또는 계약 종료)는 객관적으로 중대한 위반이 있는 경우로 한정한다.\n"
-                "② 원칙적으로 위반 사항을 특정하여 서면 최고하고, 30일 이상의 시정기간을 부여한다.\n"
+                "② 원칙적으로 위반 사항을 특정하여 서면 최고하고, 30일 이상의 시정기간 및 2회 이상 시정 기회를 부여한다.\n"
                 "③ 예외적 즉시해지 사유는 신뢰관계를 본질적으로 훼손하는 고의·중대한 위반 등으로 좁게 열거한다.\n"
             )
             cr["suggested_rewrite"] = (ot0.rstrip() + add).strip()

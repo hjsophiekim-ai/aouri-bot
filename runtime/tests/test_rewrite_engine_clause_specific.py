@@ -39,6 +39,7 @@ class ClauseSpecificRewriteTest(unittest.TestCase):
         )
         clause = (
             "지체상금은 지체일수 1일당 계약금액의 0.3%로 한다. "
+            "연체이자율은 연 2%로 한다. "
             "갑은 을에게 지급할 대금에서 수수료 등을 공제할 수 있다. "
             "갑은 을의 위반 시 즉시 해지할 수 있다. "
             "안전사고 발생 시 을이 전적으로 책임진다."
@@ -47,9 +48,11 @@ class ClauseSpecificRewriteTest(unittest.TestCase):
         self.assertIsNotNone(p)
         assert p is not None
         self.assertIn("0.1%", p.suggested_rewrite)
+        self.assertIn("6%", p.suggested_rewrite)
         self.assertIn("확정", p.suggested_rewrite)
         self.assertIn("사전 서면", p.suggested_rewrite)
         self.assertIn("30일", p.suggested_rewrite)
+        self.assertIn("2회", p.suggested_rewrite)
         self.assertIn("발주자", p.suggested_rewrite)
 
     def test_fursys_rental_picks_enforced(self) -> None:
