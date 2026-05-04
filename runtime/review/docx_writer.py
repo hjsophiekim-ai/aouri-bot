@@ -431,6 +431,124 @@ def build_revision_docx(
     _t(_r(ps), f"필수수정(HIGH): {len(redline_ids)} / 권장수정(MEDIUM): {len(medium_ids)} / 참고제안(LOW): {len(low_ids)}")
     ps2 = _p(body)
     _t(_r(ps2), f"High risk 조항 수: {len(high_risk_rows)} / Approval required 조항 수: {len(approval_rows)}")
+
+    frc0 = final_review_context if isinstance(final_review_context, dict) else {}
+    if bool(frc0.get("expert_mode")):
+        sec_pos = _p(body)
+        _t(_r(sec_pos, bold=True), "1-0) 계약 성격 및 우리 측 포지션 분석")
+        party0 = frc0.get("party_role") if isinstance(frc0.get("party_role"), dict) else {}
+        our_role0 = str(party0.get("our_role") or "")
+        our_label0 = str(party0.get("our_label") or "")
+        if our_role0 == "supplier":
+            our_role_ko = "공급업자"
+        elif our_role0 == "contractor":
+            our_role_ko = "수급인"
+        elif our_role0 == "buyer":
+            our_role_ko = "구매자/발주자"
+        elif our_role0 == "ordering_party":
+            our_role_ko = "도급인/발주자"
+        else:
+            our_role_ko = "미확정"
+        pp0 = _p(body)
+        _t(_r(pp0), "우리 측 지위: " + our_role_ko + (f" ({our_label0})" if our_label0 else ""))
+        strat0 = frc0.get("expert_strategy") if isinstance(frc0.get("expert_strategy"), list) else []
+        for s in [x for x in strat0 if isinstance(x, str) and x.strip()][:4]:
+            pps = _p(body)
+            _t(_r(pps), "- " + s.strip())
+        _p(body)
+
+        sec_top = _p(body)
+        _t(_r(sec_top, bold=True), "1-1) 치명적 리스크 Top 3~5 (변호사 Pick)")
+        topic_weight_supplier = {
+            "dealer_unfair": 40,
+            "payment_settlement": 35,
+            "termination": 32,
+            "cost_burden": 28,
+            "personal_data": 18,
+            "dispute": 5,
+        }
+        topic_weight_contractor = {
+            "payment_settlement": 40,
+            "other": 34,
+            "safety": 28,
+            "termination": 22,
+            "cost_burden": 18,
+            "dispute": 6,
+        }
+        tw0 = topic_weight_supplier if our_role0 == "supplier" else (topic_weight_contractor if our_role0 == "contractor" else {})
+
+        def _score_top3(cr: dict[str, Any]) -> int:
+            s = 0
+            rt0 = str(cr.get("risk_tier") or "").upper()
+            if rt0 == "HIGH":
+                s += 110
+            elif rt0 == "MEDIUM":
+                s += 80
+            if bool(cr.get("approval_required")):
+                s += 50
+            if bool(cr.get("high_risk")):
+                s += 40
+            if bool(cr.get("must_fix")):
+                s += 30
+            if bool(cr.get("user_focus_hit")):
+                s += 25
+            ct0 = str(cr.get("clause_topic") or "")
+            s += int(tw0.get(ct0, 0))
+            if is_dealer_contract and str(jur_kind or "") == "domestic_korea" and ct0 == "dispute" and not bool(cr.get("user_focus_hit")):
+                s -= 80
+            return s
+
+        cand0 = [
+            cr
+            for cr in clause_results
+            if isinstance(cr, dict)
+            and not bool(cr.get("dedup_suppressed"))
+            and not bool(cr.get("keep_as_is"))
+            and (str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM") or bool(cr.get("user_focus_hit")) or bool(cr.get("high_risk")) or bool(cr.get("approval_required")))
+        ]
+        cand0 = sorted(cand0, key=lambda cr: (-_score_top3(cr), str(cr.get("clause_id") or "")))
+        picked: list[dict[str, Any]] = []
+        seen_articles: set[str] = set()
+        for cr in cand0:
+            cid = str(cr.get("clause_id") or "")
+            oc = orig_by_id.get(cid) or {}
+            head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc))
+            if head in seen_articles and head:
+                continue
+            if head:
+                seen_articles.add(head)
+            picked.append(cr)
+            if len(picked) >= 5:
+                break
+        if not picked:
+            pnone_top = _p(body)
+            _t(_r(pnone_top), "- 치명적 리스크 Top 3를 자동 선정할 충분한 근거가 부족합니다.")
+        else:
+            for cr in picked:
+                cid = str(cr.get("clause_id") or "")
+                oc = orig_by_id.get(cid) or {}
+                head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc)) or cid
+                issues = cr.get("detected_issue_list") if isinstance(cr.get("detected_issue_list"), list) else []
+                it = ""
+                for x in issues:
+                    if isinstance(x, dict) and bool(x.get("summary_suppress")):
+                        continue
+                    if isinstance(x, dict) and isinstance(x.get("issue_title"), str) and x["issue_title"].strip():
+                        it = x["issue_title"].strip()
+                        break
+                rr = str(cr.get("rewrite_reason") or "").strip()
+                risk1 = it or (rr[:90] if rr else "리스크/보완 필요")
+                sr = str(cr.get("suggested_rewrite") or "").strip()
+                if "[추가]" in sr:
+                    sr = sr.split("[추가]", 1)[1].strip()
+                sr = (sr[:220] + "…") if len(sr) > 220 else sr
+                p1 = _p(body)
+                _t(_r(p1), f"- 조항: {head}")
+                p2 = _p(body)
+                _t(_r(p2), f"  리스크: {risk1}")
+                p3 = _p(body)
+                _t(_r(p3), f"  수정 제안: {sr if sr else '(제안 문안 없음)'}")
+        _p(body)
     if show_ids:
         ph = _p(body)
         _t(_r(ph, bold=True), "핵심 리스크 요약:")
@@ -495,7 +613,6 @@ def build_revision_docx(
         _t(_r(pnone2), "자동으로 확정적인 수정 권고 조항은 탐지되지 않았습니다. 아래 ‘추가 확인 필요 질문’을 기준으로 추가 검토를 진행하세요.")
     _p(body)
 
-    frc0 = final_review_context if isinstance(final_review_context, dict) else {}
     focus_items = frc0.get("user_focus_issues") if isinstance(frc0.get("user_focus_issues"), list) else []
     focus_titles = [
         str(x.get("title") or x.get("code") or "").strip()

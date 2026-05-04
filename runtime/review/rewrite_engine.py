@@ -204,7 +204,7 @@ def _infer_risk_tier(*, reason_codes: list[str], text: str) -> str:
     LOW: 표현 개선 권고 수준
     """
     high_codes = {"RISK-001", "RISK-002", "RISK-004", "RISK-005", "RISK-006",
-                  "DEALER-001", "APP-001", "APP-007", "ACT-004"}
+                  "DEALER-001", "APP-001", "APP-007", "ACT-004", "FURSYS-CT-001"}
     medium_codes = {"RISK-003", "APP-002", "APP-003", "APP-004", "APP-006",
                     "APP-009", "APP-010", "APP-011", "C-001"}
 
@@ -957,6 +957,10 @@ def propose_clause_specific_rewrite(
     if mgmt_proposal:
         proposals.append(mgmt_proposal)
 
+    contractor_proposal = _rewrite_fursys_contractor_picks(detoxed_text, party=party)
+    if contractor_proposal:
+        proposals.append(contractor_proposal)
+
     for ar in applied_rules:
         if not isinstance(ar, dict):
             continue
@@ -1069,6 +1073,60 @@ def propose_clause_specific_rewrite(
     )
 
 
+def _rewrite_fursys_contractor_picks(text: str, *, party: PartyRole | None) -> RewriteProposal | None:
+    original = _norm_ws(text)
+    if not original:
+        return None
+    if party is None or party.our_role != "contractor":
+        return None
+
+    out = original
+    changed: list[dict[str, str]] = []
+    reasons: list[str] = []
+
+    if "지체상금" in out and re.search(r"(0\s*\.\s*3\s*%|0\s*\.\s*3\s*퍼센트|0\s*\.\s*3\s*percent)", out, flags=re.IGNORECASE):
+        before = re.search(r"(0\s*\.\s*3\s*%|0\s*\.\s*3\s*퍼센트|0\s*\.\s*3\s*percent)", out, flags=re.IGNORECASE)
+        out2 = re.sub(r"(0\s*\.\s*3\s*%|0\s*\.\s*3\s*퍼센트|0\s*\.\s*3\s*percent)", "0.1%", out, count=1, flags=re.IGNORECASE)
+        if out2 != out:
+            changed.append({"before": (before.group(0) if before else "0.3%"), "after": "0.1%"})
+            out = out2
+            reasons.append("지체상금 일 0.3%는 과도하므로 일 0.1% 이하로 조정.")
+
+    if re.search(r"(상계|공제|차감)", out) and ("확정" not in out or "채권" not in out):
+        add = (
+            " 공제/상계는 상대방에 대한 확정 채권이 존재하고, 사유·금액·산정 기준에 관하여 사전 서면 합의한 경우에 한하여 허용한다."
+        )
+        if add.strip() not in out:
+            out = _norm_ws(out + "\n" + add)
+            changed.append({"before": "(확정 채권/사전 서면합의 요건 없음)", "after": add.strip()})
+            reasons.append("도급인의 임의 공제/상계(수수료 차감 등)를 방지하기 위해 확정 채권 및 사전 서면합의 요건을 추가.")
+
+    if re.search(r"(해지|종료)", out) and ("최고" in out or "즉시" in out) and ("30일" not in out):
+        add = " 해지 전 위반 사항을 특정하여 30일 이상의 기간을 정해 서면으로 최고하고, 상대방에게 시정 기회를 부여한다."
+        out = _norm_ws(out + "\n" + add)
+        changed.append({"before": "(30일 서면 최고 절차 없음)", "after": add.strip()})
+        reasons.append("도급인의 일방적 즉시 해지권 남용을 방지하기 위해 30일 이상의 서면 최고·시정 절차를 삽입.")
+
+    if re.search(r"(안전|안전사고|산업안전|중대재해|안전관리|작업중지|현장|시공|공사|산안법)", out) and ("발주자" not in out or "현장" not in out or "하자" not in out):
+        add = (
+            " 안전관리는 상호 협력 원칙에 따라 수행하며, 발주자가 제공한 자료/도면/지시의 하자 또는 발주자가 제공·관리하는 현장의 기존 하자(시설·전기·구조물 등)로 인한 사고는 수급인의 책임에서 면제 또는 감경한다."
+        )
+        out = _norm_ws(out + "\n" + add)
+        changed.append({"before": "(발주자 제공자료/현장 하자 면책 없음)", "after": add.strip()})
+        reasons.append("수급인 일방 책임 전가를 차단하고 발주자 제공자료/현장 하자 귀책을 명확히 하기 위해 안전 조항을 보강.")
+
+    if not changed:
+        return None
+
+    reason = " / ".join(reasons)[:900]
+    return RewriteProposal(
+        suggested_rewrite=out,
+        rewrite_reason=reason,
+        reason_codes=["FURSYS-CT-001"],
+        changed_segments=changed[:10],
+    )
+
+
 def _rewrite_act_004_dispute(text: str, *, posture: str, party: PartyRole | None, jur: dict[str, object]) -> RewriteProposal | None:
     original = _norm_ws(text)
     if not original:
@@ -1120,4 +1178,3 @@ def _rewrite_c_001_settlement(text: str, *, posture: str, party: PartyRole | Non
         out = out + "\n" + ins
     reason = "정산/상계/공제는 대금 분쟁의 핵심이므로 산식·사유·증빙·기한을 조항 본문 기준으로 명확화."
     return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["C-001"])
-

@@ -1135,6 +1135,43 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const focus = (frc && Array.isArray(frc.user_focus_issues)) ? frc.user_focus_issues : [];
         const hits = itemsAll.filter(x => x && x.user_focus_hit);
         const lines = [];
+        if (frc && frc.expert_mode) {
+          const party = (frc.party_role && typeof frc.party_role === 'object') ? frc.party_role : {};
+          const ourRole = String(party.our_role || '');
+          const ourLabel = String(party.our_label || '');
+          const roleKo = (ourRole === 'supplier') ? '공급업자' : (ourRole === 'contractor') ? '수급인' : (ourRole === 'buyer') ? '구매자/발주자' : (ourRole === 'ordering_party') ? '도급인/발주자' : '미확정';
+          lines.push(`포지션: ${roleKo}${ourLabel ? ` (${ourLabel})` : ''}`);
+          const strat = (Array.isArray(frc.expert_strategy)) ? frc.expert_strategy : [];
+          for (const s of strat.slice(0, 2)) {
+            if (s && String(s).trim() !== '') lines.push('- ' + String(s).trim());
+          }
+          const topicWeightSupplier = { dealer_unfair: 40, payment_settlement: 35, termination: 32, cost_burden: 28, personal_data: 18, dispute: 5 };
+          const topicWeightContractor = { payment_settlement: 40, other: 34, safety: 28, termination: 22, cost_burden: 18, dispute: 6 };
+          const tw = (ourRole === 'supplier') ? topicWeightSupplier : (ourRole === 'contractor') ? topicWeightContractor : {};
+          const scored = itemsAll
+            .filter(x => x && !x.dedup_suppressed && !x.keep_as_is && (String(x.risk_tier || '').toUpperCase() === 'HIGH' || String(x.risk_tier || '').toUpperCase() === 'MEDIUM' || x.high_risk || x.approval_required || x.user_focus_hit))
+            .map(x => {
+              const ct = String(x.clause_topic || '');
+              let sc = 0;
+              const rt = String(x.risk_tier || '').toUpperCase();
+              if (rt === 'HIGH') sc += 110;
+              else if (rt === 'MEDIUM') sc += 80;
+              if (x.approval_required) sc += 50;
+              if (x.high_risk) sc += 40;
+              if (x.must_fix) sc += 30;
+              if (x.user_focus_hit) sc += 25;
+              sc += Number(tw[ct] || 0);
+              if (String(ctx.contract_type || '').includes('대리점') && String((meta0.jurisdiction || {}).kind || '') === 'domestic_korea' && ct === 'dispute' && !x.user_focus_hit) sc -= 80;
+              return { x, sc };
+            })
+            .sort((a, b) => b.sc - a.sc)
+            .slice(0, 3)
+            .map(z => z.x);
+          if (scored.length > 0) {
+            const pick = scored.map(x => String(x.display_path || x.clause_id || '')).filter(Boolean).join(' · ');
+            lines.push('치명 리스크 Pick: ' + pick);
+          }
+        }
         if (focus.length === 0) lines.push('중점 검토 내용이 입력되지 않았습니다.');
         else lines.push('요청 이슈: ' + focus.map(x => x.title || x.code).slice(0, 6).join(' / '));
         if (hits.length === 0) {

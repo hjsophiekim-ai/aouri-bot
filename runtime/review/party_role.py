@@ -28,7 +28,8 @@ class PartyRole:
 _LG_MARKERS = ["LG전자", "엘지", "LG ", "LG\n", "LG\t", "LG-"]
 
 
-def infer_party_role(*, contract_type: str, text: str, answers: dict[str, Any] | None) -> PartyRole:
+def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dict[str, Any] | None) -> PartyRole:
+    ent = (entity or "")
     ct = (contract_type or "")
     t = (text or "")
     a = answers or {}
@@ -36,6 +37,16 @@ def infer_party_role(*, contract_type: str, text: str, answers: dict[str, Any] |
 
     our_role = "unknown"
     counterparty_role = "unknown"
+
+    if "퍼시스" in ent:
+        if any(k in ct for k in ("대리점", "유통", "위탁운영", "위탁", "운영대행")) or _has_any(t, ["대리점", "대리점법", "재판매", "판매가격", "유통"]):
+            our_role = "supplier"
+            counterparty_role = "dealer_or_distributor"
+            signals.append("entity_fursys_dealer_override")
+        if any(k in ct for k in ("인테리어", "공사", "시공", "리모델링")) or _has_any(t, ["수급인", "도급인", "공사", "시공", "인테리어"]):
+            our_role = "contractor"
+            counterparty_role = "ordering_party"
+            signals.append("entity_fursys_construction_override")
 
     if any(k in ct for k in ("구매", "매매", "물품공급/구매/매매", "장비공급", "물품구매")) or _has_any(t, ["구매자", "매수인", "발주자"]):
         our_role = "buyer"
@@ -71,6 +82,16 @@ def infer_party_role(*, contract_type: str, text: str, answers: dict[str, Any] |
     counter_label = labels.get("counterparty_label")
     signals.extend(labels.get("signals", []))
 
+    if "퍼시스" in ent:
+        if our_label is None and our_role == "supplier":
+            our_label = "갑"
+            counter_label = counter_label or "을"
+            signals.append("entity_fursys_label_supplier")
+        if our_label is None and our_role == "contractor":
+            our_label = "을"
+            counter_label = counter_label or "갑"
+            signals.append("entity_fursys_label_contractor")
+
     counterparty_is_large = any(m in t for m in _LG_MARKERS) or ("LG" in (ct or ""))
     if counterparty_is_large:
         signals.append("counterparty_large_lg_marker")
@@ -93,7 +114,7 @@ def infer_party_role(*, contract_type: str, text: str, answers: dict[str, Any] |
 def infer_review_posture(*, party: PartyRole, contract_type: str, text: str) -> str:
     if party.our_role in ("buyer", "ordering_party"):
         return "buyer_favorable"
-    if party.our_role in ("seller", "supplier"):
+    if party.our_role in ("seller", "supplier", "contractor"):
         return "seller_favorable"
     if _looks_like_purchase_installation(contract_type, text):
         return "buyer_favorable"

@@ -20,6 +20,11 @@ _OBJECTIVES: list[UserFocusObjective] = [
     UserFocusObjective(code="dealer_cost_shift", title="비용전가(판촉비/광고비/반품비/원상회복)", keywords=["비용전가", "비용 전가", "비용부담", "판촉", "판매장려금", "광고비", "반품", "원상회복"]),
     UserFocusObjective(code="termination_abuse", title="계약해지/물량축소/불이익 조치 남용", keywords=["해지", "종료", "물량", "축소", "중단", "불이익", "일방", "임의"]),
     UserFocusObjective(code="settlement_offset", title="정산/공제/상계/증빙(대금 리스크)", keywords=["정산", "상계", "공제", "차감", "증빙", "인보이스", "세금계산서"]),
+    UserFocusObjective(code="delay_liquidated_damages", title="지체상금(지체상금율/공기지연 책임)", keywords=["지체상금", "공기", "공기지연", "지연", "지연손해금", "손해배상액의 예정", "지체"]),
+    UserFocusObjective(code="penalty_clause", title="위약금/위약벌(과도한 페널티)", keywords=["위약금", "위약벌", "벌금", "패널티", "penalty"]),
+    UserFocusObjective(code="unilateral_setoff", title="일방적 상계권(이의제기권 부재)", keywords=["일방", "상계권", "상계", "공제", "차감", "이의", "이의제기", "이의 제기"]),
+    UserFocusObjective(code="unfair_unit_price_reduction", title="부당한 단가 인하(하도급/공사 단가 리스크)", keywords=["단가", "단가인하", "단가 인하", "감액", "대금감액", "부당", "하도급", "하도급법"]),
+    UserFocusObjective(code="rpm_price_fixing", title="재판매가격 유지행위 강제(가격결정권 침해)", keywords=["재판매", "가격유지", "가격 유지", "판매가격", "가격결정", "가격 결정", "가격강제", "가격 강제", "가격 통제"]),
     UserFocusObjective(code="privacy", title="개인정보/처리위탁/재위탁/침해사고", keywords=["개인정보", "처리위탁", "수탁", "재위탁", "파기", "반환", "침해사고", "유출", "통지"]),
     UserFocusObjective(code="dispute", title="분쟁해결/재판관할/준거법", keywords=["분쟁", "관할", "전속관할", "합의관할", "준거법", "중재", "조정"]),
 ]
@@ -79,6 +84,12 @@ def objective_codes_to_clause_topics(codes: list[str]) -> set[str]:
             out.update({"cost_burden", "payment_settlement", "dealer_unfair"})
         if c in ("termination_abuse",):
             out.update({"termination", "dealer_unfair"})
+        if c in ("delay_liquidated_damages", "penalty_clause", "unfair_unit_price_reduction"):
+            out.add("payment_settlement")
+        if c in ("unilateral_setoff",):
+            out.update({"payment_settlement", "dealer_unfair"})
+        if c in ("rpm_price_fixing",):
+            out.add("dealer_unfair")
         if c in ("privacy",):
             out.add("personal_data")
         if c in ("dispute",):

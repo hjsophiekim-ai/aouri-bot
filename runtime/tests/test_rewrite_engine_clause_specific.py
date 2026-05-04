@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from runtime.review.rewrite_engine import propose_clause_specific_rewrite
+from runtime.review.party_role import PartyRole
 
 
 class ClauseSpecificRewriteTest(unittest.TestCase):
@@ -26,6 +27,30 @@ class ClauseSpecificRewriteTest(unittest.TestCase):
         self.assertIn("Supplier", p.suggested_rewrite)
         self.assertIn("indemnify", p.suggested_rewrite.lower())
         self.assertNotIn("fallback", p.suggested_rewrite.lower())
+
+    def test_fursys_contractor_picks_enforced(self) -> None:
+        party = PartyRole(
+            our_role="contractor",
+            counterparty_role="ordering_party",
+            our_label="을",
+            counterparty_label="갑",
+            counterparty_is_large_standard_provider=False,
+            signals=["test"],
+        )
+        clause = (
+            "지체상금은 지체일수 1일당 계약금액의 0.3%로 한다. "
+            "갑은 을에게 지급할 대금에서 수수료 등을 공제할 수 있다. "
+            "갑은 을의 위반 시 즉시 해지할 수 있다. "
+            "안전사고 발생 시 을이 전적으로 책임진다."
+        )
+        p = propose_clause_specific_rewrite(clause_text=clause, applied_rules=[], party=party)
+        self.assertIsNotNone(p)
+        assert p is not None
+        self.assertIn("0.1%", p.suggested_rewrite)
+        self.assertIn("확정", p.suggested_rewrite)
+        self.assertIn("사전 서면", p.suggested_rewrite)
+        self.assertIn("30일", p.suggested_rewrite)
+        self.assertIn("발주자", p.suggested_rewrite)
 
 
 if __name__ == "__main__":

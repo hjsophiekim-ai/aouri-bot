@@ -797,7 +797,7 @@ def build_clause_level_result(
             meta=meta,
         )
 
-    party = infer_party_role(contract_type=str(contract_type), text=str(text), answers=answers)
+    party = infer_party_role(entity=str(entity), contract_type=str(contract_type), text=str(text), answers=answers)
     review_posture = infer_review_posture(party=party, contract_type=str(contract_type), text=str(text))
     review = service.analyze(
         ReviewInput(
@@ -1714,17 +1714,32 @@ def build_clause_level_result(
         ot0 = str(cr.get("original_text") or "")
         if not ot0.strip():
             continue
+        cid0 = str(cr.get("clause_id") or "")
+        ch0 = chunk_by_id.get(cid0)
+        a0s = str(ch0.article_number or "").strip() if isinstance(ch0, object) else ""
+        a0i = int(a0s) if a0s.isdigit() else None
+        title0 = str(cr.get("clause_title") or "")
+        if a0i in (1, 3) or ("목적" in title0) or ("정의" in title0):
+            cr["risk_tier"] = "LOW"
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
+            cr["high_risk"] = False
+            cr["approval_required"] = False
+            if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
+                cr["rewrite_reason"] = "목적/정의 조항은 조항 본연의 의미 확인에 그치고, 실무적 의무를 추가하는 수정안은 생성하지 않음."
+            continue
         ct0 = str(cr.get("clause_topic") or "").strip()
         if ct0 == "payment_settlement":
             add = (
                 "\n\n[추가]\n"
-                "① 정산은 항목별 산식과 기준에 따라 이루어지며, 공제/상계는 계약 또는 사전 서면합의에 근거한 경우에 한한다.\n"
-                "② 갑은 정산서(항목별 내역) 및 합리적 범위의 증빙을 제공하고, 을은 일정 기간 내 이의제기할 수 있다.\n"
+                "① 정산은 항목별 산식과 기준에 따라 이루어지며, 공제/상계는 당사자 간 사전 서면합의(사유·금액·산정 기준 포함)가 있는 경우에 한한다.\n"
+                "② 공제/상계는 상대방에 대한 확정 채권(또는 이에 준하는 객관적 근거)이 있는 경우로 제한한다.\n"
+                "③ 갑은 정산서(항목별 내역) 및 합리적 범위의 증빙을 제공하고, 을은 일정 기간 내 이의제기할 수 있다.\n"
             )
             cr["suggested_rewrite"] = (ot0.rstrip() + add).strip()
             if not (isinstance(cr.get("suggested_direction"), list) and cr.get("suggested_direction")):
                 cr["suggested_direction"] = [
-                    "공제/상계 요건을 계약/서면합의로 제한",
+                    "공제/상계 요건을 확정 채권 및 사전 서면합의로 제한",
                     "정산서·증빙 제공 및 이의제기 절차 명문화",
                 ]
             if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
@@ -1755,14 +1770,14 @@ def build_clause_level_result(
             add = (
                 "\n\n[추가]\n"
                 "① 해지(또는 계약 종료)는 객관적으로 중대한 위반이 있는 경우로 한정한다.\n"
-                "② 원칙적으로 위반 사항을 특정하여 서면 최고하고, 상당한 시정기간을 부여한다.\n"
+                "② 원칙적으로 위반 사항을 특정하여 서면 최고하고, 30일 이상의 시정기간을 부여한다.\n"
                 "③ 예외적 즉시해지 사유는 신뢰관계를 본질적으로 훼손하는 고의·중대한 위반 등으로 좁게 열거한다.\n"
             )
             cr["suggested_rewrite"] = (ot0.rstrip() + add).strip()
             if not (isinstance(cr.get("suggested_direction"), list) and cr.get("suggested_direction")):
                 cr["suggested_direction"] = [
                     "즉시 해지 사유를 객관적·중대한 위반으로 한정",
-                    "원칙적으로 서면 최고 및 시정기간 부여",
+                    "원칙적으로 30일 이상 서면 최고 및 시정기간 부여",
                     "예외적 즉시 해지 사유를 좁게 열거",
                 ]
             if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
@@ -1795,14 +1810,15 @@ def build_clause_level_result(
                 "① 본 조의 “사고”는 공사 수행과 관련하여 발생한 안전사고 및 기타 중대한 사건을 의미하며, 수급인은 사고(또는 사고 징후)를 인지한 즉시 도급인에게 서면으로 통지한다.\n"
                 "② 통지에는 발생 일시·장소·경위, 피해 범위(인명/재산/공정), 긴급 조치 및 재발방지 계획을 포함한다.\n"
                 "③ 수급인의 귀책사유로 인한 사고에 대해서는 수급인이 관련 법령상 의무를 이행하고, 도급인의 손해를 합리적인 범위에서 배상한다.\n"
-                "④ 다만, 도급인의 지시·제공 자료의 하자 또는 불가항력 등 수급인의 귀책이 아닌 사유로 인한 경우에는 수급인의 책임을 면제 또는 감경한다.\n"
+                "④ 다만, 발주자(도급인)가 제공한 자료/도면/지시의 하자, 발주자가 제공·관리하는 현장의 기존 하자(시설·전기·구조·누수 등), 현장 인도 지연 등 수급인의 귀책이 아닌 사유로 인한 경우에는 수급인의 책임을 면제 또는 감경한다.\n"
+                "⑤ 안전관리는 일방 책임 전가가 아니라 상호 협력 원칙에 따라 수행하며, 도급인은 현장 인도·출입통제·기존 시설 안전 확보 등 도급인이 통제 가능한 영역의 안전 조치를 이행한다.\n"
             )
             cr["suggested_rewrite"] = (ot0.rstrip() + add).strip()
             if not (isinstance(cr.get("suggested_direction"), list) and cr.get("suggested_direction")):
                 cr["suggested_direction"] = [
                     "사고 정의 및 통지 범위를 명확화",
                     "통지 내용(경위/피해/조치/재발방지) 구체화",
-                    "귀책사유 기준으로 책임 범위 정리",
+                    "발주자 귀책(제공자료/현장 하자 등) 면책·감경 및 상호 협력 구조 반영",
                 ]
             if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
                 cr["rewrite_reason"] = "사고 통지 의무는 필요하지만, 사고 범위·통지 내용·책임 기준이 불명확하면 과도한 책임으로 확대될 수 있어, 정의/절차/귀책 기준을 명확히 한다."
@@ -1922,6 +1938,67 @@ def build_clause_level_result(
             cr["display_kind"] = "guidance"
         else:
             cr["display_kind"] = "note"
+
+    frc1 = contract_context.get("final_review_context") if isinstance(contract_context, dict) else None
+    if isinstance(frc1, dict) and bool(frc1.get("expert_mode")):
+        party1 = frc1.get("party_role") if isinstance(frc1.get("party_role"), dict) else {}
+        our_role1 = str(party1.get("our_role") or "")
+        high_candidates = [
+            cr
+            for cr in clause_results
+            if isinstance(cr, dict)
+            and not bool(cr.get("keep_as_is"))
+            and not bool(cr.get("dedup_suppressed"))
+            and (str(cr.get("risk_tier") or "").upper() == "HIGH" or bool(cr.get("high_risk")) or bool(cr.get("approval_required")))
+        ]
+        if len(high_candidates) > 5:
+            topic_weight_supplier = {
+                "dealer_unfair": 40,
+                "payment_settlement": 35,
+                "termination": 32,
+                "cost_burden": 28,
+                "personal_data": 18,
+                "dispute": 5,
+            }
+            topic_weight_contractor = {
+                "payment_settlement": 40,
+                "other": 34,
+                "safety": 28,
+                "termination": 22,
+                "cost_burden": 18,
+                "dispute": 6,
+            }
+            tw = topic_weight_supplier if our_role1 == "supplier" else (topic_weight_contractor if our_role1 == "contractor" else {})
+
+            def _score_high(cr: dict[str, Any]) -> int:
+                s = 0
+                if bool(cr.get("approval_required")):
+                    s += 60
+                if bool(cr.get("high_risk")):
+                    s += 45
+                if bool(cr.get("must_fix")):
+                    s += 30
+                if bool(cr.get("user_focus_hit")):
+                    s += 20
+                if str(cr.get("risk_tier") or "").upper() == "HIGH":
+                    s += 10
+                s += int(tw.get(str(cr.get("clause_topic") or ""), 0))
+                return s
+
+            keep = sorted(high_candidates, key=lambda cr: (-_score_high(cr), str(cr.get("clause_id") or "")))[:5]
+            keep_ids = {str(cr.get("clause_id") or "") for cr in keep if str(cr.get("clause_id") or "")}
+            for cr in high_candidates:
+                cid = str(cr.get("clause_id") or "")
+                if cid and cid not in keep_ids:
+                    cr["expert_demoted_from_high"] = True
+                    cr["risk_tier"] = "MEDIUM"
+                    cr["high_risk"] = False
+                    cr["approval_required"] = False
+                    cr["must_fix"] = False
+                    if bool(cr.get("has_rewrite_change")):
+                        cr["display_kind"] = "guidance"
+                    else:
+                        cr["display_kind"] = "note"
 
     focus_mapping_debug: list[dict[str, Any]] = []
     if focus_codes:
