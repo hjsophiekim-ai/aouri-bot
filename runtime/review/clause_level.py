@@ -1789,6 +1789,27 @@ def build_clause_level_result(
                 cr["must_fix"] = False
                 cr["review_tier"] = "SUGGEST"
             continue
+        if ct0 == "safety":
+            add = (
+                "\n\n[추가]\n"
+                "① 본 조의 “사고”는 공사 수행과 관련하여 발생한 안전사고 및 기타 중대한 사건을 의미하며, 수급인은 사고(또는 사고 징후)를 인지한 즉시 도급인에게 서면으로 통지한다.\n"
+                "② 통지에는 발생 일시·장소·경위, 피해 범위(인명/재산/공정), 긴급 조치 및 재발방지 계획을 포함한다.\n"
+                "③ 수급인의 귀책사유로 인한 사고에 대해서는 수급인이 관련 법령상 의무를 이행하고, 도급인의 손해를 합리적인 범위에서 배상한다.\n"
+                "④ 다만, 도급인의 지시·제공 자료의 하자 또는 불가항력 등 수급인의 귀책이 아닌 사유로 인한 경우에는 수급인의 책임을 면제 또는 감경한다.\n"
+            )
+            cr["suggested_rewrite"] = (ot0.rstrip() + add).strip()
+            if not (isinstance(cr.get("suggested_direction"), list) and cr.get("suggested_direction")):
+                cr["suggested_direction"] = [
+                    "사고 정의 및 통지 범위를 명확화",
+                    "통지 내용(경위/피해/조치/재발방지) 구체화",
+                    "귀책사유 기준으로 책임 범위 정리",
+                ]
+            if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
+                cr["rewrite_reason"] = "사고 통지 의무는 필요하지만, 사고 범위·통지 내용·책임 기준이 불명확하면 과도한 책임으로 확대될 수 있어, 정의/절차/귀책 기준을 명확히 한다."
+            if tier0 == "MEDIUM":
+                cr["must_fix"] = False
+                cr["review_tier"] = "SUGGEST"
+            continue
         if ct0 == "personal_data":
             add = (
                 "\n\n[추가]\n"
