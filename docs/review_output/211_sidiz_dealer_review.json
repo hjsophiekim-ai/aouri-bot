@@ -1,0 +1,2696 @@
+{
+  "input": {
+    "entity": "시디즈",
+    "contract_type": "대리점/위탁/유통",
+    "filename": "☆ 시디즈 26년 대리점(권역) 계약서 검토(법무팀).docx"
+  },
+  "question_answers": {},
+  "derived_context": {
+    "additional_contract_types_by_questions": [],
+    "additional_contract_types_by_text": [
+      "대리점/위탁/유통",
+      "개인정보/처리위탁",
+      "광고/마케팅/협찬"
+    ],
+    "expanded_rule_count": 2,
+    "jurisdiction": {
+      "kind": "domestic_korea",
+      "foreign_entity_involved": false,
+      "cross_border": false,
+      "evidence": [
+        "korea_law_venue_present"
+      ]
+    }
+  },
+  "summary": {
+    "applicable_rule_count": 26,
+    "matched_rule_count": 5,
+    "checklist_rule_count": 12,
+    "approval_required_match_count": 2,
+    "high_risk_match_count": 2,
+    "approval_required": true,
+    "high_risk": true,
+    "backlog_reference_count": 6
+  },
+  "matched_rules": [
+    {
+      "rule_id": "ACT-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "동의/승인",
+      "rule_level": "pattern",
+      "title": "사전 서면동의 조건 명확화",
+      "description": "사전 서면동의 문구가 반복 등장하므로 동의권자·거절 기준·지연 책임을 명확히 한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "90/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "prior written consent / 사전 서면동의"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "동의권자(대표/담당/승인라인) 정의",
+        "거절/보류 사유 기준 및 응답 기한 설정"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:actual_contracts",
+        "pattern:prior_written_consent",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "ACT-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "대금/지급/정산",
+      "rule_level": "pattern",
+      "title": "정산식·차감사유·증빙 필수화",
+      "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "185/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "Compensation / payment"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "정산식(계산기준/정산주기/환불/공제) 명시",
+        "공제/상계 사유는 제한적으로 열거",
+        "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:actual_contracts",
+        "clause:payment",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "ACT-004",
+      "entity": "all",
+      "contract_type": [
+        "해외법인(미국/베트남/대만/싱가포르 등)",
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "pattern",
+      "title": "국내 계약 분쟁조항 점검",
+      "description": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "163/207",
+        "example_files": [
+          "(20240618) Trendway Corp 대응 letter_법무팀.docx"
+        ],
+        "example_phrase": "jurisdiction / 관할"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "준거법과 관할(또는 중재)을 명시",
+        "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:actual_contracts",
+        "clause:dispute",
+        "entity_weighted:해외법인",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "RISK-006",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "risk",
+      "title": "대리점 비용전가(원상회복/판촉/반품/광고비 등) 탐지",
+      "description": "대리점에 대한 비용전가 구조는 대리점법/공정거래 리스크가 있어 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "8/207",
+        "example_files": [
+          "☆ 일룸 입점대리점 매장운영합의서 검토(법무팀).docx"
+        ],
+        "example_phrase": "원상회복 ... 공급업자의 요구 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 근거를 문서화",
+        "대리점의 자율성 및 협의/동의 절차 확보",
+        "불이익 제공 강요/거래상 지위 남용 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:dealer_cost_shifting",
+        "approval_required",
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:일룸",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-009",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "pattern_approval",
+      "title": "대리점 비용부담 트리거(승인 필요)",
+      "description": "대리점 + 비용부담/판촉비/반품비/광고비 트리거가 있으면 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_phrase": "대리점 + 비용부담"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 기준 문서화",
+        "대리점 동의 절차 및 불이익 강요 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:dealer_cost",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    }
+  ],
+  "checklist_rules": [
+    {
+      "rule_id": "STD-001",
+      "entity": "all",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "대리점/위탁/유통",
+        "임대차/전대차",
+        "NDA/비밀유지",
+        "개인정보/처리위탁"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "standard_contract",
+      "title": "손해배상/면책 조항 기본 점검",
+      "description": "표준계약서에 포함된 손해배상/면책/배상 구조를 기준으로, 배상범위·상호성·면책요건을 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "대금 또는 손해배상금 등을 지급하여야 할 자가 지급시기에 지급하지 않을 경우 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "배상 범위(직접/간접/특별손해) 구분 확인",
+        "상호성(일방 배상/면책 여부) 확인",
+        "면책 사유(불가항력/상대 귀책/제3자 행위)와 절차(통지/방어) 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "해지/종료",
+      "rule_level": "standard_contract",
+      "title": "해지/종료 및 종료 후 의무 점검",
+      "description": "표준계약서 기준으로 해지사유·정산·반환의무·종료 후 비밀유지/지재권 처리 등을 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "계약의 해제·해지 또는 원사업자의 요구가 있는 경우 ... 반환"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "해지 사유/치유기간(기간, 통지 방식) 확인",
+        "종료 후 의무(정산, 반환/파기, 사용중지) 명시 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:termination",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기간/갱신",
+      "rule_level": "standard_contract",
+      "title": "기간/갱신 구조 점검",
+      "description": "계약기간과 자동갱신/연장 조건을 확인하고, 종료/갱신 시 변경·정산·반환 처리까지 확인한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "계약기간 : [ ]년 [ ]월 [ ]일부터 [ ]년 [ ]월 [ ]일까지"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "시작/종료일 및 갱신 조건(자동갱신 여부, 통지기한) 확인",
+        "갱신 시 단가/범위 변경 절차 명시 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:term",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-004",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "standard_contract",
+      "title": "분쟁해결/관할 기본 점검",
+      "description": "분쟁해결 절차(협의/조정/중재/소송)와 재판관할을 확인하고, 다국가 거래 시 집행가능성까지 고려한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "분쟁이 해결되지 않은 경우 ... 법원에 소를 제기하거나 ... 중재"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "준거법 및 관할 지정 확인",
+        "중재 선택 시 기관/규칙/언어/장소 확인",
+        "해외 법인/해외 상대방이면 판결/중재 집행 가능성 점검"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:dispute",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "C-001",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "대금/지급/정산",
+      "rule_level": "clause_standard",
+      "title": "지급기일·정산기준·공제사유·증빙 점검",
+      "description": "지급기일/정산기준/공제사유/증빙 제출 요구를 표준 체크리스트로 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "185/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "지급기일 및 지연이자/지체상금 정합성 확인",
+        "정산기준(환불/공제/상계) 명확화",
+        "증빙 요구는 목적/범위를 제한"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:payment",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "목적/범위",
+      "rule_level": "clause_standard",
+      "title": "업무범위·산출물·제외사항 명확화",
+      "description": "업무 범위가 모호하면 책임 범위가 확대되므로 산출물, 제외 범위, 전제조건을 명시한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "183/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "산출물 정의 및 검수 기준을 연결",
+        "제외 범위/고객 제공자료/전제조건 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:scope",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기간/갱신",
+      "rule_level": "clause_standard",
+      "title": "기간·갱신·중도해지 조건 점검",
+      "description": "기간과 갱신, 중도해지 조건을 명확히 하여 분쟁을 예방한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "182/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "계약기간/자동갱신 여부/통지기한 확인",
+        "중도해지 시 정산 및 비용처리 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:term",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-004",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "해지/종료",
+      "rule_level": "clause_standard",
+      "title": "해지사유·치유기간·종료 후 의무 점검",
+      "description": "해지사유, 시정(치유)기간, 종료 후 반환/파기/사용중지 의무를 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "182/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "치유기간/통지 방식/효력 발생 시점 확인",
+        "종료 후 비밀유지/지재권/자료 반환·폐기 처리 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:termination",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-006",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "clause_standard",
+      "title": "준거법·관할·중재·집행 가능성 점검",
+      "description": "준거법/관할/중재 조항을 확인하고, 해외 거래일수록 집행가능성을 함께 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "163/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "관할 또는 중재 선택의 적합성 확인",
+        "해외 집행 및 비용/기간 리스크 고지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:dispute",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-007",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "clause_standard",
+      "title": "배상범위·상호성·면책요건 점검",
+      "description": "손해배상 및 면책 조항은 일방성/범위 과다 여부를 점검하고 책임제한과 함께 정합성을 맞춘다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "154/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "상호성(일방 배상/면책 여부) 확인",
+        "제3자 청구 방어 절차(통지/방어권/합의권) 확인",
+        "책임제한(cap)과 모순 여부 점검"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-016",
+      "entity": "all",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "물품공급/구매/매매",
+        "라이선스/로열티",
+        "용역/자문/SOW"
+      ],
+      "clause_type": "독점/경업",
+      "rule_level": "clause_exception",
+      "title": "독점/경업 조항(범위·기간·지역·대가 균형)",
+      "description": "독점/경업은 사업전략상 필요할 수 있으나, 범위·기간·지역·대가의 균형을 맞춰 과도한 제한을 방지한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "46/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "범위/기간/지역을 최소화",
+        "대가 또는 정당화 사유를 문서화",
+        "해지/종료 후 지속기간 제한"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:exclusivity",
+        "exception_possible",
+        "confirmed"
+      ],
+      "rule_status": "exception_possible"
+    },
+    {
+      "rule_id": "C-017",
+      "entity": "fursys_group",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기술자료/자료요구",
+      "rule_level": "clause_approval",
+      "title": "기술자료 요구 조항(승인 필요)",
+      "description": "기술자료 요구는 제공 범위·목적·반환/폐기·목적 외 사용금지 구조를 갖추지 않으면 승인 필요로 승격한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "40/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "요구 범위 최소화 및 비밀유지·목적 외 사용금지 명시",
+        "반환/폐기·접근통제·재제공 금지 확인"
+      ],
+      "approval_required": true,
+      "tags": [
+        "clause:technical_data",
+        "approval_required",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    }
+  ],
+  "approval_required_matches": [
+    {
+      "rule_id": "RISK-006",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "risk",
+      "title": "대리점 비용전가(원상회복/판촉/반품/광고비 등) 탐지",
+      "description": "대리점에 대한 비용전가 구조는 대리점법/공정거래 리스크가 있어 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "8/207",
+        "example_files": [
+          "☆ 일룸 입점대리점 매장운영합의서 검토(법무팀).docx"
+        ],
+        "example_phrase": "원상회복 ... 공급업자의 요구 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 근거를 문서화",
+        "대리점의 자율성 및 협의/동의 절차 확보",
+        "불이익 제공 강요/거래상 지위 남용 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:dealer_cost_shifting",
+        "approval_required",
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:일룸",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "ACT-009",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "pattern_approval",
+      "title": "대리점 비용부담 트리거(승인 필요)",
+      "description": "대리점 + 비용부담/판촉비/반품비/광고비 트리거가 있으면 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_phrase": "대리점 + 비용부담"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 기준 문서화",
+        "대리점 동의 절차 및 불이익 강요 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:dealer_cost",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    }
+  ],
+  "backlog_reference_only": [
+    {
+      "rule_id": "BL-001",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "ESTIMATED/UNCONFIRMED/FAILED 문서군",
+      "description": "본문이 확인되지 않아 확정 rule로 승격 금지. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "108건 (UNCONFIRMED 61 + FAILED 47)"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "추후 본문 추출 성공 시에만 rule 승격 검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-002",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "OCR 필요 PDF",
+      "description": "PDF 텍스트 레이어가 없어 OCR 없이는 본문 확인 불가. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "5건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "OCR 파이프라인 확보 후 본문 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "ocr_needed",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-003",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "미지원 포맷(hwp 등)",
+      "description": "현 파이프라인에서 미지원 포맷으로 본문 확인 불가. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "5건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "포맷 변환 파이프라인 구축 후 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "unsupported_format",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-004",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "기타 추출 실패(손상/인코딩/구조 이슈 등)",
+      "description": "기타 사유로 본문 추출 실패. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "34건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "파일 상태/인코딩/손상 여부 확인 후 재처리"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "extraction_failed",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-005",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "추출 텍스트 너무 짧음",
+      "description": "추출 텍스트가 불충분하여 본문 확인으로 보기 어려움. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "3건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "원문 확인 또는 재추출 후에만 승격 검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "text_too_short",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-006",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "Office 변환 미시도(legacy doc/xls 등)",
+      "description": "정책상 이번 단계에서는 Office COM 변환을 미시도. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "example_phrase": "Office conversion not attempted (EnableOffice not set)"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "추후 변환 정책 확정 후 본문 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "office_not_attempted",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    }
+  ],
+  "policy_note": "판정에는 confirmed 계열 rule만 사용하며, backlog는 참고용으로만 표시한다.",
+  "clause_results": [
+    {
+      "clause_id": "KR-10",
+      "article_number": "10",
+      "paragraph_number": null,
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제10조",
+      "parent_clause_id": null,
+      "context_text": null,
+      "clause_title": "[용역대금의 상계]",
+      "original_text": "[용역대금의 상계]\n위탁자는 다음 각 호의 경우 수탁자에게 지급할 용역대금과 수탁자에 대한 채권을 상계 처리할 수 있다.\n1. 수탁자 또는 수탁자의 피고용인이 계약상의 의무를 위반하거나 게을리함으로써 위탁자에게 손해가 발생한 경우\n2. 본 계약과 관련하여 수탁자가 위탁자에게 금전채무를 부담하는 경우",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "상계 사유를 구체적이고 제한적으로 명시하여 불필요한 분쟁 예방 및 명확한 정산 기준 마련 필요. 세금계산서 등 증빙 제출 조건을 명확히 하여 실무상 과도한 증빙 요구를 방지함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "[용역대금의 상계]\n위탁자는 다음 각 호의 경우 수탁자에게 지급할 용역대금과 수탁자에 대한 채권을 상계할 수 있으며, 상계 시 관련 증빙을 제출하여야 한다.\n1. 수탁자 또는 수탁자의 피고용인이 계약상의 의무를 위반하거나 게을리하여 위탁자에게 손해가 발생한 경우\n2. 본 계약과 관련하여 수탁자가 위탁자에게 금전채무를 부담하는 경우",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "상계 처리할 수 있다.",
+          "after": "상계할 수 있으며, 상계 시 관련 증빙을 제출하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-13-p1",
+      "article_number": "13",
+      "paragraph_number": "1",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제13조 제1항",
+      "parent_clause_id": "KR-13",
+      "context_text": "제13조 [점검 및 확인]",
+      "clause_title": "[점검 및 확인]",
+      "original_text": "위탁자는 권역 내 매장 운영, 매출 관련 자료, 고객응대 기록 및 정산자료 등에 대하여 합리적인 범위 내에서 점검 및 확인할 수 있다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "점검 및 확인 권한의 범위를 합리적 범위 내로 한정하여 과도한 권한 행사를 방지하고, 정산 관련 자료의 제출 및 확인 절차를 명확히 하여 분쟁 예방.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자는 권역 내 매장 운영, 매출 관련 자료, 고객응대 기록 및 정산자료 등에 대하여 합리적인 범위 내에서 점검 및 확인할 수 있으며, 정산 관련 자료 제출 시 필요한 증빙을 요구할 수 있다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "점검 및 확인할 수 있다.",
+          "after": "점검 및 확인할 수 있으며, 정산 관련 자료 제출 시 필요한 증빙을 요구할 수 있다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-19-p1-i1",
+      "article_number": "19",
+      "paragraph_number": "1",
+      "item_number": "1",
+      "subitem_number": null,
+      "display_path": "제19조 제1항 1호",
+      "parent_clause_id": "KR-19-p1",
+      "context_text": "제19조 [고객의 권익 보호]\n제19조 제1항\n수탁자는 고객과의 판매계약 체결 전 또는 체결 시 관계법령 및 위탁자가 규정하는 사항과 고객의 권익 보호를 위하여 다음 각 호의 사항을 포함한 중요 내용을 고객에게 명확하게 설명·고지하여야 한다.",
+      "clause_title": "[고객의 권익 보호]",
+      "original_text": "상품 대금의 내역과 그 지급방법",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "고객 권익 보호를 위해 상품 대금 내역과 지급방법에 대해 명확히 설명하도록 하되, 과도한 정보 요구를 방지하고 정산 관련 증빙 제출 조건을 명확히 함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "상품 대금의 내역 및 그 지급방법에 관하여 고객에게 명확하게 설명·고지하여야 하며, 관련 정산 기준 및 증빙 제출 조건을 준수하여야 한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "상품 대금의 내역과 그 지급방법",
+          "after": "상품 대금의 내역 및 그 지급방법에 관하여 고객에게 명확하게 설명·고지하여야 하며, 관련 정산 기준 및 증빙 제출 조건을 준수하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-21-p4",
+      "article_number": "21",
+      "paragraph_number": "4",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제21조 제4항",
+      "parent_clause_id": "KR-21",
+      "context_text": "제21조 [각종 불공정행위 등의 금지]",
+      "clause_title": "[각종 불공정행위 등의 금지]",
+      "original_text": "위탁자는 자기의 거래상 지위를 부당하게 이용하여 공급하는 상품과 관련한 목표를 제시하고, 이를 달성하지 못하였다는 이유만으로 계약의 중도해지, 상품 공급의 중단, 용역대금의 부당한 감액 등 불이익을 주어서는 아니 된다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "위탁자의 거래상 지위 남용을 방지하고, 계약 중도해지 등 불이익 조치 시 정당한 사유와 절차를 요구하여 공정거래 관행에 부합하도록 함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자는 자기의 거래상 지위를 부당하게 이용하여 공급하는 상품과 관련한 목표를 제시하고, 이를 달성하지 못하였다는 이유만으로 계약의 중도해지, 상품 공급의 중단, 용역대금의 부당한 감액 등 불이익을 주어서는 아니 되며, 불이익 조치 시에는 합리적인 사유와 사전 통지를 제공하여야 한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "불이익을 주어서는 아니 된다.",
+          "after": "불이익을 주어서는 아니 되며, 불이익 조치 시에는 합리적인 사유와 사전 통지를 제공하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-21-p7",
+      "article_number": "21",
+      "paragraph_number": "7",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제21조 제7항",
+      "parent_clause_id": "KR-21",
+      "context_text": "제21조 [각종 불공정행위 등의 금지]",
+      "clause_title": "[각종 불공정행위 등의 금지]",
+      "original_text": "위탁자는 수탁자가 주문한 상품의 종류, 수량, 정산기준 등과 관련한 정당한 확인 요청에 대하여 합리적 사유 없이 이를 거부 또는 회피하여서는 아니 된다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "정산 관련 사항에 대한 위탁자의 확인 요청에 대해 합리적 사유 없이 거부하지 못하도록 하여 투명한 정산 절차 확보 및 분쟁 예방.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자는 수탁자가 주문한 상품의 종류, 수량, 정산기준 등과 관련한 정당한 확인 요청에 대하여 합리적인 사유 없이 이를 거부하거나 회피하여서는 아니 된다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "합리적 사유 없이 이를 거부 또는 회피하여서는 아니 된다.",
+          "after": "합리적인 사유 없이 이를 거부하거나 회피하여서는 아니 된다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-23-p3",
+      "article_number": "23",
+      "paragraph_number": "3",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제23조 제3항",
+      "parent_clause_id": "KR-23",
+      "context_text": "제23조 [계약해지]",
+      "clause_title": "[계약해지]",
+      "original_text": "수탁자가 고객정보 유출, 매출 누락, 허위계약, 고객대금 유용, 브랜드 이미지 훼손, 무단 할인, 무단 재판매, 무단 취급상품 판매, 중대한 고객피해 발생 등 본 계약의 중대한 위반행위로 위탁자에게 손해를 발생시킨 경우, 위탁자는 별도의 시정요구 없이 즉시 계약을 해지할 수 있다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "중대한 위반행위에 대한 계약해지 권한을 명확히 하되, 위반행위의 구체적 범위를 명확히 하여 불필요한 분쟁 방지 및 신속한 계약 해지 가능하도록 함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "수탁자가 고객정보 유출, 매출 누락, 허위계약, 고객대금 유용, 브랜드 이미지 훼손, 무단 할인, 무단 재판매, 무단 취급상품 판매, 중대한 고객피해 발생 등 본 계약의 중대한 위반행위로 위탁자에게 손해를 발생시킨 경우, 위탁자는 별도의 시정요구 없이 즉시 계약을 해지할 수 있다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true
+    },
+    {
+      "clause_id": "KR-24-p3",
+      "article_number": "24",
+      "paragraph_number": "3",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제24조 제3항",
+      "parent_clause_id": "KR-24",
+      "context_text": "제24조 [계약의 해지 및 종료의 효력]",
+      "clause_title": "[계약의 해지 및 종료의 효력]",
+      "original_text": "계약 종료 시까지 완료되지 아니한 주문, 반품, 환불, A/S 접수, 정산 및 기타 후속처리는 위탁자의 지시에 따라 선량한 관리자의 주의로 협조하여야 한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "계약 종료 시 미완료 업무에 대해 위탁자의 지시에 따라 협조 의무를 명확히 하여 계약 종료 후 분쟁 및 업무 공백 방지.",
+      "suggested_direction": [],
+      "suggested_rewrite": "계약 종료 시까지 완료되지 아니한 주문, 반품, 환불, A/S 접수, 정산 및 기타 후속처리는 위탁자의 지시에 따라 선량한 관리자의 주의로 협조하여야 한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true
+    },
+    {
+      "clause_id": "KR-25-p2",
+      "article_number": "25",
+      "paragraph_number": "2",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제25조 제2항",
+      "parent_clause_id": "KR-25",
+      "context_text": "제25조 [손해배상 및 지연손해금]",
+      "clause_title": "[손해배상 및 지연손해금]",
+      "original_text": "위탁자와 수탁자 간의 거래가 종료된 경우 수탁자는 위탁자와 정산 후 지체 없이 위탁자에 대한 상품대금, 환급금, 자산손해금, 기타 일체의 채무를 변제하여야 하며, 수탁자가 이러한 변제의무를 지체하는 경우 정산일 또는 약정된 지급기일 익일부터 완제일까지 상법 기타 관련 법령이 정한 지연손해금을 지급하여야 한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산",
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "정산 기준, 공제 사유 및 증빙 제출 조건이 명확하지 않아 분쟁 및 지연손해금 산정 시 불확실성이 존재함. 상법 및 관련 법령에 따른 지연손해금 지급 의무는 유지하되, 정산 기준과 공제 사유를 구체화하여 당사 보호를 강화함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자와 수탁자 간 거래 종료 시, 수탁자는 위탁자와의 정산 결과에 따라 상품대금, 환급금, 자산손해금 및 기타 채무를 지체 없이 변제하여야 한다. 정산은 상호 합의한 계산기준과 정산주기에 따라 이루어지며, 공제 및 상계 사유는 계약서에 명시된 경우에 한정한다. 수탁자가 변제 의무를 지체하는 경우, 정산일 또는 약정 지급기일 익일부터 완제일까지 상법 및 관련 법령에 따른 지연손해금을 지급하여야 한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "수탁자는 위탁자와 정산 후 지체 없이 위탁자에 대한 상품대금, 환급금, 자산손해금, 기타 일체의 채무를 변제하여야 하며",
+          "after": "수탁자는 위탁자와의 정산 결과에 따라 상품대금, 환급금, 자산손해금 및 기타 채무를 지체 없이 변제하여야 한다"
+        },
+        {
+          "before": "수탁자가 이러한 변제의무를 지체하는 경우 정산일 또는 약정된 지급기일 익일부터 완제일까지 상법 기타 관련 법령이 정한 지연손해금을 지급하여야 한다",
+          "after": "수탁자가 변제 의무를 지체하는 경우, 정산일 또는 약정 지급기일 익일부터 완제일까지 상법 및 관련 법령에 따른 지연손해금을 지급하여야 한다"
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-27-p1",
+      "article_number": "27",
+      "paragraph_number": "1",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제27조 제1항",
+      "parent_clause_id": "KR-27",
+      "context_text": "제27조 [분쟁해결 및 재판관할]",
+      "clause_title": "[분쟁해결 및 재판관할]",
+      "original_text": "이 계약에서 정하지 아니한 사항 또는 이 계약의 내용에 대하여 위탁자와 수탁자 간 분쟁이 발생한 경우 위탁자와 수탁자의 합의된 의사에 따른다. 위탁자와 수탁자 사이에 계약 해석과 관련한 합의가 이루어지지 아니한 경우 일반 상관례 및 관련 법령에 따른다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "국내 계약 분쟁조항 점검",
+          "issue_detail": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-004",
+          "title": "국내 계약 분쟁조항 점검",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:dispute",
+            "entity_weighted:해외법인",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "관할"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "분쟁해결 및 재판관할 조항에 준거법과 전속관할 법원을 명확히 하여 분쟁 발생 시 신속하고 확실한 법적 대응이 가능하도록 함. 국내 거래임을 고려해 서울중앙지방법원을 전속관할로 지정하는 것이 실무상 적합함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "본 계약에 명시되지 않은 사항 또는 본 계약 내용과 관련하여 위탁자와 수탁자 간 분쟁이 발생하는 경우, 대한민국 법률에 따라 해석하며, 분쟁 해결은 서울중앙지방법원을 전속관할 법원으로 한다. 계약 해석에 관한 합의가 이루어지지 아니한 경우에는 일반 상관례 및 관련 법령에 따른다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "이 계약에서 정하지 아니한 사항 또는 이 계약의 내용에 대하여 위탁자와 수탁자 간 분쟁이 발생한 경우 위탁자와 수탁자의 합의된 의사에 따른다.",
+          "after": "본 계약에 명시되지 않은 사항 또는 본 계약 내용과 관련하여 위탁자와 수탁자 간 분쟁이 발생하는 경우, 대한민국 법률에 따라 해석하며, 분쟁 해결은 서울중앙지방법원을 전속관할 법원으로 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-27-p2",
+      "article_number": "27",
+      "paragraph_number": "2",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제27조 제2항",
+      "parent_clause_id": "KR-27",
+      "context_text": "제27조 [분쟁해결 및 재판관할]",
+      "clause_title": "[분쟁해결 및 재판관할]",
+      "original_text": "제1항에 의하여도 분쟁이 해결되지 아니하는 경우, 이 계약에 관한 분쟁의 해결은 통상의 민사재판에 의하며 관할은 서울중앙지방법원을 합의관할 법원으로 한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "국내 계약 분쟁조항 점검",
+          "issue_detail": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-004",
+          "title": "국내 계약 분쟁조항 점검",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:dispute",
+            "entity_weighted:해외법인",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "관할"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "분쟁 해결 절차와 관할 법원을 명확히 하여 분쟁 발생 시 신속한 법적 대응을 도모함. 서울중앙지방법원을 전속관할로 지정하는 것이 국내 거래에 적합하며, 중복 규정 정리로 명확성 제고.",
+      "suggested_direction": [],
+      "suggested_rewrite": "제1항에 따른 분쟁이 해결되지 아니하는 경우, 본 계약과 관련한 분쟁은 대한민국 법률에 따라 민사재판으로 해결하며, 관할 법원은 서울중앙지방법원을 전속관할 법원으로 한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "이 계약에 관한 분쟁의 해결은 통상의 민사재판에 의하며 관할은 서울중앙지방법원을 합의관할 법원으로 한다.",
+          "after": "본 계약과 관련한 분쟁은 대한민국 법률에 따라 민사재판으로 해결하며, 관할 법원은 서울중앙지방법원을 전속관할 법원으로 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-27-p3",
+      "article_number": "27",
+      "paragraph_number": "3",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제27조 제3항",
+      "parent_clause_id": "KR-27",
+      "context_text": "제27조 [분쟁해결 및 재판관할]",
+      "clause_title": "[분쟁해결 및 재판관할]",
+      "original_text": "본 계약은 관련 법령의 강행규정을 배제하거나 제한하는 것으로 해석되지 아니한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "국내 계약 분쟁조항 점검",
+          "issue_detail": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-004",
+          "title": "국내 계약 분쟁조항 점검",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:dispute",
+            "entity_weighted:해외법인",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "관할"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "강행규정 배제 금지 조항은 계약 해석의 기본 원칙을 명확히 하여 당사 권리 보호에 기여함. 원문 유지하되 문장 간결화로 명확성 확보.",
+      "suggested_direction": [],
+      "suggested_rewrite": "본 계약은 관련 법령의 강행규정을 배제하거나 제한하는 것으로 해석되지 아니한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true
+    },
+    {
+      "clause_id": "KR-5-p1-i6",
+      "article_number": "5",
+      "paragraph_number": "1",
+      "item_number": "6",
+      "subitem_number": null,
+      "display_path": "제5조 제1항 6호",
+      "parent_clause_id": "KR-5-p1",
+      "context_text": "제5조 [용역업무]\n제5조 제1항\n위탁자는 수탁자에게 권역 내 매장 운영과 관련하여 아래 각 호의 업무를 위탁하고, 수탁자는 이를 수행한다.",
+      "clause_title": "[용역업무]",
+      "original_text": "위탁자가 지정하는 전산시스템의 사용, 운영자료의 입력, 정산 보조 및 보고",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "전산시스템 사용 및 정산 보조 업무의 범위가 명확하지 않아 분쟁 소지 있음. 업무 범위는 유지하되 정산 보조 업무의 구체적 범위를 명확히 하여 당사 이익 보호 강화.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자가 지정하는 전산시스템의 사용, 운영자료의 입력, 정산 보조 및 이에 관한 보고 업무를 수행한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "위탁자가 지정하는 전산시스템의 사용, 운영자료의 입력, 정산 보조 및 보고",
+          "after": "위탁자가 지정하는 전산시스템의 사용, 운영자료의 입력, 정산 보조 및 이에 관한 보고 업무를 수행한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-5-p3",
+      "article_number": "5",
+      "paragraph_number": "3",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제5조 제3항",
+      "parent_clause_id": "KR-5",
+      "context_text": "제5조 [용역업무]",
+      "clause_title": "[용역업무]",
+      "original_text": "수탁자는 위탁자의 사전 서면동의 없이 제1항의 권리, 기타 본 계약상의 권리·의무를 제3자에게 양도하거나 담보로 제공할 수 없다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "사전 서면동의 조건 명확화",
+          "issue_detail": "사전 서면동의 문구가 반복 등장하므로 동의권자·거절 기준·지연 책임을 명확히 한다.",
+          "review_action": [
+            "동의권자(대표/담당/승인라인) 정의",
+            "거절/보류 사유 기준 및 응답 기한 설정"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-002",
+          "title": "사전 서면동의 조건 명확화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "사전 서면동의 문구가 반복 등장하므로 동의권자·거절 기준·지연 책임을 명확히 한다.",
+          "review_action": [
+            "동의권자(대표/담당/승인라인) 정의",
+            "거절/보류 사유 기준 및 응답 기한 설정"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "pattern:prior_written_consent",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "사전 서면동의"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "사전 서면동의 조항에 동의권자 및 거절 기준이 명확하지 않아 분쟁 위험 존재. 동의권자를 위탁자 대표로 한정하고, 거절 사유 및 응답 기한을 명시하여 실무상 명확성 확보.",
+      "suggested_direction": [],
+      "suggested_rewrite": "수탁자는 위탁자의 대표가 서면으로 동의하지 아니하는 한 제1항의 권리 및 본 계약상의 권리·의무를 제3자에게 양도하거나 담보로 제공할 수 없다. 위탁자는 동의 여부를 요청일로부터 10영업일 이내에 서면으로 통지하여야 하며, 별도의 거절 사유가 없는 한 동의한 것으로 본다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "수탁자는 위탁자의 사전 서면동의 없이 제1항의 권리, 기타 본 계약상의 권리·의무를 제3자에게 양도하거나 담보로 제공할 수 없다.",
+          "after": "수탁자는 위탁자의 대표가 서면으로 동의하지 아니하는 한 제1항의 권리 및 본 계약상의 권리·의무를 제3자에게 양도하거나 담보로 제공할 수 없다. 위탁자는 동의 여부를 요청일로부터 10영업일 이내에 서면으로 통지하여야"
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-5-p4",
+      "article_number": "5",
+      "paragraph_number": "4",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제5조 제4항",
+      "parent_clause_id": "KR-5",
+      "context_text": "제5조 [용역업무]",
+      "clause_title": "[용역업무]",
+      "original_text": "수탁자는 위탁자의 사전 서면동의 없이 제3자가 공급하는 상품 및 부품에 대한 판매지원 행위를 하여서는 아니 된다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "사전 서면동의 조건 명확화",
+          "issue_detail": "사전 서면동의 문구가 반복 등장하므로 동의권자·거절 기준·지연 책임을 명확히 한다.",
+          "review_action": [
+            "동의권자(대표/담당/승인라인) 정의",
+            "거절/보류 사유 기준 및 응답 기한 설정"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-002",
+          "title": "사전 서면동의 조건 명확화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "사전 서면동의 문구가 반복 등장하므로 동의권자·거절 기준·지연 책임을 명확히 한다.",
+          "review_action": [
+            "동의권자(대표/담당/승인라인) 정의",
+            "거절/보류 사유 기준 및 응답 기한 설정"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "pattern:prior_written_consent",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "사전 서면동의"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "사전 서면동의 조항에 동의권자 및 거절 기준이 불명확하여 분쟁 소지 있음. 동의권자를 위탁자 대표로 한정하고, 거절 사유 및 응답 기한을 명시하여 당사 보호 강화.",
+      "suggested_direction": [],
+      "suggested_rewrite": "수탁자는 위탁자의 대표가 서면으로 동의하지 아니하는 한 제3자가 공급하는 상품 및 부품에 대한 판매지원 행위를 하여서는 아니 된다. 위탁자는 동의 여부를 요청일로부터 10영업일 이내에 서면으로 통지하여야 하며, 별도의 거절 사유가 없는 한 동의한 것으로 본다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "수탁자는 위탁자의 사전 서면동의 없이 제3자가 공급하는 상품 및 부품에 대한 판매지원 행위를 하여서는 아니 된다.",
+          "after": "수탁자는 위탁자의 대표가 서면으로 동의하지 아니하는 한 제3자가 공급하는 상품 및 부품에 대한 판매지원 행위를 하여서는 아니 된다. 위탁자는 동의 여부를 요청일로부터 10영업일 이내에 서면으로 통지하여야 하며, 별도"
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-7-p1",
+      "article_number": "7",
+      "paragraph_number": "1",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제7조 제1항",
+      "parent_clause_id": "KR-7",
+      "context_text": "제7조 [상품의 발주와 공급]",
+      "clause_title": "[상품의 발주와 공급]",
+      "original_text": "상품의 발주, 주문, 공급, 반품 및 정산 관련 업무 등은 위탁자가 지정한 전산시스템 또는 그에 준하는 적정한 방식을 통하여 투명하게 이루어져야 한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "정산 관련 업무의 투명성과 명확성을 위해 정산 기준과 공제 사유를 구체화하고, 증빙 제출 조건의 과도한 남용을 방지하는 것이 실무상 리스크 감소에 필수적임.",
+      "suggested_direction": [],
+      "suggested_rewrite": "상품의 발주, 주문, 공급, 반품 및 정산 관련 업무 등은 위탁자가 지정한 전산시스템 또는 그에 준하는 적정한 방식을 통하여 투명하게 이루어져야 하며, 정산은 계약서에 명시된 계산기준과 정산주기에 따라 진행되어야 한다. 공제 및 상계 사유는 계약서에 제한적으로 열거된 경우에 한하며, 세금계산서, 인보이스 등 증빙 제출은 필요한 범위 내에서만 요구할 수 있다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "상품의 발주, 주문, 공급, 반품 및 정산 관련 업무 등은 위탁자가 지정한 전산시스템 또는 그에 준하는 적정한 방식을 통하여 투명하게 이루어져야 한다.",
+          "after": "상품의 발주, 주문, 공급, 반품 및 정산 관련 업무 등은 위탁자가 지정한 전산시스템 또는 그에 준하는 적정한 방식을 통하여 투명하게 이루어져야 하며, 정산은 계약서에 명시된 계산기준과 정산주기에 따라 진행되어야 한"
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p1",
+      "article_number": "8",
+      "paragraph_number": "1",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제8조 제1항",
+      "parent_clause_id": "KR-8",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "수탁자는 본 계약에서 정한 범위 내에서 상품대금 결제 지원 업무를 수행하며, 해당 고객과의 계약상 납기일이 도래하기 영업일(토요일, 일요일, 공휴일 제외) 3일 전까지 상품대금이 위탁자에게 결제되도록 최선의 노력을 다하여야 한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "상품대금 결제 시기와 방법을 명확히 하여 당사(위탁자)의 자금 흐름을 안정시키고, 과도한 증빙 요구를 제한해 실무상 불필요한 분쟁을 예방함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "수탁자는 본 계약에서 정한 범위 내에서 상품대금 결제 지원 업무를 수행하며, 해당 고객과의 계약상 납기일 도래 영업일(토요일, 일요일, 공휴일 제외) 3일 전까지 상품대금이 위탁자에게 정상적으로 결제되도록 최선의 노력을 다하여야 한다. 결제와 관련한 증빙 제출은 계약서에 명시된 범위 내에서만 요구할 수 있다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "수탁자는 본 계약에서 정한 범위 내에서 상품대금 결제 지원 업무를 수행하며, 해당 고객과의 계약상 납기일이 도래하기 영업일(토요일, 일요일, 공휴일 제외) 3일 전까지 상품대금이 위탁자에게 결제되도록 최선의 노력을 ",
+          "after": "수탁자는 본 계약에서 정한 범위 내에서 상품대금 결제 지원 업무를 수행하며, 해당 고객과의 계약상 납기일 도래 영업일(토요일, 일요일, 공휴일 제외) 3일 전까지 상품대금이 위탁자에게 정상적으로 결제되도록 최선의 노"
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p2-i1",
+      "article_number": "8",
+      "paragraph_number": "2",
+      "item_number": "1",
+      "subitem_number": null,
+      "display_path": "제8조 제2항 1호",
+      "parent_clause_id": "KR-8-p2",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]\n제8조 제2항\n전항의 상품대금 결제는 아래 각 호에 명시된 위탁자가 지정한 방식으로 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다.",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "위탁자가 지정한 모바일 결제 방식",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "결제수단을 명확히 하여 위탁자의 지정 범위 내에서만 결제가 이루어지도록 하며, 증빙 요청은 과도하지 않도록 제한하는 것이 실무상 불필요한 분쟁 방지에 유리함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자가 지정한 모바일 결제 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다. 다만, 증빙 제출 요구는 계약서에 명시된 범위 내에서만 가능하다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "위탁자가 지정한 모바일 결제 방식",
+          "after": "위탁자가 지정한 모바일 결제 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p2-i2",
+      "article_number": "8",
+      "paragraph_number": "2",
+      "item_number": "2",
+      "subitem_number": null,
+      "display_path": "제8조 제2항 2호",
+      "parent_clause_id": "KR-8-p2",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]\n제8조 제2항\n전항의 상품대금 결제는 아래 각 호에 명시된 위탁자가 지정한 방식으로 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다.",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "위탁자가 지정한 카드단말기 결제 방식",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "결제수단을 위탁자가 지정한 카드단말기 방식으로 한정하고, 증빙 제출 요청은 계약서 범위 내에서만 허용하여 당사 보호를 강화함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자가 지정한 카드단말기 결제 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다. 증빙 제출 요구는 계약서에 명시된 범위 내에서만 가능하다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "위탁자가 지정한 카드단말기 결제 방식",
+          "after": "위탁자가 지정한 카드단말기 결제 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p2-i3",
+      "article_number": "8",
+      "paragraph_number": "2",
+      "item_number": "3",
+      "subitem_number": null,
+      "display_path": "제8조 제2항 3호",
+      "parent_clause_id": "KR-8-p2",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]\n제8조 제2항\n전항의 상품대금 결제는 아래 각 호에 명시된 위탁자가 지정한 방식으로 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다.",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "위탁자가 지정한 계좌이체 방식",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "계좌이체 방식 결제에 대한 명확한 지정과 증빙 제출 범위 제한으로 위탁자의 결제 안정성과 증빙 관리 부담을 완화함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자가 지정한 계좌이체 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다. 증빙 제출 요구는 계약서에 명시된 범위 내에서만 가능하다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "위탁자가 지정한 계좌이체 방식",
+          "after": "위탁자가 지정한 계좌이체 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p2-i4",
+      "article_number": "8",
+      "paragraph_number": "2",
+      "item_number": "4",
+      "subitem_number": null,
+      "display_path": "제8조 제2항 4호",
+      "parent_clause_id": "KR-8-p2",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]\n제8조 제2항\n전항의 상품대금 결제는 아래 각 호에 명시된 위탁자가 지정한 방식으로 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다.",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "위탁자가 별도로 승인한 기타 결제 방식",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "기타 결제 방식에 대한 위탁자의 승인 절차를 명확히 하여 무분별한 결제수단 사용을 방지하고, 증빙 제출 범위를 제한함으로써 당사 보호를 강화함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "위탁자가 별도로 승인한 기타 결제 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다. 증빙 제출 요구는 계약서에 명시된 범위 내에서만 가능하다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "위탁자가 별도로 승인한 기타 결제 방식",
+          "after": "위탁자가 별도로 승인한 기타 결제 방식으로 상품대금 결제가 이루어져야 하며, 수탁자는 고객의 현금영수증, 세금계산서, 거래내역 확인 등의 요청에 성실히 임하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p3",
+      "article_number": "8",
+      "paragraph_number": "3",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제8조 제3항",
+      "parent_clause_id": "KR-8",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "제1항 및 제2항에서 정한 시기 또는 방법으로 상품대금이 정상적으로 결제되지 아니한 경우, 수탁자는 즉시 위탁자에게 통보 후 협의하여야 하며, 사전 협의 없이 수탁자가 통상의 주의의무를 다하지 않은 과실로 위탁자에게 발생한 손해는 수탁자가 부담한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "결제 지연 시 즉시 통보 및 협의 의무를 명확히 하고, 수탁자의 과실로 인한 손해배상 책임 범위를 구체화하여 위탁자 보호를 강화함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "제1항 및 제2항에서 정한 시기 또는 방법으로 상품대금이 정상적으로 결제되지 아니한 경우, 수탁자는 즉시 위탁자에게 통보하고 협의하여야 하며, 사전 협의 없이 수탁자가 통상의 주의의무를 다하지 아니한 과실로 인하여 위탁자에게 발생한 손해는 수탁자가 부담한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "제1항 및 제2항에서 정한 시기 또는 방법으로 상품대금이 정상적으로 결제되지 아니한 경우, 수탁자는 즉시 위탁자에게 통보 후 협의하여야 하며, 사전 협의 없이 수탁자가 통상의 주의의무를 다하지 않은 과실로 위탁자에게",
+          "after": "제1항 및 제2항에서 정한 시기 또는 방법으로 상품대금이 정상적으로 결제되지 아니한 경우, 수탁자는 즉시 위탁자에게 통보하고 협의하여야 하며, 사전 협의 없이 수탁자가 통상의 주의의무를 다하지 아니한 과실로 인하여 "
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p4",
+      "article_number": "8",
+      "paragraph_number": "4",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제8조 제4항",
+      "parent_clause_id": "KR-8",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "수탁자는 취소, 품목 변경, 계약해제 등 주문내역에 변동이 생겨 고객에게 상품대금의 일부 또는 전부를 환불하여야 할 경우, 전산시스템을 통하여 위탁자에게 요청하고 위탁자의 절차에 따라 처리하여야 한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "환불 요청 및 처리 절차에 대한 명확한 기준과 증빙 요건을 명시하지 않아 분쟁 가능성이 존재하므로, 정산 기준과 절차를 구체화하여 당사 보호를 강화함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "수탁자는 취소, 품목 변경, 계약해제 등 주문내역에 변동이 생겨 고객에게 상품대금의 일부 또는 전부를 환불하여야 할 경우, 전산시스템을 통하여 위탁자에게 환불 요청 사유 및 금액을 명확히 기재하여 요청하고, 위탁자의 정산 기준 및 절차에 따라 증빙자료를 제출하여 처리하여야 한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "전산시스템을 통하여 위탁자에게 요청하고 위탁자의 절차에 따라 처리하여야 한다.",
+          "after": "전산시스템을 통하여 위탁자에게 환불 요청 사유 및 금액을 명확히 기재하여 요청하고, 위탁자의 정산 기준 및 절차에 따라 증빙자료를 제출하여 처리하여야 한다."
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-8-p5",
+      "article_number": "8",
+      "paragraph_number": "5",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제8조 제5항",
+      "parent_clause_id": "KR-8",
+      "context_text": "제8조 [상품대금 결제수단 및 결제시기]",
+      "clause_title": "[상품대금 결제수단 및 결제시기]",
+      "original_text": "수탁자는 위탁자의 사전 서면 동의 없이 고객의 상품대금을 대신 납부하거나, 고객에 대한 외상·대여금 성격의 거래를 하여서는 아니 된다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "고객 대금 대납 및 외상거래 금지 조항에 구체적인 예외 및 증빙 요건이 없어 불명확하므로, 사전 서면 동의 절차와 함께 관련 증빙 제출 의무를 명확히 하여 당사 위험을 최소화함.",
+      "suggested_direction": [],
+      "suggested_rewrite": "수탁자는 위탁자의 사전 서면 동의 없이 고객의 상품대금을 대신 납부하거나, 고객에 대한 외상·대여금 성격의 거래를 하여서는 아니 되며, 만약 위탁자의 동의를 받은 경우에도 관련 거래 내역 및 증빙을 위탁자에게 제출하여야 한다.",
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true,
+      "changed_segments": [
+        {
+          "before": "수탁자는 위탁자의 사전 서면 동의 없이 고객의 상품대금을 대신 납부하거나, 고객에 대한 외상·대여금 성격의 거래를 하여서는 아니 된다.",
+          "after": "수탁자는 위탁자의 사전 서면 동의 없이 고객의 상품대금을 대신 납부하거나, 고객에 대한 외상·대여금 성격의 거래를 하여서는 아니 되며, 만약 위탁자의 동의를 받은 경우에도 관련 거래 내역 및 증빙을 위탁자에게 제출하"
+        }
+      ]
+    },
+    {
+      "clause_id": "KR-9-p1",
+      "article_number": "9",
+      "paragraph_number": "1",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제9조 제1항",
+      "parent_clause_id": "KR-9",
+      "context_text": "제9조 [용역대금 지급]",
+      "clause_title": "[용역대금 지급]",
+      "original_text": "수탁자가 본 계약상 의무를 모두 이행하고 고객이 위탁자에게 상품 대금을 전액 입금 완료한 경우, 위탁자는 수탁자와 별도 약정한 내용에 따라 수탁자에게 용역대금을 지급한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "검출 이슈: 정산식·차감사유·증빙 필수화 / 적용 규칙: ACT-003",
+      "suggested_direction": [],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": false
+    },
+    {
+      "clause_id": "KR-9-p2",
+      "article_number": "9",
+      "paragraph_number": "2",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제9조 제2항",
+      "parent_clause_id": "KR-9",
+      "context_text": "제9조 [용역대금 지급]",
+      "clause_title": "[용역대금 지급]",
+      "original_text": "고객이 상품 대금을 전액 입금하지 않은 경우 위탁자는 고객 명의의 입금이 확인될 때까지 해당 거래와 관련한 용역대금의 지급을 보류할 수 있으며, 이 경우 전액 입금 완료 여부는 1개의 개별 계약 또는 1개의 개별 주문을 기준으로 판단한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "검출 이슈: 정산식·차감사유·증빙 필수화 / 적용 규칙: ACT-003",
+      "suggested_direction": [],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": false
+    },
+    {
+      "clause_id": "KR-9-p3",
+      "article_number": "9",
+      "paragraph_number": "3",
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제9조 제3항",
+      "parent_clause_id": "KR-9",
+      "context_text": "제9조 [용역대금 지급]",
+      "clause_title": "[용역대금 지급]",
+      "original_text": "위탁자와 수탁자 간 본 계약이 해지 또는 종료되는 당월에는, 계약 해지 또는 종료되는 당월에 대한 용역대금을 계약 해지 또는 종료 당월의 익월 말일까지 지급한다. 단, 수탁자가 용역대금 정산에 필요한 자료를 위탁자에게 제공하지 않은 경우에는, 해당 자료가 제공되어 정산이 완료된 이후에 용역대금을 지급하는 것으로 한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산",
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "검출 이슈: 정산식·차감사유·증빙 필수화 / 적용 규칙: ACT-003",
+      "suggested_direction": [],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": false
+    }
+  ],
+  "clause_meta": {
+    "review_posture": "buyer_favorable",
+    "party_role": {
+      "our_role": "ordering_party",
+      "counterparty_role": "contractor_or_supplier",
+      "our_label": null,
+      "counterparty_label": null,
+      "counterparty_is_large_standard_provider": false,
+      "signals": [
+        "installation_commissioning_keywords",
+        "app_dev_keywords"
+      ]
+    },
+    "contract_profile": {
+      "profile": "dealer_consignment",
+      "evidence": [
+        "dealer_token"
+      ]
+    },
+    "jurisdiction": {
+      "kind": "domestic_korea",
+      "foreign_entity_involved": false,
+      "cross_border": false,
+      "evidence": [
+        "korea_law_venue_present"
+      ]
+    },
+    "text_length": 12257,
+    "text_sha256": "aae9dc427a4b6cc50b28f654c199b711bcdd814704a5b929b1962100165e9f3b",
+    "clause_count": 136,
+    "issue_clause_count": 26,
+    "tier_counts": {
+      "must": 0,
+      "medium": 26,
+      "low": 0
+    },
+    "headings_found": true,
+    "fallback_only": false,
+    "warnings": [],
+    "docx_allowed": true,
+    "law_errors": [
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'",
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'",
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'",
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'",
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+    ],
+    "ai": {
+      "enabled": true,
+      "used": true,
+      "selected_clause_ids": [
+        "KR-10",
+        "KR-13-p1",
+        "KR-19-p1-i1",
+        "KR-21-p4",
+        "KR-21-p7",
+        "KR-23-p3",
+        "KR-24-p3",
+        "KR-25-p2",
+        "KR-27-p1",
+        "KR-27-p2",
+        "KR-27-p3",
+        "KR-5-p1-i6",
+        "KR-5-p3",
+        "KR-5-p4",
+        "KR-7-p1",
+        "KR-8-p1",
+        "KR-8-p2-i1",
+        "KR-8-p2-i2",
+        "KR-8-p2-i3",
+        "KR-8-p2-i4",
+        "KR-8-p3",
+        "KR-8-p4",
+        "KR-8-p5"
+      ],
+      "selected_count": 23,
+      "model": "gpt-4.1-mini",
+      "ok": true,
+      "error": null,
+      "usage": [
+        {
+          "input_tokens": 4087,
+          "output_tokens": 1296,
+          "total_tokens": 5383
+        },
+        {
+          "input_tokens": 3679,
+          "output_tokens": 1896,
+          "total_tokens": 5575
+        },
+        {
+          "input_tokens": 4016,
+          "output_tokens": 1951,
+          "total_tokens": 5967
+        },
+        {
+          "input_tokens": 1397,
+          "output_tokens": 551,
+          "total_tokens": 1948
+        }
+      ]
+    },
+    "clause_extraction_report": {
+      "strategy": "heading",
+      "clause_count": 136,
+      "headings_found": true,
+      "fallback_only": false,
+      "dropped_lines": 0,
+      "split_long_clauses": 0,
+      "warnings": []
+    }
+  },
+  "ai": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "used": true,
+    "detail": {
+      "enabled": true,
+      "used": true,
+      "selected_clause_ids": [
+        "KR-10",
+        "KR-13-p1",
+        "KR-19-p1-i1",
+        "KR-21-p4",
+        "KR-21-p7",
+        "KR-23-p3",
+        "KR-24-p3",
+        "KR-25-p2",
+        "KR-27-p1",
+        "KR-27-p2",
+        "KR-27-p3",
+        "KR-5-p1-i6",
+        "KR-5-p3",
+        "KR-5-p4",
+        "KR-7-p1",
+        "KR-8-p1",
+        "KR-8-p2-i1",
+        "KR-8-p2-i2",
+        "KR-8-p2-i3",
+        "KR-8-p2-i4",
+        "KR-8-p3",
+        "KR-8-p4",
+        "KR-8-p5"
+      ],
+      "selected_count": 23,
+      "model": "gpt-4.1-mini",
+      "ok": true,
+      "error": null,
+      "usage": [
+        {
+          "input_tokens": 4087,
+          "output_tokens": 1296,
+          "total_tokens": 5383
+        },
+        {
+          "input_tokens": 3679,
+          "output_tokens": 1896,
+          "total_tokens": 5575
+        },
+        {
+          "input_tokens": 4016,
+          "output_tokens": 1951,
+          "total_tokens": 5967
+        },
+        {
+          "input_tokens": 1397,
+          "output_tokens": 551,
+          "total_tokens": 1948
+        }
+      ]
+    }
+  }
+}

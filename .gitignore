@@ -61,6 +61,10 @@ aouri-bot/
 .tmp/
 temp/
 *.tmp
+~$*.docx
+~$*.pptx
+~$*.xlsx
+*.url
 
 # Local contract/source artifacts (do not commit)
 docs/Contract/
@@ -73,6 +77,8 @@ docs/review_output/*extraction*.csv
 docs/review_output/*_log.csv
 docs/review_output/*.log
 docs/review_output/*.jsonl
+docs/review_output/*.docx
+docs/review_output/**/*.docx
 
 # Local binaries at repo root (do not commit)
 /*.docx

@@ -1,0 +1,1411 @@
+{
+  "input": {
+    "entity": "일룸",
+    "contract_type": "개인정보/처리위탁(DPA)",
+    "filename": "2026년 (주)일룸-데스커_DESKER MATE 위탁거래 계약서_260226 법무팀검토본.docx"
+  },
+  "question_answers": {},
+  "derived_context": {
+    "additional_contract_types_by_questions": [],
+    "additional_contract_types_by_text": [
+      "대리점/위탁/유통",
+      "공사/도급/하도급",
+      "바로스(물류/설치)",
+      "개인정보/처리위탁",
+      "광고/마케팅/협찬"
+    ],
+    "expanded_rule_count": 11,
+    "jurisdiction": {
+      "kind": "domestic_korea",
+      "foreign_entity_involved": false,
+      "cross_border": false,
+      "evidence": [
+        "korea_law_venue_present"
+      ]
+    }
+  },
+  "summary": {
+    "applicable_rule_count": 33,
+    "matched_rule_count": 6,
+    "checklist_rule_count": 15,
+    "approval_required_match_count": 2,
+    "high_risk_match_count": 3,
+    "approval_required": true,
+    "high_risk": true,
+    "backlog_reference_count": 6
+  },
+  "matched_rules": [
+    {
+      "rule_id": "ACT-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "대금/지급/정산",
+      "rule_level": "pattern",
+      "title": "정산식·차감사유·증빙 필수화",
+      "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "185/207",
+        "example_files": [
+          "(MSA) IDEO Services Agreement v2024_reviewed by legal dep..docx"
+        ],
+        "example_phrase": "Compensation / payment"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "정산식(계산기준/정산주기/환불/공제) 명시",
+        "공제/상계 사유는 제한적으로 열거",
+        "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:actual_contracts",
+        "clause:payment",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "ACT-004",
+      "entity": "all",
+      "contract_type": [
+        "해외법인(미국/베트남/대만/싱가포르 등)",
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "pattern",
+      "title": "국내 계약 분쟁조항 점검",
+      "description": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "163/207",
+        "example_files": [
+          "(20240618) Trendway Corp 대응 letter_법무팀.docx"
+        ],
+        "example_phrase": "jurisdiction / 관할"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "준거법과 관할(또는 중재)을 명시",
+        "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:actual_contracts",
+        "clause:dispute",
+        "entity_weighted:해외법인",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "RISK-006",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "risk",
+      "title": "대리점 비용전가(원상회복/판촉/반품/광고비 등) 탐지",
+      "description": "대리점에 대한 비용전가 구조는 대리점법/공정거래 리스크가 있어 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "8/207",
+        "example_files": [
+          "☆ 일룸 입점대리점 매장운영합의서 검토(법무팀).docx"
+        ],
+        "example_phrase": "원상회복 ... 공급업자의 요구 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 근거를 문서화",
+        "대리점의 자율성 및 협의/동의 절차 확보",
+        "불이익 제공 강요/거래상 지위 남용 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:dealer_cost_shifting",
+        "approval_required",
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:일룸",
+        "confirmed"
+      ],
+      "rule_status": "approval_required",
+      "context_expanded_by_text": true
+    },
+    {
+      "rule_id": "ACT-009",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "pattern_approval",
+      "title": "대리점 비용부담 트리거(승인 필요)",
+      "description": "대리점 + 비용부담/판촉비/반품비/광고비 트리거가 있으면 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_phrase": "대리점 + 비용부담"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 기준 문서화",
+        "대리점 동의 절차 및 불이익 강요 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:dealer_cost",
+        "confirmed"
+      ],
+      "rule_status": "approval_required",
+      "context_expanded_by_text": true
+    },
+    {
+      "rule_id": "ACT-010",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "바로스(물류/설치)"
+      ],
+      "clause_type": "안전/산안법/중대재해",
+      "rule_level": "pattern_exception",
+      "title": "안전조항 부재/약함 후보(최소 템플릿 삽입)",
+      "description": "안전조항이 부재하거나 약한 계약은 최소 안전의무 템플릿을 삽입하도록 유도한다. (부재 기반 판정은 오탐 가능)",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "RISK-003(36건 후보)",
+        "example_files": [
+          "☆ 26년 일룸 위탁대리점계약서 검토(법무팀) _수정.docx"
+        ],
+        "example_phrase": "안전조항 부재/약함"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "작업유형별 안전 의무(출입/허가/보호구/교육/보고) 최소 조항 삽입",
+        "안전책임의 일방 전가 문구 제거 또는 상호협력 구조로 조정"
+      ],
+      "approval_required": false,
+      "tags": [
+        "exception_possible",
+        "clause:safety",
+        "note:absence_based_detection"
+      ],
+      "rule_status": "exception_possible",
+      "context_expanded_by_text": true
+    },
+    {
+      "rule_id": "RISK-003",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "바로스(물류/설치)"
+      ],
+      "clause_type": "안전/산안법/중대재해",
+      "rule_level": "risk_exception",
+      "title": "안전책임 공백 후보(부재 기반)",
+      "description": "안전조항이 없는 문서군이 존재하나, 부재 기반 탐지이므로 계약유형/업무내용을 확인한 후 조치한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "36/207",
+        "example_files": [
+          "☆ 26년 일룸 위탁대리점계약서 검토(법무팀) _수정.docx"
+        ],
+        "example_phrase": "안전조항 부재/약함 (부재판정 오탐 가능)"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "현장작업/설치/운송/공사 여부를 먼저 판별",
+        "해당 시 안전조항 삽입 또는 안전부속합의서 요구"
+      ],
+      "approval_required": false,
+      "tags": [
+        "risk:safety_gap",
+        "exception_possible",
+        "note:absence_based_detection"
+      ],
+      "rule_status": "exception_possible",
+      "context_expanded_by_text": true
+    }
+  ],
+  "checklist_rules": [
+    {
+      "rule_id": "STD-001",
+      "entity": "all",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "대리점/위탁/유통",
+        "임대차/전대차",
+        "NDA/비밀유지",
+        "개인정보/처리위탁"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "standard_contract",
+      "title": "손해배상/면책 조항 기본 점검",
+      "description": "표준계약서에 포함된 손해배상/면책/배상 구조를 기준으로, 배상범위·상호성·면책요건을 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "대금 또는 손해배상금 등을 지급하여야 할 자가 지급시기에 지급하지 않을 경우 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "배상 범위(직접/간접/특별손해) 구분 확인",
+        "상호성(일방 배상/면책 여부) 확인",
+        "면책 사유(불가항력/상대 귀책/제3자 행위)와 절차(통지/방어) 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "해지/종료",
+      "rule_level": "standard_contract",
+      "title": "해지/종료 및 종료 후 의무 점검",
+      "description": "표준계약서 기준으로 해지사유·정산·반환의무·종료 후 비밀유지/지재권 처리 등을 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "계약의 해제·해지 또는 원사업자의 요구가 있는 경우 ... 반환"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "해지 사유/치유기간(기간, 통지 방식) 확인",
+        "종료 후 의무(정산, 반환/파기, 사용중지) 명시 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:termination",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기간/갱신",
+      "rule_level": "standard_contract",
+      "title": "기간/갱신 구조 점검",
+      "description": "계약기간과 자동갱신/연장 조건을 확인하고, 종료/갱신 시 변경·정산·반환 처리까지 확인한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "계약기간 : [ ]년 [ ]월 [ ]일부터 [ ]년 [ ]월 [ ]일까지"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "시작/종료일 및 갱신 조건(자동갱신 여부, 통지기한) 확인",
+        "갱신 시 단가/범위 변경 절차 명시 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:term",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "STD-004",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "standard_contract",
+      "title": "분쟁해결/관할 기본 점검",
+      "description": "분쟁해결 절차(협의/조정/중재/소송)와 재판관할을 확인하고, 다국가 거래 시 집행가능성까지 고려한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "분쟁이 해결되지 않은 경우 ... 법원에 소를 제기하거나 ... 중재"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "준거법 및 관할 지정 확인",
+        "중재 선택 시 기관/규칙/언어/장소 확인",
+        "해외 법인/해외 상대방이면 판결/중재 집행 가능성 점검"
+      ],
+      "approval_required": false,
+      "tags": [
+        "source:standard_contract",
+        "clause:dispute",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard"
+    },
+    {
+      "rule_id": "C-001",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "대금/지급/정산",
+      "rule_level": "clause_standard",
+      "title": "지급기일·정산기준·공제사유·증빙 점검",
+      "description": "지급기일/정산기준/공제사유/증빙 제출 요구를 표준 체크리스트로 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "185/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "지급기일 및 지연이자/지체상금 정합성 확인",
+        "정산기준(환불/공제/상계) 명확화",
+        "증빙 요구는 목적/범위를 제한"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:payment",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-002",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "목적/범위",
+      "rule_level": "clause_standard",
+      "title": "업무범위·산출물·제외사항 명확화",
+      "description": "업무 범위가 모호하면 책임 범위가 확대되므로 산출물, 제외 범위, 전제조건을 명시한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "183/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "산출물 정의 및 검수 기준을 연결",
+        "제외 범위/고객 제공자료/전제조건 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:scope",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-003",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기간/갱신",
+      "rule_level": "clause_standard",
+      "title": "기간·갱신·중도해지 조건 점검",
+      "description": "기간과 갱신, 중도해지 조건을 명확히 하여 분쟁을 예방한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "182/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "계약기간/자동갱신 여부/통지기한 확인",
+        "중도해지 시 정산 및 비용처리 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:term",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-004",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "해지/종료",
+      "rule_level": "clause_standard",
+      "title": "해지사유·치유기간·종료 후 의무 점검",
+      "description": "해지사유, 시정(치유)기간, 종료 후 반환/파기/사용중지 의무를 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "182/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "치유기간/통지 방식/효력 발생 시점 확인",
+        "종료 후 비밀유지/지재권/자료 반환·폐기 처리 명시"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:termination",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-006",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "준거법/관할/분쟁",
+      "rule_level": "clause_standard",
+      "title": "준거법·관할·중재·집행 가능성 점검",
+      "description": "준거법/관할/중재 조항을 확인하고, 해외 거래일수록 집행가능성을 함께 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "163/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "관할 또는 중재 선택의 적합성 확인",
+        "해외 집행 및 비용/기간 리스크 고지"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:dispute",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-007",
+      "entity": "all",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "손해배상/면책/배상",
+      "rule_level": "clause_standard",
+      "title": "배상범위·상호성·면책요건 점검",
+      "description": "손해배상 및 면책 조항은 일방성/범위 과다 여부를 점검하고 책임제한과 함께 정합성을 맞춘다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "154/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "상호성(일방 배상/면책 여부) 확인",
+        "제3자 청구 방어 절차(통지/방어권/합의권) 확인",
+        "책임제한(cap)과 모순 여부 점검"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:indemnity",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    },
+    {
+      "rule_id": "C-017",
+      "entity": "fursys_group",
+      "contract_type": [
+        "all"
+      ],
+      "clause_type": "기술자료/자료요구",
+      "rule_level": "clause_approval",
+      "title": "기술자료 요구 조항(승인 필요)",
+      "description": "기술자료 요구는 제공 범위·목적·반환/폐기·목적 외 사용금지 구조를 갖추지 않으면 승인 필요로 승격한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "40/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "요구 범위 최소화 및 비밀유지·목적 외 사용금지 명시",
+        "반환/폐기·접근통제·재제공 금지 확인"
+      ],
+      "approval_required": true,
+      "tags": [
+        "clause:technical_data",
+        "approval_required",
+        "confirmed"
+      ],
+      "rule_status": "approval_required"
+    },
+    {
+      "rule_id": "C-016",
+      "entity": "all",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "물품공급/구매/매매",
+        "라이선스/로열티",
+        "용역/자문/SOW"
+      ],
+      "clause_type": "독점/경업",
+      "rule_level": "clause_exception",
+      "title": "독점/경업 조항(범위·기간·지역·대가 균형)",
+      "description": "독점/경업은 사업전략상 필요할 수 있으나, 범위·기간·지역·대가의 균형을 맞춰 과도한 제한을 방지한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "46/207"
+      },
+      "risk_level": "MEDIUM",
+      "review_action": [
+        "범위/기간/지역을 최소화",
+        "대가 또는 정당화 사유를 문서화",
+        "해지/종료 후 지속기간 제한"
+      ],
+      "approval_required": false,
+      "tags": [
+        "clause:exclusivity",
+        "exception_possible",
+        "confirmed"
+      ],
+      "rule_status": "exception_possible"
+    },
+    {
+      "rule_id": "STD-005",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW"
+      ],
+      "clause_type": "양도/하도급/재위탁",
+      "rule_level": "standard_contract",
+      "title": "재위탁/하도급 구조 점검",
+      "description": "하도급/재위탁 가능성이 있으면 서면교부·재위탁 제한·검수·대금지급 구조를 우선 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "설비 ... 양도 또는 대여 및 관리 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "재위탁/하도급 허용 범위 및 사전동의 요건 확인",
+        "하도급법 해당 가능성 있으면 서면교부/단가/대금지급/검수 기준 필수 확인"
+      ],
+      "approval_required": false,
+      "tags": [
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "source:standard_contract",
+        "clause:subcontract",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard",
+      "context_expanded_by_text": true
+    },
+    {
+      "rule_id": "STD-006",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "바로스(물류/설치)"
+      ],
+      "clause_type": "안전/산안법/중대재해",
+      "rule_level": "standard_contract",
+      "title": "안전관리 조항 기본 점검",
+      "description": "생산공장·물류·설치·현장작업이 연결되는 계약은 안전·보건·사고대응 조항을 핵심 조항으로 보고 점검한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "01_standard_contract_summary",
+        "example_files": [
+          "가구제조업종 표준 하도급계약서.docx"
+        ],
+        "example_phrase": "생산성 및 안전성 등을 위하여 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "안전보건 책임 분담(출입통제/작업허가/보호구/위험성평가) 확인",
+        "사고 발생 시 즉시 통보/조사 협조/대외 커뮤니케이션 통제 체계 확인",
+        "안전책임의 일방 전가 문구는 실효성/평판 리스크 관점에서 재검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:바로스",
+        "source:standard_contract",
+        "clause:safety",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_standard",
+      "context_expanded_by_text": true
+    },
+    {
+      "rule_id": "C-015",
+      "entity": "fursys_group",
+      "contract_type": [
+        "공사/도급/하도급",
+        "물품공급/구매/매매",
+        "용역/자문/SOW",
+        "바로스(물류/설치)"
+      ],
+      "clause_type": "안전/산안법/중대재해",
+      "rule_level": "clause_standard",
+      "title": "안전책임 분담·사고보고·중지권 점검",
+      "description": "현장작업이 수반되면 안전조항은 필수이며, 실행가능한 책임 분담과 사고대응 체계를 확인한다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "49/207"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "도급/용역/위탁 시 안전관리 책임 분담 명확화",
+        "작업중지권, 위험성평가, 교육/보호구 의무 확인",
+        "사고 시 통보/조사협조/대외 커뮤니케이션 통제"
+      ],
+      "approval_required": false,
+      "tags": [
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:바로스",
+        "clause:safety",
+        "confirmed"
+      ],
+      "rule_status": "confirmed_pattern"
+    }
+  ],
+  "approval_required_matches": [
+    {
+      "rule_id": "RISK-006",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "risk",
+      "title": "대리점 비용전가(원상회복/판촉/반품/광고비 등) 탐지",
+      "description": "대리점에 대한 비용전가 구조는 대리점법/공정거래 리스크가 있어 법무 승인 없이 수용하지 않는다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "02_contract_common_patterns_verified",
+        "frequency": "8/207",
+        "example_files": [
+          "☆ 일룸 입점대리점 매장운영합의서 검토(법무팀).docx"
+        ],
+        "example_phrase": "원상회복 ... 공급업자의 요구 ..."
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 근거를 문서화",
+        "대리점의 자율성 및 협의/동의 절차 확보",
+        "불이익 제공 강요/거래상 지위 남용 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "risk:dealer_cost_shifting",
+        "approval_required",
+        "entity_weighted:퍼시스",
+        "entity_weighted:시디즈",
+        "entity_weighted:일룸",
+        "confirmed"
+      ],
+      "rule_status": "approval_required",
+      "context_expanded_by_text": true
+    },
+    {
+      "rule_id": "ACT-009",
+      "entity": "fursys_group",
+      "contract_type": [
+        "대리점/위탁/유통",
+        "임대차/전대차"
+      ],
+      "clause_type": "대리점 비용전가",
+      "rule_level": "pattern_approval",
+      "title": "대리점 비용부담 트리거(승인 필요)",
+      "description": "대리점 + 비용부담/판촉비/반품비/광고비 트리거가 있으면 승인 트랙으로 올린다.",
+      "contract_evidence": {
+        "confirmed": true,
+        "source": "03_review_rules_master",
+        "example_phrase": "대리점 + 비용부담"
+      },
+      "risk_level": "HIGH",
+      "review_action": [
+        "비용 항목/상한/정산 기준 문서화",
+        "대리점 동의 절차 및 불이익 강요 소지 점검"
+      ],
+      "approval_required": true,
+      "tags": [
+        "approval_required",
+        "trigger:dealer_cost",
+        "confirmed"
+      ],
+      "rule_status": "approval_required",
+      "context_expanded_by_text": true
+    }
+  ],
+  "backlog_reference_only": [
+    {
+      "rule_id": "BL-001",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "ESTIMATED/UNCONFIRMED/FAILED 문서군",
+      "description": "본문이 확인되지 않아 확정 rule로 승격 금지. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "108건 (UNCONFIRMED 61 + FAILED 47)"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "추후 본문 추출 성공 시에만 rule 승격 검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-002",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "OCR 필요 PDF",
+      "description": "PDF 텍스트 레이어가 없어 OCR 없이는 본문 확인 불가. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "5건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "OCR 파이프라인 확보 후 본문 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "ocr_needed",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-003",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "미지원 포맷(hwp 등)",
+      "description": "현 파이프라인에서 미지원 포맷으로 본문 확인 불가. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "5건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "포맷 변환 파이프라인 구축 후 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "unsupported_format",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-004",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "기타 추출 실패(손상/인코딩/구조 이슈 등)",
+      "description": "기타 사유로 본문 추출 실패. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "34건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "파일 상태/인코딩/손상 여부 확인 후 재처리"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "extraction_failed",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-005",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "추출 텍스트 너무 짧음",
+      "description": "추출 텍스트가 불충분하여 본문 확인으로 보기 어려움. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "frequency": "3건"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "원문 확인 또는 재추출 후에만 승격 검토"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "text_too_short",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    },
+    {
+      "rule_id": "BL-006",
+      "entity": "all",
+      "contract_type": [
+        "unknown"
+      ],
+      "clause_type": "backlog",
+      "rule_level": "backlog_reference",
+      "title": "Office 변환 미시도(legacy doc/xls 등)",
+      "description": "정책상 이번 단계에서는 Office COM 변환을 미시도. 참고용으로만 보관.",
+      "contract_evidence": {
+        "confirmed": false,
+        "source": "02a_contract_text_extraction_status",
+        "example_phrase": "Office conversion not attempted (EnableOffice not set)"
+      },
+      "risk_level": "LOW",
+      "review_action": [
+        "추후 변환 정책 확정 후 본문 재검증"
+      ],
+      "approval_required": false,
+      "tags": [
+        "backlog",
+        "office_not_attempted",
+        "non_decision"
+      ],
+      "rule_status": "unconfirmed_backlog"
+    }
+  ],
+  "policy_note": "판정에는 confirmed 계열 rule만 사용하며, backlog는 참고용으로만 표시한다.",
+  "clause_results": [
+    {
+      "clause_id": "KR-15",
+      "article_number": "15",
+      "paragraph_number": null,
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제15조",
+      "parent_clause_id": null,
+      "context_text": null,
+      "clause_title": "수수료의 정산",
+      "original_text": "수수료의 정산\n1. \"(주)일룸-DESKER\"는 “DESKER MATE” 가 수행한 에 대한 용역 수수료를 지급합니다.\n2. 용역 수수료는 회원의 결제금액(VAT 제외, 환불,취소금액 제외) 을 기준으로 하여 지급하며, 용역 수수료 유형은 아래 기준을 적용하여 지급합니다.\nA 수수료 적용의 경우\n1. 회원이 직접 회원가입 후, \"(주)일룸-DESKER\"를 통해 \"DESEKR MATE\"와 매칭된 후 제품을 구매하는 경우\n2. 기가입된 사업자에 소속된 회원이 \"DESKER MATE\"에게 제품을 구매하는 경우\nB 수수료 적용의 경우\n1. \"DESKER MATE\"가 제공한 URL을 통해 홈페이지에 사업자를 최초 가입한 회원이 해당 URL을 보낸 \"DESKER MATE\"를 통해 제품을 구매하는 경우 (최초구매,추가구매 모두 포함)\n*DESKER MATE의 위탁판매 수수료는 각 금액구간별 기준 수수료율이 누진 적용되어 산정됩니다.\n*고객별 월매출액은 A수수료율을 적용하는 매출액과 B수수료율을 적용하는 매출액을 나누어 누진 적용합니다.\n*회원이 최종 결제한 금액에 대한 수수료는 사업자별로 같은 월에 납품 완료된 건을 합산한 금액에 대하여 산정됩니다.\n*정산 대상월 기준 납품 및 결제가 완료된 건만 사업자별 월매출액에 합산됩니다.\n3. 2항에 따른 위탁 수수료는 주문에 대한 결제 및 물품대금 회수,제품의 출고가 모두 완료된 날의 익월 말일까지 현금으로 지급하는 것을 원칙으로 합니다. 단 계약이 종료되거나 해지되는 경우 그 시점까지 거래가 확정된 건에 대한 위탁수수료는 종료되거나 해지되는 일자의 익월 말일까지 정산하여 지급합니다.\n4. “DESKER MATE” 는 회원과 \"(주)일룸-DESKER\" 사이에서 정상적으로 거래가 종료될 수 있도록 최선을 다할 의무가 있으며, 해당 의무를 게을리하거나 “DESKER MATE” 의 귀책사유로 계약진행 및 채권회수가 지연될 경우(출고지연, 잔금 미입금, 전산정보 미등록 등을 포함하며 이에 한정하지 아니함) \"(주)일룸-DESKER\"가 “DESKER MATE”에게 지급하는 수수료는 대금 지급이 보류될 수 있습니다.\n5. 발생일로부터 1년이 경과하도록 회수되지 아니한 매출채권은 회수 불능으로 간주하며, 향후 회수 여부와 무관하게 위탁수수료 지급 대상에서 영구적으로 제외됩니다.\n6. 3항의 지급 비용에서 \"(주)일룸-DESKER\"는 “DESKER MATE”가 지불할 의무가 있는 미납금 및 기타 채무금액을 공제한 나머지 금액을 “DESKER MATE” 에게 지급하는 것을 원칙으로 합니다. 다만 금융기관 또는 전기통신사업자의 귀책 등 회사의 귀책사유가 아닌 사유로 지급이 늦어질 수 있습니다.\n7. 3항의 경우, 단 회원의 거래 확정은 완료되었으나, “DESKER MATE” 의 정산정보 등록이 완료되지 않았을 경우에는 대금 지급이 보류됩니다.\n8. 단 \"(주)일룸-DESKER\"와 “DESKER MATE” 사이 수수료 정산에 대한 별도의 약정이 있는 경우 별도 약정이 우선합니다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "정산",
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "검출 이슈: 정산식·차감사유·증빙 필수화 / 적용 규칙: ACT-003",
+      "suggested_direction": [],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true
+    },
+    {
+      "clause_id": "KR-17",
+      "article_number": "17",
+      "paragraph_number": null,
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제17조",
+      "parent_clause_id": null,
+      "context_text": null,
+      "clause_title": "분쟁해결 및 재판관할",
+      "original_text": "분쟁해결 및 재판관할\n1. 이 계약에서 정하지 아니한 사항 또는 이 계약의 내용에 대하여 일룸-DESKER와 DESKER MATE간 분쟁이 발생한 경우 일룸-DESKER와 DESKER MATE가 합의된 의사에 따릅니다. 일룸-DESKER와 DESKER MATE 사이에 계약 해석과 관련한 합의가 이루어지지 않은 경우 일반 상관례 및 관련 법령에 따릅니다.\n2. 1항에 의해서도 이 계약과 관련한 분쟁이 해결되지 아니한 경우 「대리점거래의 공정화에 관한 법률 」 제 19조 1항에 따라 공정거래조정원 또는 시·도 대리점분쟁조정협의회에 조정을 신청하거나 다른 법령에 의하여 설치된 중재기관에 중재를 신청할 수 있습니다.\n3. 제 2항에 따른 조정이 성립되지 아니하거나 일룸-DESKER와 DESKER MATE가 조정 또는 중재를 신청하지 아니하는 경우, 이 계약에 따른 분쟁의 해결은 통상의 민사재판에 의하며, 관할은 민사소송법에 따릅니다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "국내 계약 분쟁조항 점검",
+          "issue_detail": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-004",
+          "title": "국내 계약 분쟁조항 점검",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "국내 거래의 분쟁해결/재판관할 조항은 전속관할/합의관할/민사소송법상 관할 구조를 중심으로 점검한다.",
+          "review_action": [
+            "준거법과 관할(또는 중재)을 명시",
+            "해외 집행(판결/중재) 가능성 및 비용/기간 리스크 고지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:dispute",
+            "entity_weighted:해외법인",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "관할"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "검출 이슈: 국내 계약 분쟁조항 점검 / 적용 규칙: ACT-004",
+      "suggested_direction": [],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true
+    },
+    {
+      "clause_id": "KR-7",
+      "article_number": "7",
+      "paragraph_number": null,
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제7조",
+      "parent_clause_id": null,
+      "context_text": null,
+      "clause_title": "“DESKER MATE”의 의무",
+      "original_text": "“DESKER MATE”의 의무\n18. “DESKER MATE” 는 회원이 요청한 영업건에 대하여 성실하고 전문적인 컨설팅 및 응대 서비스를 제공하여야 하며, 회원의 문의 및 요청사항에 대한 답변을 포함하여 제안서, 도면, 3D 렌더링 등 회원의 이해를 돕기 위하여 제공되는 모든 관련 용역의 결과물을 충실히 제공하여야 한다.\n19. .\n20. “DESKER MATE” 는 (주)일룸-DESKER가 제공하는 공간플래닝 상담서비스에 따라 회원의 문의에 답변하며, 허위·과장정보 또는 지식재산권(상표권,저작권) 등 타인의 권리를 침해하는 정보를 제공하지 않습니다. 이를 위반하는 경우 발생하는 불이익 또는 법적 책임은 “DESKER MATE” 본인에게 있습니다.\n21. “DEKSER MATE”는 ㈜일룸-DESKER 상품을 최종 소비자에게 판매하여야 하며, 최종 소비자는 ㈜일룸-DEKSER 상품을 다수의 고객에게 전매 또는 판매하는 목적으로 구매하는 자가 아닌 소비 생활을 위해 사용하거나 이용하는 자를 말한다.\n22. “DESKER MATE” 는 DESKER 홈페이지를 이용하는 회원에게 홈페이지를 통해서가 아닌 직접 결제를 요청하거나 이를 유도하는 행위를 하여서는 안됩니다. (단, 물품 공급 외 사전에 \"(주)일룸-DESKER\"와 협의가 완료된 건에 대해서는 예외 적용) 이를 위반하는 경우 직접 결제 유도 행위 또는 잘못된 견적 요청 등으로 간주되며, 이의 경우 경고정책에 의거하여 처리됩니다.\n23. “DESKER MATE” 는 공간플래닝 상담 서비스가 매칭된 시점부터 회원과의 연락 및 상담, 회원과의 거래 이행 및 결과 제공을 성실하게 수행하여야 합니다.\n24. “DESKER MATE”는 데스커 홈페이지(https://www.desker.co.kr)를 통해 매칭된 공간플래닝 상담 건에 대해 데스커 제품을 우선적으로 제안,판매하여야 하며, 해당 영업 건과 관련하여 본사의 사전 승인 없이 타사의 제품을 판매하거나 중개하여는 아니 된다.\n25. “DESKER MATE” 는 용역의 제공 및 회원 결제의 채권회수를 위한 일체의 업무를 처리하며 이를 신의성실하게 이행하여야 할 의무가 있습니다. 회원의 대금지급예정일까지 대금지급이 이루어지지 않는 경우 \"DESKER MATE\"는 즉시 \"(주)일룸-DESKER\"에게 회원의 대금미지급 사유와 대금수금 예정일에 대한 내용을 통지하여야 하며 회원의 대금지급이 이루어질 수 있도록 \"(주)일룸-DESKER\"의 업무에 협조하여야 합니다. 또한 용역 제공과 관련하여 잘못된 정보를 제공하여 발생하는 모든 책임과 의무를 부담합니다.\n26. “DESKER MATE” 가 작성한 견적, 프로필 등에 허위 또는 과장, 기재누락, 오기가 있어서는 아니되며 이를 준수하지 아니하여 발생하는 모든 법적문제에 대하여는 “DESKER MATE” 가 모든 책임을 부담합니다\n27. “DESKER MATE” 는 작성한 견적, 용역의 내용, 용역 제공 시기 등 내용의 변경사항이 있을 경우 이를 바로 수정·갱신하며 이를 회원이 오해하지 않도록 성실히 설명하고 고지할 의무를 집니다.\n28. “DESKER MATE” 는 관련법령 등을 위반하는 불법적인 용역을 제공하지 않는다는 점에 대해 보증하며 불법적이거나 본 이용약관을 위반하는 내용으로 견적 및 허위 내용을 작성하여 회원에게 송부할 수 없습니다.\n29. “DESKER MATE가 견적을 수령한 회원에게 \"(주)일룸-DESKER\"에서 제공하는 서비스 외 별도로 세부사항을 조정하는 경우 \"(주)일룸-DESKER\"는 “DESKER MATE” 와 회원 사이에 “DESKER MATE\"의 귀책으로 발생한 일체의 문제에 대하여 어떠한 책임도 지지 않습니다.\n30. \"DESKER MATE”는 회원과의 판매계약 체결 전 또는 체결 시 \"(주)일룸-DESKER\" 가 규정하는 사항과 관계법령 및 회원에게 \"(주)일룸-DESKER\" 가 제공한 다음 각 호의 서류를 교부 혹은 확인 방법을 안내하여야 하며, 필요한 경우 회원에게 상품의 작동방법, 기능, 주의사항 등에 대하여 충분히 설명하여야 합니다.\nE. 상품 대금의 내역과 그 지급방법\nF. 추가발생비용, 벽고정안내, 환불/반품기준 등 상품 판매계약의 주요내용 및 관련법령에서 정하는 내용\nG. 개인정보 수집·이용·제공 동의 및 활용에 관한 내용\nH. 사용설명서, 품질보증서 등 상품의 사용방법에 관한 서류\n31. \"DESKER MATE\"는 \"(주)일룸-DESKER\"가 정한 지정가액을 준수해야 하며 \"(주)일룸-DESKER\"와 협의되지 않은 프로모션 행사 등을 진행하는 방법 등으로 실질적으로 지정가액에 영향을 주는 행위를 하여서는 안됩니다.\n32. \"DESKER MATE\"는 \"(주)일룸-DESKER\" 또는 \"(주)일룸-DESKER\"의 임직원으로 사칭하거나 오인하도록 하는 행위를 하여서는 안됩니다.\n33. \"DESKER MATE\"는 공감플래닝 상담 서비스를 이행하면서 획득한 회원정보를 유출하거나 그 외 개인정보보호법과 관련한 사항을 위반하는 행위를 하여서는 안됩니다.\n34. \"(주)일룸-DESKER\"가 \"DESKER MATE\"에게 부여하는 특정 타이틀에 대해 \"DESKER MATE\" 임의로 사칭하여 사용하지 아니한다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "검출 이슈: 정산식·차감사유·증빙 필수화 / 적용 규칙: ACT-003",
+      "suggested_direction": [],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": false,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true
+    },
+    {
+      "clause_id": "KR-9",
+      "article_number": "9",
+      "paragraph_number": null,
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제9조",
+      "parent_clause_id": null,
+      "context_text": null,
+      "clause_title": "계약 해지",
+      "original_text": "계약 해지\n1. A호 내지 F호의 어느 하나에 해당하는 경우 \"(주)일룸-DESKER\" 또는 \"DESKER MATE\" 는 서면에 의한 통보로 계약을 해지할 수 있습니다. 단 G항 및 H항의 경우 DESKER MATE만 계약을 해지할 수 있습니다.\nA. \"(주)일룸-DESKER\" 또는 \"DESKER MATE\" 가 발행한 어음,수표가 지급거절 되거나 \"(주)일룸-DESKER\" 또는 \"DESKER MATE\" 에 대한 회생·파산 절차가 개시된 경우\nB. \"(주)일룸-DESKER\" 또는 \"DESKER MATE\"의 주요재산 (이 계약에 따라 \"(주)일룸-DESKER\"가 \"DESKER MATE\"에 대하여 가지는 납품대금에 대한 채권을 포함한다)에 대하여 강제경매 등이 실행되어 더 이상의 이 계약 이행이 곤란하게 된 경우\nC. \"(주)일룸-DESKER\" 또는 \"DESKER MATE\"가 감독관청으로부터 영업취소 등의 처분을 받은 경우\nD. \"(주)일룸-DESKER\"가 납품한 상품이 관계법령에 저촉되어 해당 상품의 납품 또는 판매가 불가능하게 된 경우\nE. 기타의 사유로 인하여 본 계약 및 개별계약을 이행할 수 없는 사실이 객관적으로 명백한 경우\nF. \"(주)일룸-DESKER\" 또는 \"DESKER MATE\" 및 그 임직원의 법 위반행위 또는 사회 상규에 반하는 행위로 인해 \"DESKER MATE\"의 영업에 상당한 영향을 끼치는 경우\nG. ㈜일룸-DESKER의 행위가 제 9조의 2 각 항에 해당하는 불공정행위에 해당 하는 경우\nH. 이 계약에 명시된 주요 거래품목의 생산이 중단 또는 종료된 경우\nI. ㈜일룸-DESKER의 행위가 제 10조 각 항에 해당하는 불공정행위에 해당 하는 경우\n2. “(주)일룸 DESKER\" 또는 \"DSEKR MATE\"가 이 계약의 중대한 사항을 위반한 경우, 30일 이상의 유예기간을 두고 계약의 위반 사실을 구체적으로 밝히고 이를 시정하지 아니하면 그 계약을 해지한다는 사실을 서면으로 2회 이상 통지하여야 하며, 그 기간 내에 시정이 이루어지지 않은 경우 계약을 해지할 수 있습니다.\n3. \"(주)일룸-DESKER\"는 제 1항 A호 내지 G호에서 정한 사유가 발생한 경우 이외에는 임의로 특정 상품의 공급 중단이나 물량의 현저한 축소 등 실질적으로 계약 해지에 준하는 조치를 취해서는 아니됩니다.\n4. 제 1항 및 제 2항에 해당하지 않는 부득이한 사유로 어느 일방이 이 계약을 해지하려는 경우 해지 3개월 전까지 상대방에게 그 사유를 서면으로 통지하여야 합니다.\n5. 이 조에 의하여 계약이 해지될 경우, 계약 해지에 관하여 책임 있는 당사자는 상대방에 대하여 계약 해지로 인한 손해를 배상하여야 합니다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "정산식·차감사유·증빙 필수화",
+          "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "risk_level": "MEDIUM",
+          "high_risk": false,
+          "approval_required": false
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "ACT-003",
+          "title": "정산식·차감사유·증빙 필수화",
+          "rule_status": "confirmed_pattern",
+          "risk_level": "MEDIUM",
+          "approval_required": false,
+          "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+          "review_action": [
+            "정산식(계산기준/정산주기/환불/공제) 명시",
+            "공제/상계 사유는 제한적으로 열거",
+            "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+          ],
+          "tags": [
+            "source:actual_contracts",
+            "clause:payment",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대금"
+          ]
+        }
+      ],
+      "related_laws": {
+        "enabled": false,
+        "note": "law search failed",
+        "error": "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+      },
+      "rewrite_reason": "검출 이슈: 정산식·차감사유·증빙 필수화 / 적용 규칙: ACT-003",
+      "suggested_direction": [],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "MEDIUM",
+      "must_fix": false,
+      "review_tier": "SUGGEST",
+      "unfavorable_to_us": true,
+      "keep_as_is": false,
+      "ai_deep_reviewed": true
+    },
+    {
+      "clause_id": "KR-3",
+      "article_number": "3",
+      "paragraph_number": null,
+      "item_number": null,
+      "subitem_number": null,
+      "display_path": "제3조",
+      "parent_clause_id": null,
+      "context_text": null,
+      "clause_title": "공정거래 준수 및 동반성장 지원",
+      "original_text": "공정거래 준수 및 동반성장 지원\n1. \"(주)일룸-DESKER\"와 \"DESKER MATE\"는 대등한 지위에서 이 계약상의 의무를 신의에 따라 성실히 이행함으로써 상호 공정한 거래관계와 동반성장을 추구합니다.\n2. \"(주)일룸-DESKER\"와 \"DESKER MATE\"는 공정하고 투명한 거래를 위하여 다음 각 호의 내용을 준수합니다.\nA. 상대방에게 금품, 향응, 편의 또는 접대를 요구하거나 제공해서는 아니되며, 위법하거나 부당한 행위를 하지 아니합니다..\nB. 거래상 우월적 지위를 남용하여 공정한 거래질서에 반하는 행위를 요구하지 아니한다.\n3. \"(주)일룸-DESKER\"와 \"DESKER MATE\"는 이 계약의 체결 및 이행과 관련하여 「독점규제 및 공정거래에 관한 법률」, 「약관의 규제에 관한 법률」, 「대리점거래의 공정화에 관한 법률」 등의 관련 법령을 준수합니다.\n4. \"(주)일룸-DESKER\"와 \"DESKER MATE\"는 공정하고 투명한 거래를 위하여 다음 각 호의 내용을 준수합니다.\nA. 상대방에게 금품, 향응, 편의 또는 접대를 요구하거나 제공해서는 아니 되며, 위법하거나 부당한 행위를 하지 아니합니다.\nB. 거래상 우월적 지위를 남용하여 공정한 거래질서에 반하는 행위를 요구하지 아니합니다. \"(주)일룸-DESKER\"는 \"DESKER MATE\" 와의 동반성장을 위하여 \"DESKER MATE\"의 근무환경개선, 수익개선화 등 \"DESKER MATE\" 를 위한 다양한 교육 및 지원프로그램을 마련하여 지원할 수 있습니다.",
+      "detected_issue_list": [
+        {
+          "issue_title": "대리점 비용전가(원상회복/판촉/반품/광고비 등) 탐지",
+          "issue_detail": "대리점에 대한 비용전가 구조는 대리점법/공정거래 리스크가 있어 법무 승인 없이 수용하지 않는다.",
+          "review_action": [
+            "비용 항목/상한/정산 근거를 문서화",
+            "대리점의 자율성 및 협의/동의 절차 확보",
+            "불이익 제공 강요/거래상 지위 남용 소지 점검"
+          ],
+          "risk_level": "HIGH",
+          "high_risk": true,
+          "approval_required": true
+        },
+        {
+          "issue_title": "대리점 비용부담 트리거(승인 필요)",
+          "issue_detail": "대리점 + 비용부담/판촉비/반품비/광고비 트리거가 있으면 승인 트랙으로 올린다.",
+          "review_action": [
+            "비용 항목/상한/정산 기준 문서화",
+            "대리점 동의 절차 및 불이익 강요 소지 점검"
+          ],
+          "risk_level": "HIGH",
+          "high_risk": true,
+          "approval_required": true
+        }
+      ],
+      "related_rules": [
+        {
+          "rule_id": "RISK-006",
+          "title": "대리점 비용전가(원상회복/판촉/반품/광고비 등) 탐지",
+          "rule_status": "approval_required",
+          "risk_level": "HIGH",
+          "approval_required": true,
+          "description": "대리점에 대한 비용전가 구조는 대리점법/공정거래 리스크가 있어 법무 승인 없이 수용하지 않는다.",
+          "review_action": [
+            "비용 항목/상한/정산 근거를 문서화",
+            "대리점의 자율성 및 협의/동의 절차 확보",
+            "불이익 제공 강요/거래상 지위 남용 소지 점검"
+          ],
+          "tags": [
+            "risk:dealer_cost_shifting",
+            "approval_required",
+            "entity_weighted:퍼시스",
+            "entity_weighted:시디즈",
+            "entity_weighted:일룸",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대리점"
+          ]
+        },
+        {
+          "rule_id": "ACT-009",
+          "title": "대리점 비용부담 트리거(승인 필요)",
+          "rule_status": "approval_required",
+          "risk_level": "HIGH",
+          "approval_required": true,
+          "description": "대리점 + 비용부담/판촉비/반품비/광고비 트리거가 있으면 승인 트랙으로 올린다.",
+          "review_action": [
+            "비용 항목/상한/정산 기준 문서화",
+            "대리점 동의 절차 및 불이익 강요 소지 점검"
+          ],
+          "tags": [
+            "approval_required",
+            "trigger:dealer_cost",
+            "confirmed"
+          ],
+          "matched_keywords": [
+            "대리점"
+          ]
+        }
+      ],
+      "related_laws": null,
+      "rewrite_reason": "법령 준수 일반원칙 문구는 현행 유지(수정 필요 없음).",
+      "suggested_direction": [
+        "대리점 비용전가 항목을 상한/정산 기준/증빙/사전합의로 제한"
+      ],
+      "suggested_rewrite": null,
+      "approval_required": false,
+      "high_risk": false,
+      "risk_tier": "LOW",
+      "must_fix": false,
+      "review_tier": "NOTE",
+      "unfavorable_to_us": true,
+      "keep_as_is": true,
+      "ai_deep_reviewed": true
+    }
+  ],
+  "clause_meta": {
+    "review_posture": "buyer_favorable",
+    "party_role": {
+      "our_role": "ordering_party",
+      "counterparty_role": "contractor_or_supplier",
+      "our_label": null,
+      "counterparty_label": null,
+      "counterparty_is_large_standard_provider": false,
+      "signals": [
+        "installation_commissioning_keywords"
+      ]
+    },
+    "contract_profile": {
+      "profile": "dealer_consignment",
+      "evidence": [
+        "dealer_token"
+      ]
+    },
+    "jurisdiction": {
+      "kind": "domestic_korea",
+      "foreign_entity_involved": false,
+      "cross_border": false,
+      "evidence": [
+        "korea_law_venue_present"
+      ]
+    },
+    "text_length": 18793,
+    "text_sha256": "717222f8a6e43766df1839a1e80ced1894fc4cb2ddc0b814c1dc7ee2a844884f",
+    "clause_count": 33,
+    "issue_clause_count": 5,
+    "tier_counts": {
+      "must": 0,
+      "medium": 4,
+      "low": 1
+    },
+    "headings_found": true,
+    "fallback_only": false,
+    "warnings": [],
+    "docx_allowed": true,
+    "law_errors": [
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'",
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'",
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'",
+      "LawSearchService._search_target() missing 1 required keyword-only argument: 'profile'"
+    ],
+    "ai": {
+      "enabled": true,
+      "used": true,
+      "selected_clause_ids": [
+        "KR-15",
+        "KR-17",
+        "KR-7",
+        "KR-9",
+        "KR-3"
+      ],
+      "selected_count": 5,
+      "model": "gpt-4.1-mini",
+      "ok": false,
+      "error": "invalid AI response (expected JSON array)",
+      "usage": [
+        {
+          "input_tokens": 6016,
+          "output_tokens": 2400,
+          "total_tokens": 8416
+        }
+      ]
+    },
+    "clause_extraction_report": {
+      "strategy": "heading",
+      "clause_count": 33,
+      "headings_found": true,
+      "fallback_only": false,
+      "dropped_lines": 0,
+      "split_long_clauses": 0,
+      "warnings": []
+    }
+  },
+  "ai": {
+    "enabled": true,
+    "provider": "openai",
+    "model": "gpt-4.1-mini",
+    "used": true,
+    "detail": {
+      "enabled": true,
+      "used": true,
+      "selected_clause_ids": [
+        "KR-15",
+        "KR-17",
+        "KR-7",
+        "KR-9",
+        "KR-3"
+      ],
+      "selected_count": 5,
+      "model": "gpt-4.1-mini",
+      "ok": false,
+      "error": "invalid AI response (expected JSON array)",
+      "usage": [
+        {
+          "input_tokens": 6016,
+          "output_tokens": 2400,
+          "total_tokens": 8416
+        }
+      ]
+    }
+  }
+}

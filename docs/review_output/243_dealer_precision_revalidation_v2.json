@@ -1,0 +1,141 @@
+{
+  "elapsed_sec": 0.074,
+  "idx_by_article": {
+    "21": 0,
+    "2": 12,
+    "3": 15,
+    "5": 21,
+    "14": 22,
+    "18": 28,
+    "23": 31,
+    "24": 44,
+    "11": 50,
+    "9": 51,
+    "25": 52,
+    "19": 53,
+    "12": 54,
+    "17": 56,
+    "15": 69,
+    "10": 71,
+    "8": 72,
+    "7": 83,
+    "13": 84,
+    "20": 85,
+    "6": 86,
+    "27": 87
+  },
+  "order_ok": true,
+  "ui_issue_titles": [
+    "사전 서면동의 조건 명확화",
+    "정산식·차감사유·증빙 필수화",
+    "대리점 비용전가(원상회복/판촉/반품/광고비 등) 탐지",
+    "대리점 비용부담 트리거(승인 필요)"
+  ],
+  "dispute_in_ui_issues": false,
+  "clause23": {
+    "clause_id": "KR-23-p3",
+    "article_number": "23",
+    "paragraph_number": "3",
+    "item_number": null,
+    "subitem_number": null,
+    "display_path": "제23조 제3항",
+    "parent_clause_id": "KR-23",
+    "context_text": "제23조 [계약해지]",
+    "clause_title": "[계약해지]",
+    "original_text": "수탁자가 고객정보 유출, 매출 누락, 허위계약, 고객대금 유용, 브랜드 이미지 훼손, 무단 할인, 무단 재판매, 무단 취급상품 판매, 중대한 고객피해 발생 등 본 계약의 중대한 위반행위로 위탁자에게 손해를 발생시킨 경우, 위탁자는 별도의 시정요구 없이 즉시 계약을 해지할 수 있다.",
+    "clause_topic": "termination",
+    "user_focus_matches": [
+      "dealer_unfair_disadvantage",
+      "termination_abuse"
+    ],
+    "user_focus_hit": true,
+    "user_focus_match_titles": [
+      "대리점법상 불이익 제공/거래상 지위 남용",
+      "계약해지/물량축소/불이익 조치 남용"
+    ],
+    "factual_matches": [],
+    "factual_hit": false,
+    "factual_match_titles": [],
+    "detected_issue_list": [
+      {
+        "rule_id": "ACT-003",
+        "issue_title": "정산식·차감사유·증빙 필수화",
+        "issue_detail": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+        "review_action": [
+          "정산식(계산기준/정산주기/환불/공제) 명시",
+          "공제/상계 사유는 제한적으로 열거",
+          "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+        ],
+        "risk_level": "MEDIUM",
+        "high_risk": false,
+        "approval_required": false,
+        "summary_suppress": false,
+        "supplemental_only": false
+      }
+    ],
+    "related_rules": [
+      {
+        "rule_id": "ACT-003",
+        "title": "정산식·차감사유·증빙 필수화",
+        "rule_status": "confirmed_pattern",
+        "risk_level": "MEDIUM",
+        "approval_required": false,
+        "context_expanded_by_questions": false,
+        "context_expanded_by_text": false,
+        "description": "대금/정산 조항이 높은 빈도로 반복되므로 정산 기준, 공제 사유, 세무/증빙을 표준화한다.",
+        "review_action": [
+          "정산식(계산기준/정산주기/환불/공제) 명시",
+          "공제/상계 사유는 제한적으로 열거",
+          "세금계산서/인보이스/증빙 제출 조건의 과도한 남용 방지"
+        ],
+        "tags": [
+          "source:actual_contracts",
+          "clause:payment",
+          "confirmed"
+        ],
+        "matched_keywords": [
+          "대금"
+        ]
+      }
+    ],
+    "question_context_hit": false,
+    "related_laws": null,
+    "rewrite_reason": "계약해지/물량축소 등 불이익 조치가 일방적으로 운용되면 대리점법상 불이익 제공 및 거래상 지위 남용으로 해석될 소지가 있어, 해지 요건·절차를 객관화/한정한다.",
+    "suggested_direction": [
+      "즉시 해지 사유를 객관적·중대한 위반으로 한정",
+      "원칙적으로 서면 최고 및 시정기간 부여",
+      "예외적 즉시 해지 사유를 좁게 열거",
+      "해지 시 정산/인수인계 절차 명확화"
+    ],
+    "suggested_rewrite": "수탁자가 고객정보 유출, 매출 누락, 허위계약, 고객대금 유용, 브랜드 이미지 훼손, 무단 할인, 무단 재판매, 무단 취급상품 판매, 중대한 고객피해 발생 등 본 계약의 중대한 위반행위로 위탁자에게 손해를 발생시킨 경우, 위탁자는 별도의 시정요구 없이 즉시 계약을 해지할 수 있다.\n\n[추가]\n① 갑은 을의 본 계약상 의무 위반이 객관적으로 중대하고 회복 곤란한 경우에 한하여 계약을 해지할 수 있다.\n② 갑이 계약을 해지하려면 원칙적으로 위반 사항을 특정하여 서면으로 최고하고, 을에게 상당한 시정기간(예: 15일 이상)을 부여하여야 한다.\n③ 다만, (i) 고의적·중대한 법령 위반, (ii) 대금 편취 등 신뢰관계를 본질적으로 훼손하는 행위, (iii) 반복 위반으로 시정이 기대되기 어려운 경우에는 즉시 해지를 허용할 수 있다.\n④ 해지 시에는 정산/반품/자료 반환 등 후속 절차와 기준을 서면으로 명확히 한다.",
+    "approval_required": false,
+    "high_risk": false,
+    "risk_tier": "HIGH",
+    "must_fix": true,
+    "review_tier": "MUST",
+    "unfavorable_to_us": true,
+    "keep_as_is": false,
+    "has_rewrite_change": true,
+    "change_record": {
+      "change_type": "modified",
+      "unchanged_segment": [
+        "수탁자가 고객정보 유출, 매출 누락, 허위계약, 고객대금 유용, 브랜드 이미지 훼손, 무단 할인, 무단 재판매, 무단 취급상품 판매, 중대한 고객피해 발생 등 본 계약의 중대한 위반행위로 위탁자에게 손해를 발생시킨 경우, 위탁자는 별도의 시정요구 없이 즉시 계약을 해지할 수 있다."
+      ],
+      "inserted_segment": [
+        "[추가] ① 갑은 을의 본 계약상 의무 위반이 객관적으로 중대하고 회복 곤란한 경우에 한하여 계약을 해지할 수 있다. ② 갑이 계약을 해지하려면 원칙적으로 위반 사항을 특정하여 서면으로 최고하고, 을에게 상당한 시정기간(예: 15일 이상)을 부여하여야 한다. ③ 다만, (i) 고의적·중대한 법령 위반, (ii) 대금 편취 등 신뢰관계를 본질적으로 훼손하는 행위, (iii) 반복 위반으로 시정이 기대되기 어려운 경우에는 즉시 해지를 허용할 수 있다. ④ 해지 시에는 정산/반품/자료 반환 등 후속 절차와 기준을 서면으로 명확히 한다."
+      ],
+      "deleted_segment": [],
+      "moved_or_omitted_segment": [],
+      "why_changed": "계약해지/물량축소 등 불이익 조치가 일방적으로 운용되면 대리점법상 불이익 제공 및 거래상 지위 남용으로 해석될 소지가 있어, 해지 요건·절차를 객관화/한정한다."
+    },
+    "display_kind": "redline",
+    "ai_deep_reviewed": false
+  },
+  "clause23_topic_ok": true,
+  "clause23_focus_ok": true,
+  "clause23_contamination_ok": true,
+  "word_has_appendix": true,
+  "word_has_rewrite_block": true,
+  "word_has_clause23_anchor": true,
+  "ui_visible_missing_rewrite": []
+}
