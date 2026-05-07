@@ -1024,6 +1024,22 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       return lines;
     }
 
+    function _clauseDisplayScore(it) {
+      if (!it) return 0;
+      const tier = String(it.risk_tier || '').toUpperCase();
+      const isRedline = !!it.has_rewrite_change && (tier === 'HIGH' || !!it.approval_required || !!it.high_risk);
+      let s = 0;
+      if (isRedline)                              s += 3000;
+      else if (tier === 'HIGH')                   s += 2000;
+      if (!!it.approval_required)                 s += 500;
+      if (!!it.high_risk)                         s += 400;
+      if (!!it.must_fix)                          s += 300;
+      if (tier === 'MEDIUM')                      s += 200;
+      if (!!it.user_focus_hit)                    s += 100;
+      if (!!it.factual_hit)                       s += 50;
+      return s;
+    }
+
     function renderClauseList(items) {
       const root = document.getElementById('clauseList');
       root.innerHTML = '';
@@ -1031,11 +1047,19 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         root.innerHTML = '<div class="meta">조항별 수정 제안이 없습니다.</div>';
         return;
       }
-      const visible = items.filter(it => {
-        if (!it) return false;
-        const tier = String(it.risk_tier || '').toUpperCase();
-        return !!it.user_focus_hit || !!it.factual_hit || !!it.approval_required || !!it.high_risk || tier === 'HIGH' || tier === 'MEDIUM';
-      });
+      const visible = items
+        .filter(it => {
+          if (!it) return false;
+          if (it.dedup_suppressed || it.keep_as_is) return false;
+          const tier = String(it.risk_tier || '').toUpperCase();
+          const isHighRisk = tier === 'HIGH' || !!it.approval_required || !!it.high_risk;
+          const isMedium   = tier === 'MEDIUM';
+          // 실질 수정안이 없는 LOW 항목은 표시하지 않는다
+          const hasSuggestedRewrite = !!(it.suggested_rewrite && String(it.suggested_rewrite).trim());
+          if (!isHighRisk && !isMedium && !hasSuggestedRewrite) return false;
+          return isHighRisk || isMedium || (!!it.user_focus_hit && hasSuggestedRewrite);
+        })
+        .sort((a, b) => _clauseDisplayScore(b) - _clauseDisplayScore(a));
       const list = (visible.length > 0 ? visible : items);
       for (const it of list.slice(0, 14)) {
         const card = document.createElement('div');

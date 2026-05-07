@@ -654,6 +654,29 @@ def _article_int(v: Any) -> int | None:
         return None
 
 
+def _is_hard_block_clause(*, article_int: int | None, title: str, clause_topic: str | None = None) -> bool:
+    if article_int in (1, 2, 3):
+        return True
+    t = str(title or "").strip()
+    if not t:
+        t = ""
+    tc = re.sub(r"\s+", "", t)
+    if "목적" in t:
+        return True
+    if "기본원칙" in t or "일반원칙" in t:
+        return True
+    if "용어정의" in tc:
+        return True
+    if ("용어" in t) and ("정의" in t):
+        return True
+    if article_int == 32:
+        if (clause_topic or "") == "dispute":
+            return True
+        if any(k in t for k in ("분쟁", "관할", "재판", "준거법", "중재", "조정", "소송")):
+            return True
+    return False
+
+
 def _article_int_from_cr(cr: dict[str, Any]) -> int | None:
     return (
         _article_int(cr.get("article_number"))
@@ -665,7 +688,7 @@ def _article_int_from_cr(cr: dict[str, Any]) -> int | None:
 
 def _dealer_issue_rank(cr: dict[str, Any]) -> int:
     a = _article_int_from_cr(cr)
-    if a in (21, 2, 3):
+    if a in (21,):
         return 0
     if a in (14, 18, 5):
         return 1
@@ -755,6 +778,470 @@ def _compute_ai_deep_review_target_count(*, clause_count: int, must_count: int, 
     target = max(base, int(must_count))
     target = max(target, int(must_count) + min(int(medium_count), 8))
     return min(max(target, 0), 28)
+
+
+# =============================================================================
+# [Advanced Review Logic] Hard-Coded Filter Functions
+# requirement.md > [Advanced Review Logic] 참조
+# =============================================================================
+
+_RENTAL_KW = re.compile(r"렌탈|구독|임대차|Lease", re.IGNORECASE)
+_RENTAL_COMMENT_KW = re.compile(r"소유권|위약금|렌탈|임대|리스|반납|반환.*계약|구독.*해지")
+
+
+def _is_rental_contract(contract_type: str, text: str) -> bool:
+    return bool(_RENTAL_KW.search((contract_type or "") + " " + (text or "")[:400]))
+
+
+def _is_domestic_only(text: str, answers: dict[str, Any] | None) -> bool:
+    ans = answers or {}
+    jur_ans = str(ans.get("jurisdiction") or ans.get("governing_law") or "")
+    if any(k in jur_ans for k in ("해외", "foreign", "international", "cross", "overseas")):
+        return False
+    foreign_markers = ("United States", "U.S.", "China", "Japan", "Singapore",
+                       " LLC", " Inc.", " Ltd.", "Deutschland", "UK ", "法人")
+    if any(m in (text or "") for m in foreign_markers):
+        return False
+    return True
+
+
+def _apply_rental_filter(clause_results: list[dict[str, Any]], is_rental: bool) -> None:
+    """[Rental Filter] 비렌탈 계약에서 렌탈 관련 코멘트를 Hard-Block한다."""
+    if is_rental:
+        return
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        combined = (cr.get("suggested_rewrite") or "") + " " + (cr.get("rewrite_reason") or "")
+        if _RENTAL_COMMENT_KW.search(combined):
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["rewrite_reason"] = "[Rental Filter] 비렌탈 계약 — 렌탈 관련 코멘트 차단."
+            if not cr.get("guardrail_block"):
+                cr["guardrail_block"] = {"filter": "rental_filter"}
+
+
+_INTL_RISK_KW = re.compile(r"다국가|국제 관할|해외 집행|cross.border|준거법 중복|국외 이전|해외 법원", re.IGNORECASE)
+
+
+def _apply_domestic_filter(clause_results: list[dict[str, Any]], is_domestic: bool) -> None:
+    """[Domestic Filter] 국내 전용 계약에서 dispute 조항의 국제 관할 리스크 코멘트를 차단한다."""
+    if not is_domestic:
+        return
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        ct = str(cr.get("clause_topic") or "")
+        if ct != "dispute":
+            continue
+        combined = (cr.get("suggested_rewrite") or "") + " " + (cr.get("rewrite_reason") or "")
+        if _INTL_RISK_KW.search(combined):
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["risk_tier"] = "LOW"
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
+            cr["rewrite_reason"] = "[Domestic Filter] 국내 계약 — 관할조항 LOW 등급 유지, 다국가 리스크 코멘트 차단."
+            if not cr.get("guardrail_block"):
+                cr["guardrail_block"] = {"filter": "domestic_filter"}
+
+
+_INTEGRITY_RULES: list[tuple[str, list[str], list[str]]] = [
+    ("personal_data", ["개인정보"], ["정산", "상계", "공제", "판촉비", "장려금"]),
+    ("damage",        ["손해배상", "책임제한", "배상"], ["판촉비", "증빙", "광고비", "장려금"]),
+]
+
+
+def _apply_clause_integrity_filter(clause_results: list[dict[str, Any]]) -> None:
+    """[Clause Integrity] 조항 토픽과 무관한 문구(크로스 토픽 오염)를 차단한다."""
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        ct = str(cr.get("clause_topic") or "")
+        title = str(cr.get("clause_title") or "")
+        sr = cr.get("suggested_rewrite") or ""
+        for topic, title_hints, forbidden in _INTEGRITY_RULES:
+            topic_match = (ct == topic) or any(h in title for h in title_hints)
+            if not topic_match:
+                continue
+            blocked = [kw for kw in forbidden if kw in sr]
+            if not blocked:
+                continue
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            old = str(cr.get("rewrite_reason") or "")
+            suffix = f"[Integrity Filter] {title} 조항에 비관련 문구({', '.join(blocked)}) 삽입 차단."
+            cr["rewrite_reason"] = (old.strip(" /") + " / " + suffix).strip(" /") if old.strip() else suffix
+            if not cr.get("guardrail_block"):
+                cr["guardrail_block"] = {"filter": "clause_integrity", "blocked": blocked}
+
+
+_SIDIZ_NAMES = frozenset({"시디즈", "SIDIZ", "Sidiz", "sidiz"})
+
+
+def _apply_sidiz_position_strategy(
+    clause_results: list[dict[str, Any]],
+    entity: str,
+    party_role: dict[str, Any] | None,
+    text: str,
+) -> None:
+    """[Sidiz Position Strategy] 시디즈가 위탁자(갑)인 경우 전략적 조항을 주입한다."""
+    if not any(s in (entity or "") for s in _SIDIZ_NAMES):
+        return
+    our_role = str((party_role or {}).get("our_role") or (party_role or {}).get("role") or "")
+    text_head = (text or "")[:300]
+    is_consignor = (
+        our_role in ("supplier", "consignor", "licensor")
+        or (any(s in text_head for s in _SIDIZ_NAMES) and "갑" in text_head)
+    )
+    if not is_consignor:
+        return
+
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        ct = str(cr.get("clause_topic") or "")
+        title = str(cr.get("clause_title") or "")
+        sr = cr.get("suggested_rewrite") or ""
+        ot = str(cr.get("original_text") or "")
+        base = (sr or ot).rstrip()
+
+        # ① CI/SI 위반 → 즉시 해지권 + 위약벌
+        if ct == "termination" or any(k in title for k in ("CI", "SI", "브랜드", "상표", "디자인", "외관")):
+            if "즉시 해지" not in base and "위약벌" not in base:
+                add = (
+                    "\n\n[시디즈 위탁자 보호]\n"
+                    "수탁자가 CI/SI 가이드라인을 위반하거나 브랜드를 훼손한 경우, "
+                    "갑(시디즈)은 사전 통지 없이 즉시 계약을 해지할 수 있으며, "
+                    "수탁자는 계약금액의 [ ]%에 해당하는 위약벌을 갑에게 지급한다."
+                )
+                cr["suggested_rewrite"] = (base + add).strip()
+                cr["suggested_direction"] = (cr.get("suggested_direction") or []) + [
+                    "CI/SI 위반 즉시 해지권 확보", "브랜드 훼손 위약벌 명시",
+                ]
+                cr["risk_tier"] = "HIGH"
+                cr["must_fix"] = True
+                cr["review_tier"] = "MUST"
+                cr["approval_required"] = True
+
+        # ② 개인정보 유출 → 무제한 구상권
+        elif ct == "personal_data" or "개인정보" in title:
+            if "구상권" not in base:
+                add = (
+                    "\n\n[시디즈 위탁자 보호]\n"
+                    "수탁자의 귀책으로 개인정보 유출이 발생하여 갑이 제3자·감독기관에 "
+                    "배상금·과태료·과징금을 지출한 경우, 갑은 그 전액을 수탁자에게 구상할 수 있다(무제한 구상권)."
+                )
+                cr["suggested_rewrite"] = (base + add).strip()
+                cr["suggested_direction"] = (cr.get("suggested_direction") or []) + ["개인정보 유출 무제한 구상권 확보"]
+                cr["risk_tier"] = "HIGH"
+                cr["must_fix"] = True
+                cr["review_tier"] = "MUST"
+                cr["approval_required"] = True
+
+        # ③ 정산 이의제기 기간 → 7일
+        elif ct == "payment_settlement" or any(k in title for k in ("정산", "상계", "공제", "대금")):
+            if "7일" not in base:
+                add = (
+                    "\n\n[시디즈 위탁자 보호]\n"
+                    "수탁자는 정산서 수령 후 7일 이내에 서면으로 이의를 제기하지 않으면 "
+                    "해당 정산 내용에 동의한 것으로 간주하며, 이후 이의 제기는 인정하지 않는다."
+                )
+                cr["suggested_rewrite"] = (base + add).strip()
+                cr["suggested_direction"] = (cr.get("suggested_direction") or []) + ["정산 이의제기 기간 7일로 단기 설정"]
+                if cr.get("risk_tier") != "HIGH":
+                    cr["risk_tier"] = "MEDIUM"
+                    cr["review_tier"] = "SUGGEST"
+
+
+_RX_SENT_SPLIT = re.compile(r"(?<=[다않겠다니다습니다])[.。]\s*|\n")
+
+
+def _apply_global_sentence_dedup(clause_results: list[dict[str, Any]]) -> None:
+    """[Global Deduplication] 동일 문장이 2회 이상 등장하면 '상기 제N조 참조'로 대체한다."""
+    seen: dict[str, tuple[int, str]] = {}
+    for idx, cr in enumerate(clause_results):
+        if not isinstance(cr, dict):
+            continue
+        sr = cr.get("suggested_rewrite")
+        if not isinstance(sr, str) or not sr.strip():
+            continue
+        sentences = [s.strip() for s in _RX_SENT_SPLIT.split(sr) if len(s.strip()) >= 20]
+        new_sr = sr
+        for sent in sentences:
+            norm = re.sub(r"\s+", " ", sent.lower())
+            if norm in seen:
+                first_idx, first_art = seen[norm]
+                ref = f"상기 제{first_art}조 참조" if first_art else "상기 조항 참조"
+                new_sr = new_sr.replace(sent, ref, 1)
+            else:
+                art = str(clause_results[idx].get("article_number") or "")
+                seen[norm] = (idx, art)
+        if new_sr != sr:
+            cr["suggested_rewrite"] = new_sr.strip()
+
+
+# =============================================================================
+# [Expert Advisory Review Logic] — requirement.md > [Expert Advisory Review Logic] 참조
+# =============================================================================
+
+_ADVISORY_CONTRACT_KW2 = re.compile(
+    r"자문|용역|Advisory|Service|교수|강의|집필|연구용역|컨설팅|Consulting|위임|Engagement"
+    r"|디자인\s*용역|컨텐츠\s*제작|개발\s*용역",
+    re.IGNORECASE,
+)
+_RENTAL_CONTRACT_KW2 = re.compile(r"렌탈|임대차|Lease|구독", re.IGNORECASE)
+_CONSTRUCTION_CONTRACT_KW = re.compile(r"공사|인테리어|시공|건설|리모델링", re.IGNORECASE)
+_LARGE_PAYMENT_KW = re.compile(r"1억|1,0\d\d,0\d\d|100,000,000|일억|대가.{0,8}억|용역비.{0,8}억|자문료.{0,8}억", re.IGNORECASE)
+
+_IP_CLAUSE_TITLES = ("지식재산권", "저작권", "성과물", "결과물", "산출물", "지재권", "IP", "소유권")
+_IP_CONTRACTOR_KW = re.compile(
+    r"수탁자에게\s*귀속|을에게\s*귀속|교수에게\s*귀속|저작권.{0,15}을이\s*보유|이용권만.{0,10}부여"
+    r"|비독점.{0,10}이용|퍼시스.{0,10}이용권만|수탁자가\s*소유",
+    re.IGNORECASE,
+)
+_IP_WARRANTY_KW = re.compile(
+    r"제3자.{0,20}권리.{0,20}침해.{0,20}보증|제3자.{0,20}침해.{0,20}면책|침해.{0,20}수탁자.{0,20}책임",
+    re.IGNORECASE,
+)
+
+_IP_FURSYS_REWRITE = (
+    "\n\n[수정 제안 — IP 귀속]\n"
+    "① 본 계약에 따라 수탁자가 작성·제작·개발한 모든 결과물(보고서, 데이터, 설계도, 저작물 등)의 "
+    "저작권 및 지식재산권은 완성과 동시에 위탁자(퍼시스)에게 전적으로 귀속된다.\n"
+    "② 수탁자는 위탁자의 서면 동의 없이 결과물을 제3자에게 공개·제공·이용허락하거나 "
+    "자신의 명의로 등록·출원할 수 없다.\n"
+    "③ 위탁자는 결과물을 상업적 목적을 포함하여 독점적·무제한으로 이용할 수 있다.\n"
+)
+
+_IP_WARRANTY_REWRITE = (
+    "\n\n[수정 제안 — 제3자 권리 침해 보증]\n"
+    "① 수탁자는 결과물이 제3자의 저작권·특허권·상표권 등 지식재산권을 침해하지 않음을 보증한다.\n"
+    "② 제3자의 권리 침해로 인해 위탁자에게 분쟁·손해·비용이 발생한 경우, "
+    "수탁자는 자신의 비용과 책임으로 위탁자를 면책하고 모든 손해를 배상한다.\n"
+    "③ 수탁자는 외부 소재(오픈소스, 무료 이미지 등) 활용 시 라이선스 조건을 위탁자에게 사전 고지한다.\n"
+)
+
+
+def _classify_contract_type(contract_type: str, text: str, filename: str | None) -> str:
+    """계약서 제목·목적 기반 엄격한 유형 분류.
+    Returns: "advisory" | "rental" | "construction" | "general"
+    """
+    haystack = (contract_type or "") + " " + (filename or "") + " " + (text or "")[:300]
+    if _ADVISORY_CONTRACT_KW2.search(haystack):
+        return "advisory"
+    if _RENTAL_CONTRACT_KW2.search(haystack):
+        return "rental"
+    if _CONSTRUCTION_CONTRACT_KW.search(haystack):
+        return "construction"
+    return "general"
+
+
+def _apply_advisory_ip_review(
+    clause_results: list[dict[str, Any]],
+    contract_type: str,
+    text: str,
+    entity: str,
+) -> None:
+    """[Expert Advisory Review Logic — Phase 2: IP & Copyright Priority]
+    자문/용역 계약에서 IP 귀속(CRITICAL)과 제3자 침해 보증을 점검한다.
+    """
+    if not _is_service_advisory_contract(str(contract_type), str(text or "")):
+        return
+
+    is_large_payment = bool(_LARGE_PAYMENT_KW.search(str(text or "")))
+    found_ip_clause = False
+    first_non_meta_cr: dict[str, Any] | None = None
+
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        a_i = _article_int_from_cr(cr)
+        if a_i is not None and a_i in (1, 2, 3):
+            continue
+
+        title = str(cr.get("clause_title") or "")
+        ot = str(cr.get("original_text") or "")
+        sr = cr.get("suggested_rewrite") or ""
+        combined = title + " " + ot
+        is_ip_clause = any(k in combined for k in _IP_CLAUSE_TITLES)
+        has_warranty = bool(_IP_WARRANTY_KW.search(combined))
+
+        if is_ip_clause:
+            found_ip_clause = True
+
+        if first_non_meta_cr is None:
+            first_non_meta_cr = cr
+
+        # ① IP가 수탁자에게 귀속 → CRITICAL
+        if is_ip_clause and _IP_CONTRACTOR_KW.search(combined):
+            base = (sr or ot).rstrip()
+            cr["suggested_rewrite"] = (base + _IP_FURSYS_REWRITE).strip()
+            cr["suggested_direction"] = (cr.get("suggested_direction") or []) + [
+                "[CRITICAL] IP/저작권 → 퍼시스(위탁자) 전적 귀속으로 수정",
+                "독점적·무제한 이용권 확보",
+                "수탁자 제3자 제공·등록 금지 명시",
+            ]
+            cr["rewrite_reason"] = (
+                "[CRITICAL] 수탁자 IP 귀속 조항은 퍼시스가 자신이 비용을 지급한 결과물을 "
+                "자유롭게 활용하지 못하게 한다. 저작권법 제9조는 도급 계약에서 수탁자 귀속을 "
+                "원칙으로 하므로 명시적 위탁자 귀속 규정이 필수다."
+                + (" (1억 이상 고액 대가 계약으로 리스크 가중)" if is_large_payment else "")
+            )
+            cr["risk_tier"] = "HIGH"
+            cr["must_fix"] = True
+            cr["review_tier"] = "MUST"
+            cr["approval_required"] = True
+            cr["high_risk"] = True
+            cr["ip_critical"] = True
+
+        # ② IP 조항이 있으나 제3자 보증 누락 → 보증 삽입
+        elif is_ip_clause and not has_warranty:
+            base = (sr or ot).rstrip()
+            cr["suggested_rewrite"] = (base + _IP_WARRANTY_REWRITE).strip()
+            cr["suggested_direction"] = (cr.get("suggested_direction") or []) + [
+                "제3자 권리 침해 보증 문구 삽입",
+                "침해 시 수탁자 면책·배상 의무 명시",
+            ]
+            if not (isinstance(cr.get("rewrite_reason"), str) and cr.get("rewrite_reason")):
+                cr["rewrite_reason"] = (
+                    "제3자 침해 보증 미비 시 퍼시스가 공동 침해자로 노출될 위험. "
+                    "저작권법 제125조 손해배상 리스크 차단을 위해 보증 조항 필수."
+                )
+            cr["risk_tier"] = "HIGH"
+            cr["must_fix"] = True
+            cr["review_tier"] = "MUST"
+
+    # ③ IP 전용 조항 자체가 없으면 → 첫 실질 조항에 삽입
+    if not found_ip_clause and first_non_meta_cr is not None:
+        cr = first_non_meta_cr
+        ot = str(cr.get("original_text") or "")
+        sr = cr.get("suggested_rewrite") or ""
+        base = (sr or ot).rstrip()
+        cr["suggested_rewrite"] = (base + _IP_FURSYS_REWRITE + _IP_WARRANTY_REWRITE).strip()
+        cr["suggested_direction"] = (cr.get("suggested_direction") or []) + [
+            "[CRITICAL] IP 귀속 조항 누락 — 결과물 조항에 귀속·보증 조항 삽입 필수",
+        ]
+        cr["risk_tier"] = "HIGH"
+        cr["must_fix"] = True
+        cr["review_tier"] = "MUST"
+        cr["approval_required"] = True
+        cr["rewrite_reason"] = (
+            "[CRITICAL] 지식재산권 귀속 조항 부재. 저작권법 제9조에 따라 도급 계약 수탁자 자동 귀속 위험."
+        )
+
+
+# =============================================================================
+# [Zero-Hallucination Guardrail] — requirement.md > [Zero-Hallucination Guardrail] 참조
+# =============================================================================
+
+_SERVICE_ADVISORY_KW = re.compile(
+    r"자문|용역|Service|Advisory|컨설팅|Consulting|위임|Engagement|집필|강의|연구", re.IGNORECASE
+)
+
+# 자문/용역 계약에서 절대 삽입 금지 키워드
+_FORBIDDEN_ADVISORY_KW = re.compile(
+    r"렌탈|소유권은\s*퍼시스에|물류시설|구독\s*서비스|소유권\s*존속|채권추심"
+    r"|위약금\s*10\s*%|위약금\s*10\s*퍼센트|임대차\s*보증금|보증금\s*반환",
+    re.IGNORECASE,
+)
+
+# 자문/용역 계약과 무관한 법령 패턴
+_FORBIDDEN_LAW_KW = re.compile(
+    r"물류시설법|부동산\s*세법|화물자동차\s*운수사업법|주택\s*임대차|상가건물\s*임대차"
+    r"|임대차보호법|전자상거래법|방문판매법|할부거래법",
+    re.IGNORECASE,
+)
+
+
+def _is_service_advisory_contract(contract_type: str, text: str) -> bool:
+    haystack = (contract_type or "") + " " + (text or "")[:400]
+    return bool(_SERVICE_ADVISORY_KW.search(haystack))
+
+
+def _apply_zero_hallucination_guardrail(
+    clause_results: list[dict[str, Any]],
+    contract_type: str,
+    text: str,
+) -> None:
+    """[Zero-Hallucination Guardrail]
+    1. 제1·2·3조 절대 보호 (모든 계약 유형)
+    2. 자문/용역 계약: 렌탈·소유권·물류시설 등 금지 키워드 Hard-Block
+    3. 자문/용역 계약: 무관 법령 인용 삭제
+    requirement.md > [Zero-Hallucination Guardrail] 참조
+    """
+    is_advisory = _is_service_advisory_contract(str(contract_type), str(text or ""))
+
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+
+        # ── 규칙 1: 제1·2·3조 절대 보호 (목적·원칙·정의 조항) ──────────────
+        a_i = _article_int_from_cr(cr)
+        if a_i is not None and a_i in (1, 2, 3):
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["risk_tier"] = "LOW"
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
+            cr["high_risk"] = False
+            cr["approval_required"] = False
+            cr["rewrite_reason"] = "[Guardrail] 제1·2·3조 수정 금지 — 목적/원칙/정의 조항."
+            if not cr.get("guardrail_block"):
+                cr["guardrail_block"] = {"filter": "article_1_2_3_protection"}
+            continue
+
+        if not is_advisory:
+            continue
+
+        sr = cr.get("suggested_rewrite") or ""
+        rr = cr.get("rewrite_reason") or ""
+        combined = sr + " " + rr
+
+        # ── 규칙 2: 자문/용역 — 금지 키워드 Hard-Block ─────────────────────
+        if _FORBIDDEN_ADVISORY_KW.search(combined):
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["rewrite_reason"] = (
+                "[Zero-Hallucination] 자문/용역 계약 — "
+                "렌탈·소유권·물류시설·채권추심 등 무관 문구 Hard-Block."
+            )
+            if not cr.get("guardrail_block"):
+                cr["guardrail_block"] = {"filter": "advisory_forbidden_keywords"}
+            continue
+
+        # ── 규칙 3: 자문/용역 — 무관 법령 인용 제거 ────────────────────────
+        if _FORBIDDEN_LAW_KW.search(combined):
+            # related_laws 내 무관 법령 항목 삭제
+            law = cr.get("related_laws")
+            if isinstance(law, dict) and isinstance(law.get("results"), dict):
+                for k in ("laws", "precedents", "interpretations"):
+                    arr = law["results"].get(k)
+                    if isinstance(arr, list):
+                        law["results"][k] = [
+                            it for it in arr
+                            if isinstance(it, dict)
+                            and not _FORBIDDEN_LAW_KW.search(str(it.get("title") or ""))
+                        ]
+            # suggested_rewrite에서 무관 법령 문장 제거
+            if _FORBIDDEN_LAW_KW.search(sr):
+                cleaned = re.sub(
+                    r"[^\n]*(?:물류시설법|부동산\s*세법|화물자동차\s*운수사업법"
+                    r"|주택\s*임대차|상가건물\s*임대차|임대차보호법"
+                    r"|전자상거래법|방문판매법|할부거래법)[^\n]*\n?",
+                    "",
+                    sr,
+                ).strip()
+                cr["suggested_rewrite"] = cleaned if cleaned else None
+                if not cr.get("guardrail_block"):
+                    cr["guardrail_block"] = {"filter": "advisory_forbidden_laws"}
+
+
+# =============================================================================
 
 
 def build_clause_level_result(
@@ -868,7 +1355,8 @@ def build_clause_level_result(
     if prof.profile == "dealer_consignment":
         for c in focus_codes:
             if c == "dealer_unfair_disadvantage":
-                dealer_focus_articles_by_code[c] = {2, 3, 21, 23}
+                # 제2조·제3조(선언적 조항)는 하드블록 대상이므로 제외, 실질 조항만 매핑
+                dealer_focus_articles_by_code[c] = {21, 23}
             elif c == "dealer_management_interference":
                 dealer_focus_articles_by_code[c] = {5, 14, 18}
             elif c == "termination_abuse":
@@ -958,13 +1446,18 @@ def build_clause_level_result(
             review_tier = "NOTE"
 
         a_i = _article_int(article_number) or _article_int(clause_id) or _article_int(it.get("display_path")) or _article_int(clause_title)
-        if (a_i in (1, 3)) or ("목적" in str(clause_title or "")) or ("정의" in str(clause_title or "")):
+        ct_hb = clause_topic if isinstance(clause_topic, str) else None
+        if _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb):
             suggested_rewrite = None
-            if not (isinstance(rewrite_reason, str) and rewrite_reason.strip()):
-                rewrite_reason = "목적/정의 조항은 조항 본연의 의미 확인에 그치고, 비용/안전/정산 등 실무적 의무를 삽입하는 수정안은 생성하지 않음."
+            rewrite_reason = "원문 유지(하드 블록: 메타/분쟁 조항)."
             risk_tier = "LOW"
             must_fix = False
             review_tier = "NOTE"
+            user_focus_hit = False
+            factual_hit = False
+            focus_match_codes = []
+            factual_match_codes = []
+            related_rules = []
 
         clause_results.append(
             {
@@ -985,15 +1478,15 @@ def build_clause_level_result(
                 "factual_matches": factual_match_codes,
                 "factual_hit": bool(factual_hit),
                 "factual_match_titles": [derived_title_by_code_obj.get(str(c), str(c)) for c in factual_match_codes if str(c)],
-                "detected_issue_list": it.get("detected_issues") if isinstance(it.get("detected_issues"), list) else [],
+                "detected_issue_list": ([] if _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb) else (it.get("detected_issues") if isinstance(it.get("detected_issues"), list) else [])),
                 "related_rules": related_rules,
                 "question_context_hit": bool(question_context_hit),
                 "related_laws": None,
                 "rewrite_reason": rewrite_reason,
-                "suggested_direction": it.get("suggested_direction") if isinstance(it.get("suggested_direction"), list) else [],
+                "suggested_direction": ([] if _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb) else (it.get("suggested_direction") if isinstance(it.get("suggested_direction"), list) else [])),
                 "suggested_rewrite": suggested_rewrite,
-                "approval_required": bool(it.get("approval_required")) if not (keep_as_is or (a_i in (1, 3)) or ("목적" in str(clause_title or "")) or ("정의" in str(clause_title or ""))) else False,
-                "high_risk": bool(it.get("high_risk")) if not (keep_as_is or (a_i in (1, 3)) or ("목적" in str(clause_title or "")) or ("정의" in str(clause_title or ""))) else False,
+                "approval_required": bool(it.get("approval_required")) if not (keep_as_is or _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb)) else False,
+                "high_risk": bool(it.get("high_risk")) if not (keep_as_is or _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb)) else False,
                 "risk_tier": risk_tier,
                 "must_fix": must_fix,
                 "review_tier": review_tier,
@@ -1004,17 +1497,20 @@ def build_clause_level_result(
 
     existing_ids = {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}
     if prof.profile == "dealer_consignment":
-        must_articles = {2, 3, 8, 9, 10, 11, 14, 17, 21, 23, 27}
+        # 제1·2·3조(목적/기본원칙/용어정의) 제외 — 하드블록 선언적 조항
+        must_articles = {8, 9, 10, 11, 14, 17, 21, 23, 27}
         for c in clauses:
             cid = str(c.clause_id or "")
             if not cid or cid in existing_ids:
                 continue
             a = _article_int(c.article_number) or _article_int(cid) or _article_int(c.display_path) or _article_int(c.title)
+            # 하드블록 조항은 dealer screening에서도 제외
+            if _is_hard_block_clause(article_int=a, title=str(c.title or "")):
+                continue
             hay_key = (str(c.display_path or "") + " " + str(c.title or "")).strip()
             is_key_by_title = any(
                 k in hay_key
                 for k in (
-                    "기본원칙",
                     "공정거래",
                     "동반성장",
                     "불공정",
@@ -1101,6 +1597,10 @@ def build_clause_level_result(
         scored = sorted(scored, key=lambda x: (-int(x[0]), str(x[1].display_path or ""), str(x[1].clause_id or "")))
         max_extra = min(10, max(4, len(clauses) // 18))
         for _, c in scored[:max_extra]:
+            # 하드블록 조항(제1·2·3조 등 선언적)은 screening에서도 제외
+            _a_screen = _article_int(c.article_number) or _article_int(str(c.clause_id or "")) or _article_int(c.display_path) or _article_int(c.title)
+            if _is_hard_block_clause(article_int=_a_screen, title=str(c.title or "")):
+                continue
             ct = classify_clause_topic(title=str(c.title or ""), text=str(c.text or ""))
             focus_match_codes = [code for code, ts in focus_topics_by_code.items() if ct in ts]
             article_number = c.article_number
@@ -1155,6 +1655,18 @@ def build_clause_level_result(
                 }
             )
 
+    # ── Phase 3 helper: 재판매가격 유지행위(RPM) 패턴 감지 ──────────────────
+    _RPM_PATTERNS = re.compile(
+        r"(판매가격|가격)\s*.{0,20}?\s*(승인|사전\s*승인|승인을\s*받|사전\s*동의|통보|결정권|통제|지정|강제)",
+        re.IGNORECASE,
+    )
+
+    def _has_price_approval_risk(text: str) -> bool:
+        return bool(_RPM_PATTERNS.search(text or ""))
+
+    # ── payment_settlement 내용 가드: 실제 정산/공제/상계 문구가 있을 때만 주입 ──
+    _SETTLEMENT_GUARD = re.compile(r"(공제|상계|차감|정산|감액|환입|환수)")
+
     if prof.profile == "dealer_consignment":
         # 조(article) 단위로 첫 번째 항에만 rewrite를 생성한다.
         # 같은 조의 나머지 항은 dedup에서 처리하므로 여기서 중복 생성하지 않는다.
@@ -1174,7 +1686,46 @@ def build_clause_level_result(
             ct0 = str(cr.get("clause_topic") or "").strip()
             # 조 번호 추출 (같은 조의 두 번째 항부터는 건너뜀)
             _an = str(cr.get("article_number") or "").strip()
+            # ── Phase 3: 가격 구속(RPM) 우선 탐지 — 조 번호보다 내용 우선 ──────
+            if _has_price_approval_risk(ot):
+                _key = f"rpm_{_an}"
+                if _key in _seen_articles_for_dealer:
+                    continue
+                _seen_articles_for_dealer.add(_key)
+                cr["suggested_rewrite"] = re.sub(
+                    r"(판매가격|가격)\s*.{0,30}?\s*(승인|사전\s*승인|승인을\s*받|사전\s*동의|통제|지정|강제)[^。.]*",
+                    lambda m: m.group(0).replace(
+                        m.group(0),
+                        m.group(1) + "은(는) 을이 시장 상황을 반영하여 자율적으로 결정하되, "
+                        "갑은 참고용 가이드라인(권장가)을 제시할 수 있다. "
+                        "갑은 을의 판매가격을 지정·승인·강제하거나 특정 가격 준수를 조건으로 불이익 조치를 취하여서는 아니 된다.",
+                    ),
+                    ot,
+                    count=1,
+                )
+                cr["suggested_direction"] = [
+                    "판매가격 결정권을 을(대리점)에게 귀속",
+                    "'승인' → '권장가 가이드라인(참고용)'으로 수정",
+                    "가격 강제·불이익 조치 명시적 금지",
+                ]
+                cr["rewrite_reason"] = (
+                    "판매가격 사전 승인 문구는 공정거래법상 재판매가격 유지행위(법 제46조)에 해당하여 "
+                    "공정위 과징금·시정명령 대상이 될 수 있다. "
+                    "'승인' 구조를 '권장가 가이드라인 제시'로 전환하여 규제 리스크를 제거한다."
+                )
+                cr["why_this_is_core_issue"] = (
+                    "재판매가격 유지행위는 공정거래법 위반으로 공정위 과징금(관련 매출액 최대 10%) 대상이며, "
+                    "대리점법상 경영간섭(제18조)과도 중첩된다."
+                )
+                cr["risk_tier"] = "HIGH"
+                cr["must_fix"] = True
+                cr["review_tier"] = "MUST"
+                cr["approval_required"] = True
+                continue
             if ct0 == "payment_settlement":
+                # 내용 가드: 실제 공제/상계/정산 문구가 없으면 주입 금지 (대금수금 조항 오염 방지)
+                if not _SETTLEMENT_GUARD.search(ot):
+                    continue
                 _key = f"payment_{_an}"
                 if _key in _seen_articles_for_dealer:
                     continue
@@ -1300,15 +1851,28 @@ def build_clause_level_result(
                 cr["must_fix"] = False
                 cr["review_tier"] = "SUGGEST"
 
+    # 하드블록 조항(제1·2·3조 등)을 clause_results에서 완전히 제거
+    clause_results = [
+        cr for cr in clause_results
+        if not _is_hard_block_clause(
+            article_int=_article_int_from_cr(cr),
+            title=str(cr.get("clause_title") or ""),
+        )
+    ]
+
+    def _is_high_risk(x: dict) -> bool:
+        tier = str(x.get("risk_tier") or "").upper()
+        return tier == "HIGH" or bool(x.get("approval_required")) or bool(x.get("high_risk"))
+
     if prof.profile == "dealer_consignment":
         clause_results = sorted(
             clause_results,
             key=lambda x: (
+                0 if _is_high_risk(x) else 1,
+                0 if bool(x.get("must_fix")) else 1,
                 0 if bool(x.get("user_focus_hit")) else 1,
                 _dealer_issue_rank(x if isinstance(x, dict) else {}),
-                0 if bool(x.get("must_fix")) else 1,
-                0 if x.get("approval_required") else 1,
-                0 if str(x.get("risk_tier") or "").upper() == "HIGH" else (1 if str(x.get("risk_tier") or "").upper() == "MEDIUM" else 2),
+                0 if str(x.get("risk_tier") or "").upper() == "MEDIUM" else 1,
                 0 if bool(x.get("factual_hit")) else 1,
                 0 if bool(x.get("question_context_hit")) else 1,
                 str(x.get("clause_id") or ""),
@@ -1318,9 +1882,10 @@ def build_clause_level_result(
         clause_results = sorted(
             clause_results,
             key=lambda x: (
+                0 if _is_high_risk(x) else 1,
+                0 if bool(x.get("must_fix")) else 1,
                 0 if bool(x.get("user_focus_hit")) else 1,
-                0 if x.get("approval_required") else 1,
-                0 if str(x.get("risk_tier") or "").upper() == "HIGH" else (1 if str(x.get("risk_tier") or "").upper() == "MEDIUM" else 2),
+                0 if str(x.get("risk_tier") or "").upper() == "MEDIUM" else 1,
                 0 if bool(x.get("factual_hit")) else 1,
                 0 if bool(x.get("question_context_hit")) else 1,
                 str(x.get("clause_id") or ""),
@@ -1709,7 +2274,15 @@ def build_clause_level_result(
         if isinstance(cr, dict):
             cr.pop("_dedup_norm", None)
 
+    # ── [Expert Advisory Review Logic] 계약 유형 분류 ─────────────────────────
+    # Advisory/Service 계약은 키워드→템플릿 루프를 격리하고 IP 전용 로직을 사용한다.
+    _contract_class = _classify_contract_type(str(contract_type), str(text or ""), filename)
+    _is_advisory_class = (_contract_class == "advisory")
+
+    # 키워드→템플릿 이어붙이기 루프: Advisory 계약에서는 건너뛴다.
     for cr in clause_results:
+        if _is_advisory_class:
+            continue
         if not isinstance(cr, dict):
             continue
         if bool(cr.get("keep_as_is")) or bool(cr.get("dedup_suppressed")):
@@ -1728,14 +2301,13 @@ def build_clause_level_result(
         a0s = str(ch0.article_number or "").strip() if isinstance(ch0, object) else ""
         a0i = int(a0s) if a0s.isdigit() else None
         title0 = str(cr.get("clause_title") or "")
-        if a0i in (1, 3) or ("목적" in title0) or ("정의" in title0):
+        if _is_hard_block_clause(article_int=a0i, title=title0, clause_topic=ct0):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
             cr["review_tier"] = "NOTE"
             cr["high_risk"] = False
             cr["approval_required"] = False
-            if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
-                cr["rewrite_reason"] = "목적/정의 조항은 조항 본연의 의미 확인에 그치고, 실무적 의무를 추가하는 수정안은 생성하지 않음."
+            cr["rewrite_reason"] = "원문 유지(하드 블록: 메타/분쟁 조항)."
             continue
         ct0 = str(cr.get("clause_topic") or "").strip()
         if ct0 == "payment_settlement":
@@ -1890,6 +2462,7 @@ def build_clause_level_result(
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
             cr["review_tier"] = "NOTE"
+    # ── Advisory 계약: 키워드 템플릿 루프 종료 (격리 블록 끝) ─────────────────
 
     # -----------------------------------------------------------------------
     # [반복 코멘트 생성 방지] 2차 dedup: AI 처리 후 재적용
@@ -1897,6 +2470,28 @@ def build_clause_level_result(
     # → 이미 suppressed된 항목은 멱등성 보장으로 재처리하지 않음
     # -----------------------------------------------------------------------
     _apply_article_dedup_and_consolidation(clause_results)
+
+    # ── [Advanced Review Logic + Expert Advisory + Zero-Hallucination] Filters ─
+    # requirement.md 참조: [Advanced Review Logic] / [Expert Advisory Review Logic]
+    #                      / [Zero-Hallucination Guardrail]
+    _is_rental = _is_rental_contract(str(contract_type), str(text or ""))
+    _is_domestic = _is_domestic_only(str(text or ""), answers)
+    # 1순위: Zero-Hallucination Guardrail (제1·2·3조 보호 + Advisory 금지키워드)
+    _apply_zero_hallucination_guardrail(clause_results, str(contract_type), str(text or ""))
+    # 2순위: Advisory IP & Copyright (자문/용역 → IP 귀속·보증 CRITICAL 점검)
+    _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity))
+    # 3순위: 기존 필터 체인
+    _apply_rental_filter(clause_results, _is_rental)
+    _apply_domestic_filter(clause_results, _is_domestic)
+    _apply_clause_integrity_filter(clause_results)
+    _apply_sidiz_position_strategy(
+        clause_results,
+        str(entity),
+        party.to_dict() if party is not None else None,
+        str(text or ""),
+    )
+    _apply_global_sentence_dedup(clause_results)
+    # ─────────────────────────────────────────────────────────────────────────
 
     for cr in clause_results:
         if not isinstance(cr, dict):

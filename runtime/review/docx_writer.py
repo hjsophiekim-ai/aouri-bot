@@ -276,6 +276,13 @@ def _tbl(parent: ET.Element, *, col_widths: list[int]) -> ET.Element:
     tbl_w = ET.SubElement(tbl_pr, _w("tblW"))
     tbl_w.set(_w("w"), "0")
     tbl_w.set(_w("type"), "auto")
+    tbl_borders = ET.SubElement(tbl_pr, _w("tblBorders"))
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = ET.SubElement(tbl_borders, _w(side))
+        el.set(_w("val"), "single")
+        el.set(_w("sz"), "4")
+        el.set(_w("space"), "0")
+        el.set(_w("color"), "000000")
     grid = ET.SubElement(tbl, _w("tblGrid"))
     for w in col_widths:
         gc = ET.SubElement(grid, _w("gridCol"))
@@ -375,8 +382,10 @@ def build_revision_docx(
         tier = tier_by_id.get(cid) or "LOW"
         if bool(cr.get("keep_as_is")):
             continue
-        # dedup_suppressed 항목은 suggested_rewrite가 None이어도 정상
+        # dedup_suppressed / guardrail_block 항목은 suggested_rewrite가 None이어도 정상
         if bool(cr.get("dedup_suppressed")):
+            continue
+        if bool(cr.get("guardrail_block")):
             continue
         if tier in ("HIGH", "MEDIUM"):
             sr = cr.get("suggested_rewrite")
