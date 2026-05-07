@@ -988,7 +988,7 @@ def _apply_global_sentence_dedup(clause_results: list[dict[str, Any]]) -> None:
 # =============================================================================
 
 _ADVISORY_CONTRACT_KW2 = re.compile(
-    r"자문|용역|Advisory|Service|교수|강의|집필|연구용역|컨설팅|Consulting|위임|Engagement"
+    r"자문|용역|개발|제작|Advisory|Service|교수|강의|집필|연구용역|컨설팅|Consulting|위임|Engagement"
     r"|디자인\s*용역|컨텐츠\s*제작|개발\s*용역",
     re.IGNORECASE,
 )
@@ -1022,6 +1022,25 @@ _IP_WARRANTY_REWRITE = (
     "② 제3자의 권리 침해로 인해 위탁자에게 분쟁·손해·비용이 발생한 경우, "
     "수탁자는 자신의 비용과 책임으로 위탁자를 면책하고 모든 손해를 배상한다.\n"
     "③ 수탁자는 외부 소재(오픈소스, 무료 이미지 등) 활용 시 라이선스 조건을 위탁자에게 사전 고지한다.\n"
+)
+
+# 배상 한도 탐지: 용역대금 총액·계약금액 등으로 제한하는 패턴
+_LIABILITY_CAP_KW = re.compile(
+    r"(용역|대가|계약금|자문료|보수).{0,25}(총액|한도|이내|초과하지|범위로|제한)",
+    re.IGNORECASE,
+)
+# 배상 한도 예외 단서가 이미 있는지 확인
+_LIABILITY_EXCEPTION_KW = re.compile(
+    r"지재권\s*침해|지식재산권\s*침해|비밀유지.{0,10}위반|고의.{0,5}중과실",
+    re.IGNORECASE,
+)
+_LIABILITY_CAP_EXCEPTION_REWRITE = (
+    "\n\n[수정 제안 — 배상 한도 예외 단서]\n"
+    "단, 아래 각 호의 경우에는 위 배상 한도의 제한을 받지 아니하며, "
+    "수탁자는 실제 발생한 손해 전액을 배상한다.\n"
+    "① 지식재산권(저작권·특허권·상표권 등) 침해로 인한 손해\n"
+    "② 비밀유지의무 위반으로 인한 손해\n"
+    "③ 수탁자의 고의 또는 중과실로 인한 손해\n"
 )
 
 
@@ -1134,6 +1153,43 @@ def _apply_advisory_ip_review(
             "[CRITICAL] 지식재산권 귀속 조항 부재. 저작권법 제9조에 따라 도급 계약 수탁자 자동 귀속 위험."
         )
 
+    # ④ 배상 한도 예외 단서 — Exclusive IP Review Engine Step 2.③
+    # 용역대금 총액 등으로 배상을 제한하는 조항에 IP/비밀유지 위반 예외 단서를 추가한다.
+    _LIABILITY_TITLE_HINTS = ("손해배상", "배상", "책임제한", "책임의 한계", "손해 배상")
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        a_i = _article_int_from_cr(cr)
+        if a_i is not None and a_i in (1, 2, 3):
+            continue
+        title = str(cr.get("clause_title") or "")
+        ot = str(cr.get("original_text") or "")
+        if not any(h in title for h in _LIABILITY_TITLE_HINTS):
+            continue
+        # 배상 총액 제한 패턴 탐지
+        if not _LIABILITY_CAP_KW.search(ot):
+            continue
+        # 이미 예외 단서가 있으면 스킵
+        if _LIABILITY_EXCEPTION_KW.search(ot):
+            continue
+        sr = cr.get("suggested_rewrite") or ""
+        base = (sr or ot).rstrip()
+        cr["suggested_rewrite"] = (base + _LIABILITY_CAP_EXCEPTION_REWRITE).strip()
+        cr["suggested_direction"] = (cr.get("suggested_direction") or []) + [
+            "배상 한도 예외: 지재권 침해·비밀유지 위반·고의중과실은 총액 한도 적용 제외",
+        ]
+        if not (isinstance(cr.get("rewrite_reason"), str) and cr.get("rewrite_reason")):
+            cr["rewrite_reason"] = (
+                "배상 범위를 용역대금 총액으로 제한 시 지재권 침해·비밀유지 위반의 경우에도 "
+                "배상이 제한되어 퍼시스의 실질적 피해 회복이 불가능해진다. "
+                "IP 침해·NDA 위반·고의중과실에 대한 예외 단서가 필수다."
+            )
+        cr["risk_tier"] = "HIGH"
+        cr["must_fix"] = True
+        cr["review_tier"] = "MUST"
+
 
 # =============================================================================
 # [Zero-Hallucination Guardrail] — requirement.md > [Zero-Hallucination Guardrail] 참조
@@ -1143,10 +1199,10 @@ _SERVICE_ADVISORY_KW = re.compile(
     r"자문|용역|Service|Advisory|컨설팅|Consulting|위임|Engagement|집필|강의|연구", re.IGNORECASE
 )
 
-# 자문/용역 계약에서 절대 삽입 금지 키워드
+# 자문/용역/개발/제작 계약에서 절대 삽입 금지 키워드 (Exclusive IP Review Engine)
 _FORBIDDEN_ADVISORY_KW = re.compile(
-    r"렌탈|소유권은\s*퍼시스에|물류시설|구독\s*서비스|소유권\s*존속|채권추심"
-    r"|위약금\s*10\s*%|위약금\s*10\s*퍼센트|임대차\s*보증금|보증금\s*반환",
+    r"렌탈|소유권은\s*퍼시스에|물류시설|물류\s*센터|물류\s*비용|구독\s*서비스|소유권\s*존속|채권추심"
+    r"|부동산|위약금\s*10\s*%|위약금\s*10\s*퍼센트|임대차\s*보증금|보증금\s*반환",
     re.IGNORECASE,
 )
 
@@ -1214,7 +1270,7 @@ def _apply_zero_hallucination_guardrail(
                 cr["guardrail_block"] = {"filter": "advisory_forbidden_keywords"}
             continue
 
-        # ── 규칙 3: 자문/용역 — 무관 법령 인용 제거 ────────────────────────
+        # ── 규칙 3: 자문/용역 — 무관 법령 삭제 → 허용 법령으로 교체 ──────────
         if _FORBIDDEN_LAW_KW.search(combined):
             # related_laws 내 무관 법령 항목 삭제
             law = cr.get("related_laws")
@@ -1227,7 +1283,7 @@ def _apply_zero_hallucination_guardrail(
                             if isinstance(it, dict)
                             and not _FORBIDDEN_LAW_KW.search(str(it.get("title") or ""))
                         ]
-            # suggested_rewrite에서 무관 법령 문장 제거
+            # suggested_rewrite에서 무관 법령 문장 제거 후 허용 법령 추가
             if _FORBIDDEN_LAW_KW.search(sr):
                 cleaned = re.sub(
                     r"[^\n]*(?:물류시설법|부동산\s*세법|화물자동차\s*운수사업법"
@@ -1236,6 +1292,13 @@ def _apply_zero_hallucination_guardrail(
                     "",
                     sr,
                 ).strip()
+                # 허용 법령 미포함 시 보충 (Exclusive IP Review Engine)
+                allowed_laws = "저작권법, 부정경쟁방지법, 특허법"
+                if not any(k in (cleaned or "") for k in ("저작권법", "부정경쟁방지법", "특허법")):
+                    if cleaned:
+                        cleaned = cleaned + f"\n[관련 법령] {allowed_laws}"
+                    else:
+                        cleaned = f"[관련 법령] {allowed_laws}"
                 cr["suggested_rewrite"] = cleaned if cleaned else None
                 if not cr.get("guardrail_block"):
                     cr["guardrail_block"] = {"filter": "advisory_forbidden_laws"}
