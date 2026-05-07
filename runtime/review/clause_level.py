@@ -816,7 +816,12 @@ def _apply_rental_filter(clause_results: list[dict[str, Any]], is_rental: bool) 
         if _RENTAL_COMMENT_KW.search(combined):
             cr["suggested_rewrite"] = None
             cr["changed_segments"] = []
-            cr["rewrite_reason"] = "[Rental Filter] 비렌탈 계약 — 렌탈 관련 코멘트 차단."
+            cr["rewrite_reason"] = None
+            cr["risk_tier"] = "LOW"
+            cr["approval_required"] = False
+            cr["high_risk"] = False
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
             if not cr.get("guardrail_block"):
                 cr["guardrail_block"] = {"filter": "rental_filter"}
 
@@ -841,7 +846,9 @@ def _apply_domestic_filter(clause_results: list[dict[str, Any]], is_domestic: bo
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
             cr["review_tier"] = "NOTE"
-            cr["rewrite_reason"] = "[Domestic Filter] 국내 계약 — 관할조항 LOW 등급 유지, 다국가 리스크 코멘트 차단."
+            cr["approval_required"] = False
+            cr["high_risk"] = False
+            cr["rewrite_reason"] = None
             if not cr.get("guardrail_block"):
                 cr["guardrail_block"] = {"filter": "domestic_filter"}
 
@@ -869,9 +876,12 @@ def _apply_clause_integrity_filter(clause_results: list[dict[str, Any]]) -> None
                 continue
             cr["suggested_rewrite"] = None
             cr["changed_segments"] = []
-            old = str(cr.get("rewrite_reason") or "")
-            suffix = f"[Integrity Filter] {title} 조항에 비관련 문구({', '.join(blocked)}) 삽입 차단."
-            cr["rewrite_reason"] = (old.strip(" /") + " / " + suffix).strip(" /") if old.strip() else suffix
+            cr["rewrite_reason"] = None
+            cr["risk_tier"] = "LOW"
+            cr["approval_required"] = False
+            cr["high_risk"] = False
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
             if not cr.get("guardrail_block"):
                 cr["guardrail_block"] = {"filter": "clause_integrity", "blocked": blocked}
 
@@ -1246,7 +1256,7 @@ def _apply_zero_hallucination_guardrail(
             cr["review_tier"] = "NOTE"
             cr["high_risk"] = False
             cr["approval_required"] = False
-            cr["rewrite_reason"] = "[Guardrail] 제1·2·3조 수정 금지 — 목적/원칙/정의 조항."
+            cr["rewrite_reason"] = None
             if not cr.get("guardrail_block"):
                 cr["guardrail_block"] = {"filter": "article_1_2_3_protection"}
             continue
@@ -1262,10 +1272,12 @@ def _apply_zero_hallucination_guardrail(
         if _FORBIDDEN_ADVISORY_KW.search(combined):
             cr["suggested_rewrite"] = None
             cr["changed_segments"] = []
-            cr["rewrite_reason"] = (
-                "[Zero-Hallucination] 자문/용역 계약 — "
-                "렌탈·소유권·물류시설·채권추심 등 무관 문구 Hard-Block."
-            )
+            cr["rewrite_reason"] = None
+            cr["risk_tier"] = "LOW"
+            cr["approval_required"] = False
+            cr["high_risk"] = False
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
             if not cr.get("guardrail_block"):
                 cr["guardrail_block"] = {"filter": "advisory_forbidden_keywords"}
             continue

@@ -1475,8 +1475,10 @@ def create_handler(service: RuleQueryService):
                         continue
                     if bool(cr.get("keep_as_is")):
                         continue
-                    # dedup_suppressed 항목은 suggested_rewrite가 None이어도 정상
+                    # dedup_suppressed / guardrail_block 항목은 suggested_rewrite가 None이어도 정상
                     if bool(cr.get("dedup_suppressed")):
+                        continue
+                    if bool(cr.get("guardrail_block")):
                         continue
                     tier = _risk_tier_from_clause_result(cr)
                     if tier not in ("HIGH", "MEDIUM"):
