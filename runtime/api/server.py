@@ -764,22 +764,26 @@ def create_handler(service: RuleQueryService):
                 return
 
             _deep_t0 = time.perf_counter()
-            bundle = build_clause_level_result(
-                service=service,
-                entity=str(entity),
-                contract_type=str(contract_type),
-                text=str(text),
-                filename=str(filename) if isinstance(filename, str) else None,
-                answers=answers,
-                review_focus=(review_focus if isinstance(review_focus, str) else None),
-                law_service=law_service,
-                ai_provider=ai_provider,
-                ai_model=cfg.model if ai_provider else None,
-                ai_timeout_sec=min(cfg.timeout_sec, 45.0) if ai_provider else None,
-                ai_max_tokens=min(max(cfg.max_tokens, 1200), 2000) if ai_provider else None,
-                ai_temperature=cfg.temperature if ai_provider else None,
-                max_clause_law_items=1,
-            )
+            try:
+                bundle = build_clause_level_result(
+                    service=service,
+                    entity=str(entity),
+                    contract_type=str(contract_type),
+                    text=str(text),
+                    filename=str(filename) if isinstance(filename, str) else None,
+                    answers=answers,
+                    review_focus=(review_focus if isinstance(review_focus, str) else None),
+                    law_service=law_service,
+                    ai_provider=ai_provider,
+                    ai_model=cfg.model if ai_provider else None,
+                    ai_timeout_sec=min(cfg.timeout_sec, 45.0) if ai_provider else None,
+                    ai_max_tokens=min(max(cfg.max_tokens, 1200), 2000) if ai_provider else None,
+                    ai_temperature=cfg.temperature if ai_provider else None,
+                    max_clause_law_items=1,
+                )
+            except Exception as exc:
+                _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
+                return
             result = dict(bundle.review)
             result["mode"] = "deep"
             result["clause_results"] = bundle.clause_results
@@ -1375,7 +1379,14 @@ def create_handler(service: RuleQueryService):
                         }
                         for c in (extract_clauses(text)[0] or [])
                     ]
-                clause_results_for_docx = review_result.get("clause_results") if isinstance(review_result, dict) else []
+                clause_results_for_docx = [
+                    cr for cr in (review_result.get("clause_results") or [])
+                    if isinstance(cr, dict) and not cr.get("is_checklist_item")
+                ]
+                checklist_items_for_docx = [
+                    cr for cr in (review_result.get("clause_results") or [])
+                    if isinstance(cr, dict) and cr.get("is_checklist_item")
+                ]
                 orig_ids = {str(c.get("clause_id") or "") for c in original_clauses if isinstance(c, dict)}
                 cr_ids = {str(c.get("clause_id") or "") for c in clause_results_for_docx if isinstance(c, dict)}
                 missing_in_original = sorted([cid for cid in cr_ids if cid and cid not in orig_ids])
@@ -1543,6 +1554,7 @@ def create_handler(service: RuleQueryService):
                         questions=[question_to_dict(q) for q in qs],
                         answers=(answers if isinstance(answers, dict) else None),
                         final_review_context=(clause_meta.get("final_review_context") if isinstance(clause_meta, dict) else None),
+                        checklist_items=checklist_items_for_docx if checklist_items_for_docx else None,
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
@@ -1655,17 +1667,22 @@ def create_handler(service: RuleQueryService):
             contract_type = body.get("contract_type", "all")
             text = body.get("text", "")
             filename = body.get("filename")
+            review_focus = body.get("review_focus")
 
-            review = service.analyze(
-                ReviewInput(
-                    entity=entity,
-                    contract_type=contract_type,
-                    text=text,
-                    filename=filename,
-                    answers=None,
-                    review_focus=(review_focus if isinstance(review_focus, str) else None),
+            try:
+                review = service.analyze(
+                    ReviewInput(
+                        entity=entity,
+                        contract_type=contract_type,
+                        text=text,
+                        filename=filename,
+                        answers=None,
+                        review_focus=(review_focus if isinstance(review_focus, str) else None),
+                    )
                 )
-            )
+            except Exception as exc:
+                _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
+                return
             law_search = None
             try:
                 law_cfg = load_law_api_config()
@@ -1688,98 +1705,105 @@ def create_handler(service: RuleQueryService):
             law_topics = None
             if isinstance(law_search, dict) and isinstance(law_search.get("queries"), list):
                 law_topics = [str(x) for x in law_search.get("queries") if isinstance(x, str)]
-            clause_bundle = build_clause_level_result(
-                service=service,
-                entity=str(entity),
-                contract_type=str(contract_type),
-                text=str(text),
-                filename=str(filename) if isinstance(filename, str) else None,
-                answers=None,
-                review_focus=(review_focus if isinstance(review_focus, str) else None),
-                law_service=None,
-                ai_provider=None,
-                ai_model=None,
-                ai_timeout_sec=None,
-                ai_max_tokens=None,
-                ai_temperature=None,
-                max_clause_law_items=0,
-            )
-            questions = generate_questions(
-                str(entity),
-                str(contract_type),
-                detected_rule_ids=detected_rule_ids,
-                law_topics=law_topics,
-                contract_text=str(text),
-                clause_results=clause_bundle.clause_results,
-                max_questions=5,
-                review_focus=(review_focus if isinstance(review_focus, str) else None),
-            )
+            try:
+                clause_bundle = build_clause_level_result(
+                    service=service,
+                    entity=str(entity),
+                    contract_type=str(contract_type),
+                    text=str(text),
+                    filename=str(filename) if isinstance(filename, str) else None,
+                    answers=None,
+                    review_focus=(review_focus if isinstance(review_focus, str) else None),
+                    law_service=None,
+                    ai_provider=None,
+                    ai_model=None,
+                    ai_timeout_sec=None,
+                    ai_max_tokens=None,
+                    ai_temperature=None,
+                    max_clause_law_items=0,
+                )
+            except Exception as exc:
+                _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
+                return
+            try:
+                questions = generate_questions(
+                    str(entity),
+                    str(contract_type),
+                    detected_rule_ids=detected_rule_ids,
+                    law_topics=law_topics,
+                    contract_text=str(text),
+                    clause_results=clause_bundle.clause_results,
+                    max_questions=5,
+                    review_focus=(review_focus if isinstance(review_focus, str) else None),
+                )
+            except Exception as exc:
+                _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
+                return
             q_items = [question_to_dict(q) for q in questions]
             ai_meta: dict[str, Any] | None = None
             cfg = load_ai_config()
             if cfg.provider == "openai" and cfg.api_key and q_items:
-                provider = create_ai_provider(cfg)
-                app_dev_hint = any(
-                    k in str(contract_type or "")
-                    for k in (
-                        "앱개발",
-                        "소프트웨어개발",
-                        "SI",
-                        "유지보수",
-                        "SaaS",
-                        "API",
-                    )
-                ) or any(k in str(text or "") for k in ("앱 개발", "소프트웨어 개발", "시스템 개발", "SLA", "소스코드", "산출물"))
-                if app_dev_hint and clause_bundle.clauses:
-                    headings = [str(c.title or "") for c in clause_bundle.clauses if str(c.title or "").strip()][:18]
-                else:
-                    headings = None
-                pri_meta = None
-                if app_dev_hint:
-                    q_items, pri_meta = prioritize_questions(
+                try:
+                    provider = create_ai_provider(cfg)
+                    app_dev_hint = any(
+                        k in str(contract_type or "")
+                        for k in ("앱개발", "소프트웨어개발", "SI", "유지보수", "SaaS", "API")
+                    ) or any(k in str(text or "") for k in ("앱 개발", "소프트웨어 개발", "시스템 개발", "SLA", "소스코드", "산출물"))
+                    if app_dev_hint and clause_bundle.clauses:
+                        headings = [str(c.title or "") for c in clause_bundle.clauses if str(c.title or "").strip()][:18]
+                    else:
+                        headings = None
+                    pri_meta = None
+                    if app_dev_hint:
+                        q_items, pri_meta = prioritize_questions(
+                            provider=provider,
+                            model=cfg.model,
+                            questions=q_items,
+                            entity=str(entity),
+                            contract_type=str(contract_type),
+                            contract_text=str(text),
+                            clause_headings=headings,
+                            timeout_sec=cfg.timeout_sec,
+                            max_tokens=min(cfg.max_tokens, 600),
+                            temperature=cfg.temperature,
+                            max_questions=5,
+                        )
+                    q_items, pol_meta = polish_questions(
                         provider=provider,
                         model=cfg.model,
                         questions=q_items,
                         entity=str(entity),
                         contract_type=str(contract_type),
-                        contract_text=str(text),
-                        clause_headings=headings,
                         timeout_sec=cfg.timeout_sec,
-                        max_tokens=min(cfg.max_tokens, 600),
+                        max_tokens=min(cfg.max_tokens, 700),
                         temperature=cfg.temperature,
-                            max_questions=5,
                     )
-                q_items, pol_meta = polish_questions(
-                    provider=provider,
-                    model=cfg.model,
-                    questions=q_items,
-                    entity=str(entity),
-                    contract_type=str(contract_type),
-                    timeout_sec=cfg.timeout_sec,
-                    max_tokens=min(cfg.max_tokens, 700),
-                    temperature=cfg.temperature,
-                )
-                ai_meta = {"prioritize": pri_meta, "polish": pol_meta}
+                    ai_meta = {"prioritize": pri_meta, "polish": pol_meta}
+                except Exception:
+                    pass
             if isinstance(q_items, list):
                 q_items = q_items[:5]
-            session_doc = create_text_session(
-                entity=str(entity),
-                contract_type=str(contract_type),
-                filename=str(filename) if isinstance(filename, str) else None,
-                text=str(text or ""),
-                review_focus=(review_focus if isinstance(review_focus, str) else None),
-                extraction={"success": True, "method": "api_text"},
-                classification={"entity": str(entity), "contract_type": str(contract_type)},
-                detected_rule_ids=[str(x) for x in detected_rule_ids if isinstance(x, str)],
-                questions=list(q_items) if isinstance(q_items, list) else [],
-                source="questions_generate",
-            )
+            try:
+                session_doc = create_text_session(
+                    entity=str(entity),
+                    contract_type=str(contract_type),
+                    filename=str(filename) if isinstance(filename, str) else None,
+                    text=str(text or ""),
+                    review_focus=(review_focus if isinstance(review_focus, str) else None),
+                    extraction={"success": True, "method": "api_text"},
+                    classification={"entity": str(entity), "contract_type": str(contract_type)},
+                    detected_rule_ids=[str(x) for x in detected_rule_ids if isinstance(x, str)],
+                    questions=list(q_items) if isinstance(q_items, list) else [],
+                    source="questions_generate",
+                )
+            except Exception:
+                session_doc = {}
             _json_response(
                 self,
                 HTTPStatus.OK,
                 {
                     "input": {"entity": entity, "contract_type": contract_type, "filename": filename, "review_focus": (review_focus if isinstance(review_focus, str) else None)},
-                    "question_session_id": session_doc.get("session_id"),
+                    "question_session_id": session_doc.get("session_id") if isinstance(session_doc, dict) else None,
                     "detected_rule_ids": detected_rule_ids,
                     "count": len(q_items) if isinstance(q_items, list) else 0,
                     "questions": q_items,
@@ -2212,7 +2236,12 @@ def create_handler(service: RuleQueryService):
                 _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
         def log_message(self, format: str, *args) -> None:  # noqa: A003
-            return
+            try:
+                import datetime as _dt
+                with open("C:/Users/FURSYS/Desktop/aouribot/access.log", "a", encoding="utf-8") as _f:
+                    _f.write(f"{_dt.datetime.now().strftime('%H:%M:%S')} {format % args}\n")
+            except Exception:
+                pass
 
     return RulesAPIHandler
 

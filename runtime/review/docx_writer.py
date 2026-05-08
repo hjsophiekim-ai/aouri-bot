@@ -317,6 +317,7 @@ def build_revision_docx(
     questions: list[dict[str, Any]] | None = None,
     answers: dict[str, Any] | None = None,
     final_review_context: dict[str, Any] | None = None,
+    checklist_items: list[dict[str, Any]] | None = None,
 ) -> bytes:
     contract_name = filename or "미상"
     counterparty = "미상"
@@ -392,7 +393,16 @@ def build_revision_docx(
             if not (isinstance(sr, str) and sr.strip()):
                 raise ValueError(f"missing suggested_rewrite for {cid} tier={tier}")
 
-    redline_ids = [cid for cid in show_ids if bool((cr_by_id.get(cid) or {}).get("has_rewrite_change")) and tier_by_id.get(cid) == "HIGH"]
+    def _is_advisory_append_format(cr: dict[str, Any]) -> bool:
+        sr = str(cr.get("suggested_rewrite") or "")
+        return "[추가 권고]" in sr or "[수정 제안" in sr
+
+    redline_ids = [
+        cid for cid in show_ids
+        if bool((cr_by_id.get(cid) or {}).get("has_rewrite_change"))
+        and tier_by_id.get(cid) == "HIGH"
+        and not _is_advisory_append_format(cr_by_id.get(cid) or {})
+    ]
     guide_ids = [cid for cid in show_ids if cid not in set(redline_ids)]
     medium_ids = [cid for cid in guide_ids if tier_by_id.get(cid) == "MEDIUM"]
     low_ids = [cid for cid in guide_ids if tier_by_id.get(cid) == "LOW"]
@@ -619,7 +629,7 @@ def build_revision_docx(
             _t(_r(pl), f"- {t}")
     else:
         pnone2 = _p(body)
-        _t(_r(pnone2), "자동으로 확정적인 수정 권고 조항은 탐지되지 않았습니다. 아래 ‘추가 확인 필요 질문’을 기준으로 추가 검토를 진행하세요.")
+        _t(_r(pnone2), "자동으로 확정적인 수정 권고 조항은 탐지되지 않았습니다.")
     _p(body)
 
     focus_items = frc0.get("user_focus_issues") if isinstance(frc0.get("user_focus_issues"), list) else []
@@ -733,46 +743,8 @@ def build_revision_docx(
         _t(_r(pnone3), "수정 권고 조항이 없습니다.")
     _p(body)
 
-    sec_law = _p(body)
-    _t(_r(sec_law, bold=True), "5) 관련 법령")
-    law_titles: list[str] = []
-    law_titles.extend(_extract_law_titles_from_search(law_search, limit=6))
-    if not law_titles:
-        for cid in show_ids[:12]:
-            cr = cr_by_id.get(cid) or {}
-            for t in _extract_law_titles(cr, limit=2):
-                if t not in law_titles:
-                    law_titles.append(t)
-            if len(law_titles) >= 6:
-                break
-    if law_titles:
-        for t in law_titles[:6]:
-            pl = _p(body)
-            _t(_r(pl), f"- {t}")
-    else:
-        pnone4 = _p(body)
-        _t(_r(pnone4), "- (없음/조회 미설정)")
-    _p(body)
-
-    sec_q = _p(body)
-    _t(_r(sec_q, bold=True), "6) 추가 확인 필요 질문")
-    q_titles: list[str] = []
-    for q in questions or []:
-        if isinstance(q, dict) and isinstance(q.get("title"), str) and q["title"].strip():
-            q_titles.append(q["title"].strip())
-        if len(q_titles) >= 6:
-            break
-    if q_titles:
-        for t in q_titles[:6]:
-            pl = _p(body)
-            _t(_r(pl), f"- {t}")
-    else:
-        pnone5 = _p(body)
-        _t(_r(pnone5), "- (추가 질문 없음)")
-    _p(body)
-
     sec_red = _p(body)
-    _t(_r(sec_red, bold=True), "7) 본문 redline 버전 (필수수정 조항만 표시)")
+    _t(_r(sec_red, bold=True), "5) 본문 redline 버전 (필수수정 조항만 표시)")
     if not redline_ids:
         pnone = _p(body)
         _t(_r(pnone), "필수수정(redline) 조항이 없습니다.")
@@ -808,7 +780,7 @@ def build_revision_docx(
         _p(body)
 
     sec_guid = _p(body)
-    _t(_r(sec_guid, bold=True), "8) 권장/참고(guidance) (MEDIUM/LOW)")
+    _t(_r(sec_guid, bold=True), "6) 조항별 검토 의견 (guidance)")
     if not guide_ids:
         pnoneg = _p(body)
         _t(_r(pnoneg), "권장/참고 조항이 없습니다.")
@@ -867,8 +839,30 @@ def build_revision_docx(
             _t(_r(p4, color_hex="1F7AE0"), "관련 법령/기준: " + " / ".join(laws0))
         _p(body)
 
+    chk_items = [x for x in (checklist_items or []) if isinstance(x, dict)]
+    if chk_items:
+        sec_chk = _p(body)
+        _t(_r(sec_chk, bold=True), "6-1) 추가 권고 (누락 구조 탐지)")
+        for item in chk_items:
+            name = str(item.get("clause_title") or "").strip()
+            direction = str(item.get("rewrite_reason") or "").strip()
+            rec = str(item.get("recommendation_text") or "").strip()
+            risk = str(item.get("risk_tier") or "MEDIUM").upper()
+            pn = _p(body)
+            _t(_r(pn, bold=True, color_hex="b45309"), f"[{risk}] {name}")
+            if direction:
+                pd = _p(body)
+                _t(_r(pd, color_hex="b45309"), "방향: " + direction[:300])
+            if rec:
+                pr = _p(body)
+                _t(_r(pr, color_hex="b45309"), "[추가 권고]")
+                for line in rec.splitlines()[:15]:
+                    pl = _p(body)
+                    _t(_r(pl, color_hex="b45309"), (line[:260] + "…" if len(line) > 260 else line) if line.strip() else "")
+            _p(body)
+
     sec_app = _p(body)
-    _t(_r(sec_app, bold=True), "9) 조항별 구체적 수정안 부록")
+    _t(_r(sec_app, bold=True), "7) 조항별 구체적 수정안 부록")
     tbl = _tbl(body, col_widths=[1100, 1700, 2600, 2200, 1500])
 
     def add_row(cells: list[list[tuple[str, dict[str, Any]]]]) -> None:
@@ -937,7 +931,7 @@ def build_revision_docx(
         )
 
     sec_hr = _p(body)
-    _t(_r(sec_hr, bold=True), "10) High risk / Approval required 표")
+    _t(_r(sec_hr, bold=True), "8) High risk / Approval required 표")
     tbl2 = _tbl(body, col_widths=[1200, 4200, 1200])
 
     def add_row2(cells: list[tuple[str, dict[str, Any]]]) -> None:

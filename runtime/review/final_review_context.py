@@ -55,33 +55,8 @@ def build_final_review_context(
     prof = infer_contract_profile(contract_type=contract_type, text=text)
 
     expert_mode = "퍼시스" in (entity or "")
+    # [REMOVED] expert_strategy 포지션 자동 추론 비활성화 — requirement.md Section Removal Specs 참조
     expert_strategy: list[str] = []
-    if expert_mode:
-        our_role = str((party_role or {}).get("our_role") or "")
-        if our_role == "supplier" or prof.profile == "dealer_consignment":
-            expert_strategy = [
-                "대리점법상 경영간섭·가격강제 리스크를 피하면서도, 채권 회수(정산/상계/증빙) 구조를 명확히 한다.",
-                "해지/불이익 조치의 남용으로 보이지 않도록, 객관적 요건·절차(서면 최고/시정기회)를 중심으로 정교화한다.",
-            ]
-        elif our_role == "contractor":
-            expert_strategy = [
-                "퍼시스는 수급인(을) 포지션을 전제로, 도급인의 일방적 해지/공제권을 축소하고 수급인의 대금 수령/면책 범위를 확대한다.",
-                "지체상금이 일 0.3% 수준으로 과도한 경우, 일 0.1% 이하로 조정하고 공기 연장(발주자 귀책·의사결정 지연·자료 미제공·현장 인도 지연·변경지시)을 함께 확보한다.",
-                "상계/공제는 확정 채권 및 사전 서면 합의가 있는 경우로 제한하고, 정산서·증빙 제공 및 이의제기 절차를 포함한다.",
-                "해지는 원칙적으로 30일 이상의 서면 최고 및 시정기간을 부여하고, 예외적 즉시해지는 신뢰관계를 본질적으로 훼손하는 중대한 위반으로 좁게 열거한다.",
-                "안전관리 조항은 수급인 일방 책임 전가를 배제하고, 발주자 제공 자료/현장 하자 등 발주자 귀책 사유에 대한 면책·감경 및 상호 협력 구조를 명시한다.",
-            ]
-        elif our_role == "rental_provider" or any(k in (contract_type or "") for k in ("렌탈", "구독")):
-            expert_strategy = [
-                "퍼시스는 렌탈업자(자산 보유자) 포지션을 전제로, 자산 소유권을 명확히 하고 임의 처분·양도·담보 제공을 금지한다.",
-                "B2C 약관은 청약철회·중도해지 권리를 침해하지 않도록 설계하고, 중도해지 위약금은 과도하지 않게(예: 잔여 렌탈료의 10% 수준 상한) 운용한다.",
-                "연체이자·채권추심 위탁·신용정보 조회/제공은 적법한 고지·동의·위탁관리 체계가 전제되도록 문구와 절차를 일치시킨다.",
-            ]
-        else:
-            expert_strategy = [
-                "실제 손실 또는 법적 제재로 이어지는 독소조항(금전/권리/규제)만 우선 검토한다.",
-                "중복 코멘트 없이 핵심 조항에서만 수정안을 제시한다.",
-            ]
 
     is_form = None
     for k in ("Q-DL-001-form", "Q-000-form", "Q-001-counterparty-form"):

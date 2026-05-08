@@ -635,19 +635,33 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       addMsg('bot', '재시도를 위해 “처음으로”에서 다시 검토를 시작해 주세요.');
     }
 
+    function _setStartMsg(msg, isError) {
+      const el = document.getElementById('startError');
+      el.style.color = isError ? 'var(--danger)' : 'var(--primary)';
+      el.innerText = msg;
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
     async function startReview() {
-      document.getElementById('startError').innerText = '';
-      document.getElementById('btnStart').disabled = true;
+      _setStartMsg('', false);
+      const btn = document.getElementById('btnStart');
+      btn.disabled = true;
+      btn.innerText = '분석 중...';
+
       try {
+        // 1. 입력값 수집
         const entity = (document.getElementById('entity').value || '').trim();
         const contractType = (document.getElementById('contractType').value || '').trim();
         const text = (document.getElementById('text').value || '').trim();
         const reviewFocus = (document.getElementById('reviewFocus').value || '').trim();
-        const file = document.getElementById('file').files[0];
+        const file = document.getElementById('file') ? document.getElementById('file').files[0] : null;
+
         if (!file && text.length < 5) {
-          document.getElementById('startError').innerText = '계약서 파일을 첨부하거나, 계약 내용을 입력해 주세요.';
+          _setStartMsg('계약서 파일을 첨부하거나, 계약 내용을 입력해 주세요. (최소 5자 이상)', true);
           return;
         }
+
+        // 2. 상태 초기화
         ctx = { entity, contract_type: contractType, text, filename: null, session_id: null, review_focus: reviewFocus || null };
         questions = [];
         qIndex = 0;
@@ -656,16 +670,28 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         revisionResult = null;
         draftSuggest = null;
 
+        // 3. 서버 요청
         if (file) {
+          _setStartMsg('파일 업로드 중...', false);
           const fd = new FormData();
           fd.append('file', file, file.name);
           if (entity) fd.append('entity', entity);
           if (contractType) fd.append('contract_type', contractType);
           if (reviewFocus) fd.append('review_focus', reviewFocus);
-          const res = await fetch('/api/upload', { method: 'POST', body: fd });
-          const data = await res.json();
+          let res, data;
+          try {
+            res = await fetch('/api/upload', { method: 'POST', body: fd });
+            data = await res.json();
+          } catch (fetchErr) {
+            _setStartMsg('서버 연결 오류 (업로드): ' + fetchErr.message, true);
+            return;
+          }
+          if (!res.ok) {
+            _setStartMsg('업로드 오류 ' + res.status + ': ' + (data && data.error ? data.error : '알 수 없는 오류'), true);
+            return;
+          }
           if (data && data.extraction && data.extraction.success === false) {
-            document.getElementById('startError').innerText = (data.extraction.error || '텍스트 추출 실패') + ' (MVP: OCR/hwp/pdf는 backlog)';
+            _setStartMsg((data.extraction.error || '텍스트 추출 실패') + ' (OCR/hwp/pdf는 미지원)', true);
             return;
           }
           ctx.entity = (data.classification && data.classification.entity) ? data.classification.entity : (entity || 'all');
@@ -674,38 +700,62 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           ctx.filename = data.filename || file.name;
           questions = data.questions || [];
           ctx.extraction_preview = (data.extraction && data.extraction.preview) ? data.extraction.preview : null;
-          if (!text) {
-            ctx.text = '(업로드 기반: 텍스트는 서버에서 추출되어 질문/검토에 사용됩니다)';
-          }
+          if (!text) ctx.text = '(업로드 기반)';
         } else {
-          const payload = { entity: entity || 'all', contract_type: contractType || 'all', filename: 'demo.txt', text: text, review_focus: reviewFocus || null };
-          const res = await fetch('/api/questions/generate', { method:'POST', headers: {'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
-          const data = await res.json();
-          if (data.error) {
-            document.getElementById('startError').innerText = data.error;
+          _setStartMsg('계약서 분석 중... (10~30초 소요)', false);
+          const payload = {
+            entity: entity || 'all',
+            contract_type: contractType || 'all',
+            filename: 'demo.txt',
+            text: text,
+            review_focus: reviewFocus || null
+          };
+          let res, data;
+          try {
+            res = await fetch('/api/questions/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json; charset=utf-8' },
+              body: JSON.stringify(payload)
+            });
+            data = await res.json();
+          } catch (fetchErr) {
+            _setStartMsg('서버 연결 오류: ' + fetchErr.message, true);
             return;
           }
-          questions = data.questions || [];
-          ctx.session_id = data.question_session_id || null;
+          if (!res.ok) {
+            _setStartMsg('서버 오류 ' + res.status + ': ' + (data && data.error ? data.error : '알 수 없는 오류'), true);
+            return;
+          }
+          if (data && data.error) {
+            _setStartMsg('오류: ' + data.error, true);
+            return;
+          }
+          questions = (data && data.questions) || [];
+          ctx.session_id = (data && data.question_session_id) || null;
           ctx.entity = entity || 'all';
           ctx.contract_type = contractType || 'all';
           ctx.filename = payload.filename;
           ctx.text = text;
         }
 
-        document.getElementById('contextBadge').innerText = `${ctx.entity || '-'} / ${ctx.contract_type || '-'}`;
-
+        // 4. 화면 전환
+        _setStartMsg('', false);
+        document.getElementById('contextBadge').innerText = (ctx.entity || '-') + ' / ' + (ctx.contract_type || '-');
         showStage('stageChat');
         document.getElementById('chat').innerHTML = '';
         addMsg('bot', '좋아요. 먼저 몇 가지 확인 질문을 드릴게요.');
-        if (questions.length === 0) {
+        if (!questions || questions.length === 0) {
           addMsg('bot', '추가 질문이 많지 않은 계약으로 보이네요. 바로 검토를 진행할게요.');
           await finishAndAnalyze();
           return;
         }
         askCurrentQuestion();
+
+      } catch (err) {
+        _setStartMsg('예상치 못한 오류: ' + (err && err.message ? err.message : String(err)), true);
       } finally {
-        document.getElementById('btnStart').disabled = false;
+        btn.disabled = false;
+        btn.innerText = '검토 시작';
       }
     }
 
@@ -1051,10 +1101,11 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         .filter(it => {
           if (!it) return false;
           if (it.dedup_suppressed || it.keep_as_is) return false;
+          // 체크리스트 권고 항목은 항상 표시
+          if (it.is_checklist_item) return true;
           const tier = String(it.risk_tier || '').toUpperCase();
           const isHighRisk = tier === 'HIGH' || !!it.approval_required || !!it.high_risk;
           const isMedium   = tier === 'MEDIUM';
-          // 실질 수정안이 없는 LOW 항목은 표시하지 않는다
           const hasSuggestedRewrite = !!(it.suggested_rewrite && String(it.suggested_rewrite).trim());
           if (!isHighRisk && !isMedium && !hasSuggestedRewrite) return false;
           return isHighRisk || isMedium || (!!it.user_focus_hit && hasSuggestedRewrite);
@@ -1088,6 +1139,22 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
         const body = document.createElement('div');
         body.className = 'clauseBody';
+
+        // 체크리스트 권고 항목: 원문 없음 → 권고 문안만 전체 폭으로 표시
+        if (it.is_checklist_item) {
+          const recText = String(it.recommendation_text || it.rewrite_reason || '');
+          const rr0 = String(it.rewrite_reason || '');
+          body.style.display = 'block';
+          body.innerHTML = `<div class="clauseBox" style="width:100%;max-width:100%;">` +
+            `<div class="label" style="color:#b45309;">누락 구조 탐지 — 추가 권고</div>` +
+            `<div style="font-weight:600;margin-bottom:6px;">${escapeHtml(rr0)}</div>` +
+            `<div class="guidance" style="background:#fffbeb;border-left:3px solid #f59e0b;padding:10px 14px;border-radius:4px;white-space:pre-wrap;">[추가 권고]\n${escapeHtml(recText)}</div>` +
+            `</div>`;
+          card.appendChild(body);
+          root.appendChild(card);
+          continue;
+        }
+
         const left = document.createElement('div');
         left.className = 'clauseBox';
         const ctxText = (it.context_text || '');
@@ -1097,8 +1164,14 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         right.className = 'clauseBox';
         const rw = (it.suggested_rewrite || '');
         if ((high || appr) && rw) {
-          const html = renderRedlineHtml(it.original_text || '', rw || '');
-          right.innerHTML = `<div class="label">필수 수정(redline)</div><div class="redline">${html}</div>`;
+          // No Inline Rewrite: [추가 권고] 포함 시 원문+권고 형태로 표시
+          const hasAppend = rw.includes('[추가 권고]') || rw.includes('[수정 제안');
+          if (hasAppend) {
+            right.innerHTML = `<div class="label">추가 권고</div><div class="guidance" style="white-space:pre-wrap;">${escapeHtml(rw)}</div>`;
+          } else {
+            const html = renderRedlineHtml(it.original_text || '', rw || '');
+            right.innerHTML = `<div class="label">필수 수정(redline)</div><div class="redline">${html}</div>`;
+          }
         } else {
           const dirs = Array.isArray(it.suggested_direction) ? it.suggested_direction : [];
           const rr0 = (it.rewrite_reason || '');
@@ -1109,7 +1182,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           if (ft.length) lines.push('답변 반영 쟁점: ' + ft.slice(0, 3).join(' / '));
           if (dirs.length) lines.push('방향: ' + dirs.slice(0, 3).join(' / '));
           if (rr0) lines.push('사유: ' + rr0.slice(0, 240) + (rr0.length > 240 ? '…' : ''));
-          if (rw) lines.push('참고 문안: ' + rw.slice(0, 240) + (rw.length > 240 ? '…' : ''));
+          if (rw) lines.push(rw.includes('[추가 권고]') ? rw.slice(0, 400) : ('참고 문안: ' + rw.slice(0, 240) + (rw.length > 240 ? '…' : '')));
           right.innerHTML = `<div class="label">권장/참고(guidance)</div><div class="guidance"><div class="hintTitle">보완 권고</div>${escapeHtml(lines.join('\\n'))}</div>`;
         }
         body.appendChild(left);
@@ -1119,16 +1192,9 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const reason = document.createElement('div');
         reason.className = 'lawList';
         const rr = (it.rewrite_reason || '');
-        reason.innerText = rr ? ('수정 이유: ' + rr.slice(0, 220) + (rr.length > 220 ? '…' : '')) : '수정 이유: (없음)';
-        card.appendChild(reason);
-
-        const laws = pickLawTitles(it.related_laws);
-        if (laws.length > 0) {
-          const lawDiv = document.createElement('div');
-          lawDiv.className = 'lawList';
-          lawDiv.innerText = '관련 법령/판례: ' + laws.join(', ');
-          card.appendChild(lawDiv);
-        }
+        reason.innerText = rr ? ('검토 사유: ' + rr.slice(0, 220) + (rr.length > 220 ? '…' : '')) : '';
+        if (rr) card.appendChild(reason);
+        // [REMOVED] 관련 법령/판례 섹션 — requirement.md Section Removal Specs 참조
         root.appendChild(card);
       }
     }
@@ -1162,13 +1228,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         if (frc && frc.expert_mode) {
           const party = (frc.party_role && typeof frc.party_role === 'object') ? frc.party_role : {};
           const ourRole = String(party.our_role || '');
-          const ourLabel = String(party.our_label || '');
-          const roleKo = (ourRole === 'supplier') ? '공급업자' : (ourRole === 'contractor') ? '수급인' : (ourRole === 'buyer') ? '구매자/발주자' : (ourRole === 'ordering_party') ? '도급인/발주자' : '미확정';
-          lines.push(`포지션: ${roleKo}${ourLabel ? ` (${ourLabel})` : ''}`);
-          const strat = (Array.isArray(frc.expert_strategy)) ? frc.expert_strategy : [];
-          for (const s of strat.slice(0, 2)) {
-            if (s && String(s).trim() !== '') lines.push('- ' + String(s).trim());
-          }
+          // [REMOVED] 포지션 출력 및 expert_strategy 표시 제거 — requirement.md Section Removal Specs 참조
           const topicWeightSupplier = { dealer_unfair: 40, payment_settlement: 35, termination: 32, cost_burden: 28, personal_data: 18, dispute: 5 };
           const topicWeightContractor = { payment_settlement: 40, other: 34, safety: 28, termination: 22, cost_burden: 18, dispute: 6 };
           const tw = (ourRole === 'supplier') ? topicWeightSupplier : (ourRole === 'contractor') ? topicWeightContractor : {};
@@ -1333,7 +1393,9 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         }
         const res = await fetch('/api/revision/download_docx', { method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
         if (!res.ok) {
-          document.getElementById('confirmNote').innerText = '수정본 생성 실패';
+          let errMsg = '수정본 생성 실패 (status ' + res.status + ')';
+          try { const ej = await res.json(); if (ej && ej.error) errMsg += ': ' + ej.error; } catch(_) {}
+          document.getElementById('confirmNote').innerText = errMsg;
           return;
         }
         const blob = await res.blob();
