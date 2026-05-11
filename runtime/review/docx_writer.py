@@ -389,6 +389,14 @@ def build_revision_docx(
         if bool(cr.get("guardrail_block")):
             continue
         if tier in ("HIGH", "MEDIUM"):
+            if not bool(cr.get("must_fix")) and not bool(cr.get("approval_required")):
+                continue
+            # guidance 항목(원문 보존 + 안내문 형식)은 suggested_rewrite 없어도 정상
+            if str(cr.get("display_kind") or "") == "guidance":
+                continue
+            # 체크리스트 항목은 recommendation_text를 사용하므로 suggested_rewrite 불필요
+            if bool(cr.get("is_checklist_item")):
+                continue
             sr = cr.get("suggested_rewrite")
             if not (isinstance(sr, str) and sr.strip()):
                 raise ValueError(f"missing suggested_rewrite for {cid} tier={tier}")

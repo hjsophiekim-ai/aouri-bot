@@ -82,6 +82,16 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
         except Exception as exc:
             return TextExtractionResult(False, "", "docx_xml_parser", str(exc))
 
+    if ext == ".xlsx":
+        try:
+            text = extract_text_from_xlsx(file_path)
+            text = _norm_text(_strip_zero_width_and_ctrl(text))
+            if len(text) < min_len:
+                return TextExtractionResult(False, "", "xlsx_reader", "extracted text too short")
+            return TextExtractionResult(True, text, "xlsx_reader", None)
+        except Exception as exc:
+            return TextExtractionResult(False, "", "xlsx_reader", str(exc))
+
     if ext == ".pdf":
         return TextExtractionResult(
             False,
@@ -91,6 +101,24 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
         )
 
     return TextExtractionResult(False, "", "unsupported", f"unsupported extension: {ext}")
+
+
+def extract_text_from_xlsx(file_path: Path) -> str:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+    parts: list[str] = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        sheet_lines: list[str] = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c).strip() for c in row if c is not None and str(c).strip()]
+            if cells:
+                sheet_lines.append("\t".join(cells))
+        if sheet_lines:
+            parts.append(f"[시트: {sheet_name}]\n" + "\n".join(sheet_lines))
+    wb.close()
+    return "\n\n".join(parts)
 
 
 def extract_text_from_docx(file_path: Path) -> dict[str, object]:

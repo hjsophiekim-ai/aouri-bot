@@ -1018,12 +1018,14 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
             cr["review_tier"] = "NOTE"
 
     # HIGH 최대 max_high개: LEVEL 순 정렬 후 초과분 MEDIUM 강등
+    # 체크리스트 항목(is_checklist_item=True)은 캡 계산에서 제외
     high_items = [
         cr for cr in clause_results
         if isinstance(cr, dict)
         and str(cr.get("risk_tier") or "").upper() == "HIGH"
         and not bool(cr.get("dedup_suppressed"))
         and not bool(cr.get("keep_as_is"))
+        and not bool(cr.get("is_checklist_item"))
     ]
     if len(high_items) > max_high:
         high_items.sort(key=lambda x: (int(x.get("_priority_level") or 3), -int(bool(x.get("must_fix"))), -int(bool(x.get("approval_required")))))
@@ -1167,6 +1169,226 @@ def _apply_service_contract_checklist(
 
 
 # =============================================================================
+# [Project Installation Contract Mandatory Checklist]
+# requirement.md > Project Installation Contract Architecture 참조
+# =============================================================================
+
+_PROJECT_INSTALL_SAFETY_ITEMS: list[dict[str, Any]] = [
+    {
+        "id": "pi_safety_responsibility",
+        "name": "안전 책임 주체 명시",
+        "present": re.compile(r"안전\s*책임|안전관리\s*주체|현장안전\s*책임", re.IGNORECASE),
+        "direction": "시공·설치·시운전 전 과정에서 안전 책임 주체(을/수급인)를 명시하는 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 안전 책임 주체]\n을(수급인)은 현장 설치·시운전 전 과정에서 산업안전보건법 및 중대재해처벌법상 안전 책임 주체임을 확인하며, 관련 의무를 성실히 이행한다.",
+    },
+    {
+        "id": "pi_safety_manager",
+        "name": "안전관리자 지정 의무",
+        "present": re.compile(r"안전관리자\s*지정|안전담당자|안전관리\s*책임자", re.IGNORECASE),
+        "direction": "현장 안전관리자를 지정하고 연락처를 계약서에 명시하도록 요구하세요.",
+        "rewrite": "[추가 권고 — 안전관리자 지정]\n을은 현장 착공 전 안전관리자를 지정하고 성명·연락처를 갑에게 서면 통보한다. 안전관리자 교체 시 48시간 이내에 갑에게 통보한다.",
+    },
+    {
+        "id": "pi_legal_compliance",
+        "name": "산안법·중대재해처벌법 준수 의무",
+        "present": re.compile(r"산업안전보건법|중대재해|산안법", re.IGNORECASE),
+        "direction": "산업안전보건법 및 중대재해처벌법 준수 의무를 명시하는 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 법령 준수]\n을은 산업안전보건법, 중대재해처벌법 및 관련 법령·고시를 준수하며, 위반으로 인한 모든 행정처분·손해배상 책임은 을이 부담한다.",
+    },
+    {
+        "id": "pi_subcontractor_safety",
+        "name": "하도급 안전관리 연대책임",
+        "present": re.compile(r"하도급.{0,20}안전|하수급인.{0,20}안전|협력업체.{0,20}안전", re.IGNORECASE),
+        "direction": "하도급·협력업체에 대한 안전관리 연대책임 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 하도급 안전 연대책임]\n을은 하도급·협력업체의 안전관리에 대해 연대책임을 지며, 하도급업체가 산안법·중대재해처벌법을 위반하더라도 이는 을의 귀책사유로 본다.",
+    },
+    {
+        "id": "pi_work_stop_right",
+        "name": "긴급 작업 중지권",
+        "present": re.compile(r"작업\s*중지|작업중지권|긴급\s*중지", re.IGNORECASE),
+        "direction": "위험 상황 발생 시 을이 즉시 작업을 중지할 수 있는 권리를 보장하는 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 긴급 작업 중지권]\n을은 중대한 위험이 발생하거나 발생할 우려가 있을 경우 즉시 작업을 중지하고 갑에게 통보할 수 있다. 정당한 작업 중지를 이유로 계약상 불이익을 부여할 수 없다.",
+    },
+    {
+        "id": "pi_risk_assessment",
+        "name": "위험성 평가 실시 의무",
+        "present": re.compile(r"위험성\s*평가|리스크\s*평가|위험\s*평가", re.IGNORECASE),
+        "direction": "착공 전 위험성 평가를 실시하고 그 결과를 갑에게 제출하도록 요구하는 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 위험성 평가]\n을은 작업 착수 전 산업안전보건법 제36조에 따라 위험성 평가를 실시하고, 평가 결과 및 개선 계획을 갑에게 제출한다.",
+    },
+    {
+        "id": "pi_accident_reporting",
+        "name": "사고 발생 즉시 보고 의무",
+        "present": re.compile(r"사고.{0,15}보고|재해.{0,15}통보|즉시.{0,10}보고", re.IGNORECASE),
+        "direction": "현장 사고 발생 시 즉시 갑에게 보고하는 의무 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 사고 보고 의무]\n을은 현장에서 산업재해 또는 안전사고가 발생한 경우 즉시(1시간 이내) 갑에게 구두 및 서면으로 통보하고, 재발 방지 대책을 48시간 이내에 제출한다.",
+    },
+    {
+        "id": "pi_ppe_education",
+        "name": "안전장비·교육 제공 의무",
+        "present": re.compile(r"안전장비|보호구|안전교육|안전\s*훈련", re.IGNORECASE),
+        "direction": "작업자에 대한 보호구 지급 및 안전교육 실시 의무를 명시하는 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 보호구 및 안전교육]\n을은 현장 작업자에게 적합한 보호구를 지급하고, 작업 착수 전 안전교육을 실시한다. 교육 일시·참석자 명단을 갑에게 제출한다.",
+    },
+    {
+        "id": "pi_access_control",
+        "name": "현장 출입 통제 및 구역 관리",
+        "present": re.compile(r"출입\s*통제|출입\s*관리|현장\s*출입|구역\s*관리|펜스|안전\s*구역", re.IGNORECASE),
+        "direction": "현장 출입 통제 및 위험 구역 관리 방안을 계약서에 명시하세요.",
+        "rewrite": "[추가 권고 — 현장 출입 통제]\n을은 작업 구역에 안전 펜스·표지판을 설치하고 비인가자의 출입을 통제한다. 갑의 사전 승인 없이 제3자의 현장 접근을 허용하지 않는다.",
+    },
+    {
+        "id": "pi_commissioning_accident_liability",
+        "name": "시운전 중 사고 책임 귀속",
+        "present": re.compile(r"시운전.{0,20}사고|시운전.{0,20}책임|시운전.{0,20}손해", re.IGNORECASE),
+        "direction": "시운전 중 발생하는 사고·손해에 대한 책임 귀속을 명확히 하는 조항을 추가하세요.",
+        "rewrite": "[추가 권고 — 시운전 중 사고 책임]\n시운전 기간 중 을의 작업·설비로 인해 발생한 인적·물적 사고의 손해배상 책임은 을에게 귀속된다. 단, 갑의 지시 또는 제공 자재의 결함으로 인한 경우에는 갑이 책임을 분담한다.",
+    },
+]
+
+_PROJECT_INSTALL_TRAINING_ITEMS: list[dict[str, Any]] = [
+    {
+        "id": "pi_train_user",
+        "name": "사용자 교육 제공 의무",
+        "risk": "HIGH",
+        "present": re.compile(r"사용자\s*교육|운용자\s*교육|오퍼레이터\s*교육|user\s*training", re.IGNORECASE),
+        "direction": "설치 완료 후 사용자(운용자)에 대한 교육 제공 의무를 명시하세요.",
+        "rewrite": "[추가 권고 — 사용자 교육]\n을은 설비 인수인계 전 갑의 운용 담당자를 대상으로 사용자 교육을 실시하고 교육 확인서를 제출한다.",
+    },
+    {
+        "id": "pi_train_admin",
+        "name": "관리자 교육 제공 의무",
+        "risk": "HIGH",
+        "present": re.compile(r"관리자\s*교육|admin\s*training|시스템\s*관리\s*교육", re.IGNORECASE),
+        "direction": "시스템 관리자 교육 제공 의무를 명시하세요.",
+        "rewrite": "[추가 권고 — 관리자 교육]\n을은 시스템 관리자를 대상으로 설정·운영·장애 처리 방법에 대한 관리자 교육을 실시한다.",
+    },
+    {
+        "id": "pi_train_maintenance",
+        "name": "유지보수 담당자 교육 의무",
+        "risk": "MEDIUM",
+        "present": re.compile(r"유지보수\s*교육|정비\s*교육|maintenance\s*training", re.IGNORECASE),
+        "direction": "유지보수 담당자를 위한 정비·점검 방법 교육 의무를 명시하세요.",
+        "rewrite": "[추가 권고 — 유지보수 교육]\n을은 갑의 유지보수 담당자를 대상으로 일상 점검, 소모품 교체, 고장 진단 방법에 대한 교육을 제공한다.",
+    },
+    {
+        "id": "pi_train_emergency",
+        "name": "비상 대응 절차 교육 의무",
+        "risk": "HIGH",
+        "present": re.compile(r"비상\s*대응\s*교육|긴급\s*절차\s*교육|emergency\s*training|비상\s*정지", re.IGNORECASE),
+        "direction": "비상 정지·긴급 대응 절차에 대한 교육 의무를 명시하세요.",
+        "rewrite": "[추가 권고 — 비상 대응 교육]\n을은 설비 비상 정지, 화재·사고 시 긴급 대응 절차를 포함한 비상 대응 교육을 실시하고 교육 자료를 갑에게 제공한다.",
+    },
+    {
+        "id": "pi_ops_manual",
+        "name": "운용 매뉴얼 납품 의무",
+        "risk": "HIGH",
+        "present": re.compile(r"운용\s*매뉴얼|운영\s*매뉴얼|사용\s*설명서|operations\s*manual", re.IGNORECASE),
+        "direction": "설비 운용 매뉴얼(운영 설명서)을 납품 의무로 계약에 명시하세요.",
+        "rewrite": "[추가 권고 — 운용 매뉴얼 납품]\n을은 최종 인수인계 시 설비 운용 매뉴얼을 인쇄본 및 디지털 파일 형태로 갑에게 납품한다. 매뉴얼에는 정상 운전, 비상 정지, 유지보수 절차가 포함되어야 한다.",
+    },
+    {
+        "id": "pi_korean_manual",
+        "name": "한국어 매뉴얼 제공 의무",
+        "risk": "MEDIUM",
+        "present": re.compile(r"한국어\s*매뉴얼|한글\s*매뉴얼|국문\s*매뉴얼|Korean\s*manual", re.IGNORECASE),
+        "direction": "모든 매뉴얼 및 교육 자료를 한국어로 제공하도록 요구하세요.",
+        "rewrite": "[추가 권고 — 한국어 매뉴얼]\n을이 제공하는 모든 매뉴얼, 교육 자료, 도면은 한국어로 작성·제공되어야 한다. 외국어 원본이 있는 경우 한국어 번역본을 병기한다.",
+    },
+    {
+        "id": "pi_retrain_support",
+        "name": "재교육 지원 의무",
+        "risk": "MEDIUM",
+        "present": re.compile(r"재교육|추가\s*교육\s*지원|교육\s*재실시", re.IGNORECASE),
+        "direction": "인수 후 일정 기간 내 재교육 지원 의무를 명시하세요.",
+        "rewrite": "[추가 권고 — 재교육 지원]\n을은 인수인계 완료 후 6개월 이내에 갑이 요청할 경우 1회에 한하여 추가 교육을 무상으로 제공한다.",
+    },
+    {
+        "id": "pi_sla",
+        "name": "유지보수 SLA (서비스 수준 협약)",
+        "risk": "MEDIUM",
+        "present": re.compile(r"SLA|서비스\s*수준|응답\s*시간|장애\s*복구\s*시간|유지보수\s*기간", re.IGNORECASE),
+        "direction": "고장 대응 시간, 복구 목표 시간 등 유지보수 SLA를 계약서에 명시하세요.",
+        "rewrite": "[추가 권고 — 유지보수 SLA]\n을은 장애 발생 신고 후 4시간 이내 현장 도착(원격 지원은 1시간 이내 개시), 24시간 이내 복구를 목표로 한다. SLA 미달 시 지체상금에 준하는 배상 기준을 적용한다.",
+    },
+]
+
+
+def _apply_project_installation_checklist(
+    clause_results: list[dict[str, Any]],
+    full_text: str,
+    contract_class: str,
+) -> None:
+    """requirement.md > Project Installation Contract Architecture.
+    project_installation 계약에서 안전·교육 항목 누락을 탐지하고 권고를 생성한다.
+    """
+    if contract_class != "project_installation":
+        return
+    text = str(full_text or "")
+
+    for item in _PROJECT_INSTALL_SAFETY_ITEMS:
+        if any(str(cr.get("clause_id") or "") == item["id"] for cr in clause_results if isinstance(cr, dict)):
+            continue
+        if item["present"].search(text):
+            continue
+        clause_results.append({
+            "clause_id": item["id"],
+            "article_number": None,
+            "clause_title": f"[안전권고] {item['name']}",
+            "original_text": "",
+            "suggested_rewrite": None,
+            "clause_topic": "safety_compliance",
+            "risk_tier": "HIGH",
+            "must_fix": True,
+            "review_tier": "MUST",
+            "high_risk": True,
+            "approval_required": True,
+            "rewrite_reason": item["direction"],
+            "suggested_direction": [item["direction"]],
+            "recommendation_text": item["rewrite"],
+            "is_checklist_item": True,
+            "display_kind": "guidance",
+            "has_rewrite_change": False,
+            "user_focus_hit": False,
+            "factual_hit": False,
+            "dedup_suppressed": False,
+            "keep_as_is": False,
+            "_priority_level": 1,
+        })
+
+    for item in _PROJECT_INSTALL_TRAINING_ITEMS:
+        if any(str(cr.get("clause_id") or "") == item["id"] for cr in clause_results if isinstance(cr, dict)):
+            continue
+        if item["present"].search(text):
+            continue
+        risk = item["risk"]
+        clause_results.append({
+            "clause_id": item["id"],
+            "article_number": None,
+            "clause_title": f"[교육권고] {item['name']}",
+            "original_text": "",
+            "suggested_rewrite": None,
+            "clause_topic": "training_operations",
+            "risk_tier": risk,
+            "must_fix": risk == "HIGH",
+            "review_tier": "MUST" if risk == "HIGH" else "SUGGEST",
+            "high_risk": risk == "HIGH",
+            "approval_required": risk == "HIGH",
+            "rewrite_reason": item["direction"],
+            "suggested_direction": [item["direction"]],
+            "recommendation_text": item["rewrite"],
+            "is_checklist_item": True,
+            "display_kind": "guidance",
+            "has_rewrite_change": False,
+            "user_focus_hit": False,
+            "factual_hit": False,
+            "dedup_suppressed": False,
+            "keep_as_is": False,
+            "_priority_level": 1 if risk == "HIGH" else 2,
+        })
+
+
+# =============================================================================
 # [No Inline Rewrite Policy] — requirement.md > Output Format Policy
 # =============================================================================
 
@@ -1222,6 +1444,11 @@ _ADVISORY_CONTRACT_KW2 = re.compile(
 )
 _RENTAL_CONTRACT_KW2 = re.compile(r"렌탈|임대차|Lease|구독", re.IGNORECASE)
 _CONSTRUCTION_CONTRACT_KW = re.compile(r"공사|인테리어|시공|건설|리모델링", re.IGNORECASE)
+_PROJECT_INSTALL_KW = re.compile(
+    r"설치|시운전|현장\s*작업|자동화\s*설비|생산\s*라인|공장|SmartFactory|Smart\s*Factory"
+    r"|\bcommissioning\b|\bsetup\b|\bintegration\b",
+    re.IGNORECASE,
+)
 _LARGE_PAYMENT_KW = re.compile(r"1억|1,0\d\d,0\d\d|100,000,000|일억|대가.{0,8}억|용역비.{0,8}억|자문료.{0,8}억", re.IGNORECASE)
 
 _IP_CLAUSE_TITLES = ("지식재산권", "저작권", "성과물", "결과물", "산출물", "지재권", "IP", "소유권")
@@ -1276,9 +1503,11 @@ _LIABILITY_CAP_EXCEPTION_REWRITE = (
 
 def _classify_contract_type(contract_type: str, text: str, filename: str | None) -> str:
     """계약서 제목·목적 기반 엄격한 유형 분류.
-    Returns: "advisory" | "rental" | "construction" | "general"
+    Returns: "advisory" | "rental" | "construction" | "project_installation" | "general"
     """
     haystack = (contract_type or "") + " " + (filename or "") + " " + (text or "")[:300]
+    if _PROJECT_INSTALL_KW.search(haystack):
+        return "project_installation"
     if _ADVISORY_CONTRACT_KW2.search(haystack):
         return "advisory"
     if _RENTAL_CONTRACT_KW2.search(haystack):
@@ -1302,6 +1531,8 @@ def _law_contract_type_for_search(contract_class: str, raw_contract_type: str) -
         return "가구렌탈"
     if contract_class == "construction":
         return "인테리어공사"
+    if contract_class == "project_installation":
+        return "설치시운전_산업안전중대재해"
     return raw_contract_type
 
 
@@ -1606,6 +1837,7 @@ def build_clause_level_result(
     _is_advisory_class = (_contract_class == "advisory")
     _is_rental_class = (_contract_class == "rental")
     _is_construction_class = (_contract_class == "construction")
+    _is_project_install_class = (_contract_class == "project_installation")
 
     # [REMOVED] 관련 법령 retrieval 영구 비활성화 — requirement.md > Section Removal Specs
     law_service = None
@@ -2842,7 +3074,9 @@ def build_clause_level_result(
     # ── [NEW ENGINES] requirement.md > Review Priority Engine / Checklist / Output Policy ─
     # 1. Service Contract 필수 체크리스트 (advisory 계약 전용 누락 항목 탐지)
     _apply_service_contract_checklist(clause_results, str(text or ""), _contract_class)
-    # 2. 리뷰 우선순위 엔진 (LEVEL 1~3 분류, HIGH 최대 5개)
+    # 1-1. Project Installation 필수 안전·교육 체크리스트
+    _apply_project_installation_checklist(clause_results, str(text or ""), _contract_class)
+    # 2. 리뷰 우선순위 엔진 (LEVEL 1~3 분류, HIGH 최대 5개 — 체크리스트 제외)
     _apply_review_priority_engine(clause_results, max_high=5)
     # 3. No Inline Rewrite 정책 (advisory: 원문 보존 + [추가 권고] 형태)
     _apply_no_inline_rewrite_policy(clause_results, _is_advisory_class)
