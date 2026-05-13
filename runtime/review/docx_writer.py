@@ -551,6 +551,11 @@ def build_revision_docx(
             pnone_top = _p(body)
             _t(_r(pnone_top), "- 치명적 리스크 Top 3를 자동 선정할 충분한 근거가 부족합니다.")
         else:
+            tbl_top = _tbl(body, col_widths=[1200, 2200, 2400, 2000])
+            tr_hdr = ET.SubElement(tbl_top, _w("tr"))
+            for hdr_txt, hdr_w in [("조항", 1200), ("리스크", 2200), ("최악 시나리오", 2400), ("협상 전략", 2000)]:
+                tc_h = _tc(tr_hdr, width=hdr_w)
+                _t(_r(_p(tc_h), bold=True), hdr_txt)
             for cr in picked:
                 cid = str(cr.get("clause_id") or "")
                 oc = orig_by_id.get(cid) or {}
@@ -565,16 +570,17 @@ def build_revision_docx(
                         break
                 rr = str(cr.get("rewrite_reason") or "").strip()
                 risk1 = it or (rr[:90] if rr else "리스크/보완 필요")
-                sr = str(cr.get("suggested_rewrite") or "").strip()
-                if "[추가]" in sr:
-                    sr = sr.split("[추가]", 1)[1].strip()
-                sr = (sr[:220] + "…") if len(sr) > 220 else sr
-                p1 = _p(body)
-                _t(_r(p1), f"- 조항: {head}")
-                p2 = _p(body)
-                _t(_r(p2), f"  리스크: {risk1}")
-                p3 = _p(body)
-                _t(_r(p3), f"  수정 제안: {sr if sr else '(제안 문안 없음)'}")
+                wcs = str(cr.get("worst_case_scenario") or "").strip()
+                neg = str(cr.get("negotiation_strategy") or "").strip()
+                if not wcs:
+                    sr = str(cr.get("suggested_rewrite") or "").strip()
+                    if "[추가]" in sr:
+                        sr = sr.split("[추가]", 1)[1].strip()
+                    wcs = (sr[:180] + "…") if len(sr) > 180 else sr
+                tr_row = ET.SubElement(tbl_top, _w("tr"))
+                for cell_txt, cell_w in [(head, 1200), (risk1[:160], 2200), (wcs[:240], 2400), (neg[:240] if neg else "(협상 전략 없음)", 2000)]:
+                    tc_d = _tc(tr_row, width=cell_w)
+                    _t(_r(_p(tc_d)), cell_txt)
         _p(body)
     if show_ids:
         ph = _p(body)
@@ -842,6 +848,14 @@ def build_revision_docx(
         if rr0:
             p2 = _p(body)
             _t(_r(p2, color_hex="1F7AE0"), "사유: " + rr0[:320] + ("…" if len(rr0) > 320 else ""))
+        wcs0 = str(cr.get("worst_case_scenario") or "").strip()
+        neg0 = str(cr.get("negotiation_strategy") or "").strip()
+        if wcs0:
+            pwcs = _p(body)
+            _t(_r(pwcs, color_hex="C0392B"), "최악 시나리오: " + wcs0[:300] + ("…" if len(wcs0) > 300 else ""))
+        if neg0:
+            pneg = _p(body)
+            _t(_r(pneg, color_hex="1A6B3A"), "협상 전략: " + neg0[:300] + ("…" if len(neg0) > 300 else ""))
         if laws0:
             p4 = _p(body)
             _t(_r(p4, color_hex="1F7AE0"), "관련 법령/기준: " + " / ".join(laws0))

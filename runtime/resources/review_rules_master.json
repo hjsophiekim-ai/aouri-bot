@@ -959,6 +959,8 @@
           "현지 법무법인 선임 비용·집행 절차 고지 후 법무·경영진 승인 필요"
         ],
         "approval_required": true,
+        "worst_case_scenario": "외국법 확정 시 현지 법원 소송 불가피 — 현지 법무법인 선임 비용 수천만원 + 패소 시 한국 내 강제집행 불확실, 추가 소송 비용 발생",
+        "negotiation_strategy": "ICC 중재 또는 대한민국 법·서울중앙지방법원 관할로 변경 요구. 협상 불발 시 서울 법원 비전속적 병렬 관할(Korean courts shall have non-exclusive jurisdiction) 삽입으로 최소화",
         "tags": [
           "source:cross_border_pattern",
           "clause:dispute_resolution",
@@ -993,6 +995,8 @@
           "잔존 기억(residuals) 조항 포함 여부 확인 — 범위 제한 요구"
         ],
         "approval_required": false,
+        "worst_case_scenario": "비밀유지 기간 무제한 확정 시 계약 종료 수십 년 후까지 의무 존속 — 담당자 퇴사·파일 소실 후에도 손해배상 청구 가능, 법무 관리 비용 장기 발생",
+        "negotiation_strategy": "비밀유지 기간 3~5년으로 명시 협상. 계약 종료 후 30일 내 기밀 자료 반환·파기 의무 및 서면 인증(written certification) 조항 삽입",
         "tags": [
           "source:nda_pattern",
           "clause:confidentiality",
@@ -1025,6 +1029,8 @@
           "예외 조항(공지된 정보, 독자 개발, 법적 요청) 명시 확인"
         ],
         "approval_required": false,
+        "worst_case_scenario": "일방 NDA 확정 시 퍼시스 정보 유출·오용에 대한 상대방 책임 추궁 불가 — 손해배상 청구 시 법적 근거 부족, 분쟁 비용 전액 자기 부담 가능성",
+        "negotiation_strategy": "상호(Mutual) 비밀유지 구조로 전환 요구. 상대방 거부 시 Disclosing Party 대상 목적 외 사용 금지 + 제3자 제공 시 사전 동의 의무 조항 추가 삽입",
         "tags": [
           "source:nda_pattern",
           "clause:confidentiality",

@@ -768,6 +768,59 @@ def _compute_ai_deep_review_target_count(*, clause_count: int, must_count: int, 
 _RENTAL_KW = re.compile(r"렌탈|구독|임대차|Lease", re.IGNORECASE)
 _RENTAL_COMMENT_KW = re.compile(r"소유권|위약금|렌탈|임대|리스|반납|반환.*계약|구독.*해지")
 
+_EN_NDA_TRIGGER_PATTERNS = [
+    re.compile(r"\bStuttgart\b|\bMunich\b|\bFrankfurt\b|\bHamburg\b|\bBerlin\b", re.IGNORECASE),
+    re.compile(r"\bGerman\s+law\b|\blaws\s+of\s+Germany\b|\bGoverning\s+Law\b", re.IGNORECASE),
+    re.compile(r"\bjurisdiction\b|\bReceiving\s+Party\b|\bConfidential\s+Information\b", re.IGNORECASE),
+]
+
+
+def _check_en_nda_rules(
+    clause_title: str,
+    clause_text: str,
+    jur_kind: str | None,
+    loaded_rules: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return NDA-EN-* rules whose triggers match the clause title/text."""
+    if jur_kind == "domestic_korea":
+        return []
+    haystack = ((clause_title or "") + " " + (clause_text or "")[:1000]).lower()
+    matched: list[dict[str, Any]] = []
+    for rule in loaded_rules:
+        if not isinstance(rule, dict):
+            continue
+        rid = str(rule.get("rule_id") or "")
+        if not rid.startswith("NDA-EN"):
+            continue
+        tags = rule.get("tags") if isinstance(rule.get("tags"), list) else []
+        trigger_kws = [t[8:].lower() for t in tags if isinstance(t, str) and t.startswith("trigger:")]
+        if any(kw in haystack for kw in trigger_kws):
+            matched.append(rule)
+    return matched
+
+
+def _build_change_record(
+    clause_id: str,
+    original_text: str,
+    suggested_rewrite: str | None,
+    rewrite_reason: str | None,
+    risk_tier: str,
+    *,
+    worst_case_scenario: str | None = None,
+    negotiation_strategy: str | None = None,
+) -> dict[str, Any]:
+    """Build a structured change record for a single clause."""
+    return {
+        "clause_id": clause_id,
+        "original_text": (original_text or "")[:400],
+        "suggested_rewrite": suggested_rewrite,
+        "rewrite_reason": rewrite_reason,
+        "risk_tier": risk_tier,
+        "has_change": bool(suggested_rewrite and suggested_rewrite.strip() and suggested_rewrite.strip() != (original_text or "").strip()),
+        "worst_case_scenario": worst_case_scenario,
+        "negotiation_strategy": negotiation_strategy,
+    }
+
 
 def _is_rental_contract(contract_type: str, text: str) -> bool:
     return bool(_RENTAL_KW.search((contract_type or "") + " " + (text or "")[:400]))
@@ -2849,6 +2902,8 @@ def build_clause_level_result(
                         "context_expanded_by_text": bool(base.get("context_expanded_by_text")),
                         "description": base.get("description"),
                         "review_action": base.get("review_action") if isinstance(base.get("review_action"), list) else [],
+                        "worst_case_scenario": base.get("worst_case_scenario"),
+                        "negotiation_strategy": base.get("negotiation_strategy"),
                         "tags": base.get("tags") if isinstance(base.get("tags"), list) else [],
                         "matched_keywords": ar.get("matched_keywords") if isinstance(ar.get("matched_keywords"), list) else [],
                     }
@@ -2952,6 +3007,8 @@ def build_clause_level_result(
                 "review_tier": review_tier,
                 "unfavorable_to_us": bool(it.get("unfavorable_to_us")),
                 "keep_as_is": bool(keep_as_is),
+                "worst_case_scenario": next((r.get("worst_case_scenario") for r in related_rules if isinstance(r, dict) and r.get("worst_case_scenario")), None),
+                "negotiation_strategy": next((r.get("negotiation_strategy") for r in related_rules if isinstance(r, dict) and r.get("negotiation_strategy")), None),
             }
         )
 
