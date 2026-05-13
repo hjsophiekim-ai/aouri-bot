@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import re
+import struct
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -93,12 +95,24 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
             return TextExtractionResult(False, "", "xlsx_reader", str(exc))
 
     if ext == ".pdf":
-        return TextExtractionResult(
-            False,
-            "",
-            "pdf_unsupported_mvp",
-            "PDF extraction excluded in MVP (OCR/text-layer handling out of scope)",
-        )
+        try:
+            text = extract_text_from_pdf(file_path)
+            text = _norm_text(_strip_zero_width_and_ctrl(text))
+            if len(text) < min_len:
+                return TextExtractionResult(False, "", "pdf_reader", "extracted text too short")
+            return TextExtractionResult(True, text, "pdf_reader", None)
+        except Exception as exc:
+            return TextExtractionResult(False, "", "pdf_reader", str(exc))
+
+    if ext == ".hwp":
+        try:
+            text = extract_text_from_hwp(file_path)
+            text = _norm_text(_strip_zero_width_and_ctrl(text))
+            if len(text) < min_len:
+                return TextExtractionResult(False, "", "hwp_reader", "extracted text too short")
+            return TextExtractionResult(True, text, "hwp_reader", None)
+        except Exception as exc:
+            return TextExtractionResult(False, "", "hwp_reader", str(exc))
 
     return TextExtractionResult(False, "", "unsupported", f"unsupported extension: {ext}")
 
@@ -377,4 +391,93 @@ def _extract_visible_text_from_word_xml(
         if joined:
             paras.append(joined)
     return {"texts": paras, "has_track_changes": has_track_changes, "raw_markup_text": raw_markup_text[:20000]}
+
+
+def extract_text_from_pdf(file_path: Path) -> str:
+    import pdfplumber
+
+    texts: list[str] = []
+    with pdfplumber.open(str(file_path)) as pdf:
+        for page_num, page in enumerate(pdf.pages, 1):
+            text = page.extract_text()
+            if text and text.strip():
+                texts.append(f"[페이지 {page_num}]\n{text.strip()}")
+    return "\n\n".join(texts)
+
+
+def extract_text_from_hwp(file_path: Path) -> str:
+    import olefile
+
+    HWPTAG_PARA_TEXT = 66
+
+    if not olefile.isOleFile(str(file_path)):
+        raise ValueError("올바른 HWP 파일이 아닙니다")
+
+    with olefile.OleFileIO(str(file_path)) as ole:
+        if not ole.exists("FileHeader"):
+            raise ValueError("FileHeader 스트림이 없습니다")
+
+        header_data = ole.openstream("FileHeader").read()
+        if not header_data.startswith(b"HWP Document File"):
+            raise ValueError("HWP 파일 형식이 아닙니다")
+
+        is_compressed = True
+        if len(header_data) >= 40:
+            attrs = struct.unpack_from("<I", header_data, 36)[0]
+            is_compressed = bool(attrs & 0x01)
+
+        texts: list[str] = []
+        section_idx = 0
+
+        while True:
+            section_path = f"BodyText/Section{section_idx:04d}"
+            if not ole.exists(section_path):
+                break
+
+            raw = ole.openstream(section_path).read()
+            data = zlib.decompress(raw, -15) if is_compressed else raw
+
+            i = 0
+            while i + 4 <= len(data):
+                header = struct.unpack_from("<I", data, i)[0]
+                tag_id = header & 0x3FF
+                size = (header >> 20) & 0xFFF
+                i += 4
+
+                if size == 0xFFF:
+                    if i + 4 > len(data):
+                        break
+                    size = struct.unpack_from("<I", data, i)[0]
+                    i += 4
+
+                record_end = i + size
+
+                if tag_id == HWPTAG_PARA_TEXT:
+                    para_chars: list[str] = []
+                    j = i
+                    while j + 2 <= record_end:
+                        char_code = struct.unpack_from("<H", data, j)[0]
+                        j += 2
+                        if char_code == 0x000D:
+                            break
+                        elif char_code == 0x000A:
+                            para_chars.append("\n")
+                        elif char_code == 0x0009:
+                            para_chars.append("\t")
+                        elif char_code < 0x0020:
+                            j += 16  # inline object: skip remaining bytes
+                        else:
+                            para_chars.append(chr(char_code))
+                    text = "".join(para_chars).strip()
+                    if text:
+                        texts.append(text)
+
+                i = record_end
+
+            section_idx += 1
+
+        if not texts:
+            raise ValueError("텍스트를 추출할 수 없습니다")
+
+        return "\n".join(texts)
 

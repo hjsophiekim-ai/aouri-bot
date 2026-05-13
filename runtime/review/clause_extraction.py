@@ -368,6 +368,30 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             ids[i] = "EN-" + re.sub(r"\s+", "-", art.strip().upper())
             continue
 
+    # Phase 1-2: English numbered format "1. TITLE" fallback
+    # Only used when no Korean/Article headings found and text appears English-heavy
+    if not idxs:
+        _english_heavy = sum(1 for ch in (cleaned[:3000]) if "a" <= ch.lower() <= "z") / max(1, min(3000, len(cleaned))) >= 0.20
+        if _english_heavy:
+            for i, line in enumerate(lines):
+                l = (line or "").strip()
+                if not l:
+                    continue
+                m3 = re.match(r"^(\d{1,2})\.\s{1,4}(.{2,80})$", l)
+                if not m3:
+                    continue
+                num = m3.group(1)
+                rest = (m3.group(2) or "").strip()
+                # Skip if it looks like a sentence (has verb words or ends with period+more)
+                if re.search(r"\b(shall|will|must|may|is\b|are\b|has\b|have\b|does\b|do\b)\b", rest, re.IGNORECASE):
+                    continue
+                # Require first letter uppercase and reasonable length for a heading
+                if not re.match(r"^[A-Z]", rest):
+                    continue
+                idxs.append(i)
+                titles[i] = f"{num}. {rest}"
+                ids[i] = f"EN-{num}"
+
     if not idxs:
         chunks = _fallback_split(cleaned)
         out = [

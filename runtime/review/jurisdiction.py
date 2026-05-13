@@ -54,6 +54,32 @@ _COUNTRY_TOKENS = [
     "europe",
     "영국",
     "uk",
+    "germany",
+    "deutschland",
+    "german",
+    "france",
+    "french",
+    "italy",
+    "italian",
+    "netherlands",
+    "dutch",
+    "denmark",
+    "danish",
+    "switzerland",
+    "swiss",
+    "sweden",
+    "swedish",
+    "norway",
+    "norwegian",
+    "australia",
+    "canada",
+    "austria",
+    "belgium",
+    "finland",
+    "poland",
+    "spain",
+    "spanish",
+    "portugal",
 ]
 
 _CURRENCY_TOKENS = [
@@ -146,7 +172,13 @@ def classify_jurisdiction_profile(*, text: str, entity: str | None = None, contr
         ev.append("filename_hint")
 
     has_korea_law = _has_any_ci(t, _KOREA_LAW_TOKENS)
-    has_foreign_law = bool(re.search(r"(뉴욕주|캘리포니아주|delaware|england|wales|singapore law|hong kong law|california law|new york law)", t, flags=re.IGNORECASE))
+    has_foreign_law = bool(re.search(
+        r"(뉴욕주|캘리포니아주|delaware|england|wales|singapore law|hong kong law|"
+        r"california law|new york law|german law|laws of germany|stuttgart|munich|"
+        r"frankfurt|hamburg|berlin|dutch law|french law|danish law|italian law|"
+        r"swiss law|london|paris|amsterdam|vienna|brussels)",
+        t, flags=re.IGNORECASE,
+    ))
     if has_foreign_law:
         cross_border = True
         ev.append("foreign_governing_law")

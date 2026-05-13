@@ -17,7 +17,7 @@ UPLOAD_HTML = """<!doctype html>
 </head>
 <body>
   <h1>Upload & Review (MVP)</h1>
-  <div class="muted">지원: .txt, .docx, .xlsx / 제외: pdf(OCR), hwp</div>
+  <div class="muted">지원: .txt, .docx, .xlsx, .pdf, .hwp</div>
 
   <div class="box">
     <h2>1) 업로드</h2>

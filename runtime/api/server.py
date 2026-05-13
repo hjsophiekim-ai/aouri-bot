@@ -1984,7 +1984,7 @@ def create_handler(service: RuleQueryService):
                                     "error": extraction.error,
                                 },
                                 "intake": intake_to_dict(intake),
-                                "note": "MVP에서 지원하지 않는 포맷이거나 텍스트 추출 실패(OCR/hwp/pdflayer 등 backlog).",
+                                "note": "지원하지 않는 포맷이거나 텍스트 추출 실패. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp",
                             },
                         )
                         return
@@ -2185,7 +2185,7 @@ def create_handler(service: RuleQueryService):
                                     "contract_type_source": "user_input" if contract_type else "unavailable",
                                 },
                                 "review": None,
-                                "note": "MVP에서 지원하지 않는 포맷이거나 텍스트 추출 실패(OCR/hwp/pdflayer 등 backlog).",
+                                "note": "지원하지 않는 포맷이거나 텍스트 추출 실패. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp",
                             },
                         )
                         return

@@ -23,6 +23,10 @@ from runtime.review.priority_map import infer_contract_profile
 from runtime.review.final_review_context import build_final_review_context
 from runtime.review.user_focus import objective_codes_to_clause_topics
 from runtime.services.query_service import ReviewInput, RuleQueryService
+from runtime.review.risk_scenarios import detect_risk_scenarios
+from runtime.review.strategic_inquiry import generate_strategic_inquiry
+from runtime.review.clause_conflicts import detect_clause_conflicts
+from runtime.review.executive_summary import generate_executive_summary
 
 
 @dataclass(frozen=True)
@@ -980,18 +984,29 @@ _LEVEL1_FINANCIAL_KW = re.compile(
     r"납기\s*지연|일정\s*지연|지체상금|책임\s*제한.{0,15}총액|배상\s*한도",
     re.IGNORECASE,
 )
+# [STEP 3] LEVEL 1 추가 — 신체사고·PL·중대재해·리콜·생산중단·대규모클레임·제3자손해
+_LEVEL1_PL_SAFETY_KW = re.compile(
+    r"신체\s*사고|인명\s*피해|사망|부상|상해|제조물\s*책임|PL\s*보험|PL법|"
+    r"중대재해|중대\s*산업사고|리콜|생산\s*중단|가동\s*중단|대규모\s*클레임|"
+    r"제3자\s*손해|제3자\s*피해|소비자\s*피해|사용자\s*사고|제조물\s*결함",
+    re.IGNORECASE,
+)
 _LEVEL2_RIGHTS_KW = re.compile(
     r"지식재산|저작권|특허|상표|IP\b|사용권|재사용|비밀유지|기밀|영업비밀",
     re.IGNORECASE,
 )
 _LEVEL1_TOPICS = frozenset({"payment_settlement", "termination", "cost_burden", "other"})
+_LEVEL1_SAFETY_TOPICS = frozenset({"safety", "safety_compliance", "damage"})
 _LEVEL2_TOPICS = frozenset({"confidentiality", "ip_ownership", "personal_data"})
 
 
 def _classify_financial_risk_level(cr: dict[str, Any]) -> int:
-    """LEVEL 1=실제 금전손실, 2=권리확보, 3=일반법률문구"""
+    """[STEP 3] LEVEL 1=실제 회사 손실(신체사고·PL·중대재해 포함), 2=권리확보, 3=일반법률문구"""
     topic = str(cr.get("clause_topic") or "")
     combined = (str(cr.get("clause_title") or "") + " " + str(cr.get("original_text") or ""))[:800]
+    # LEVEL 1: 신체사고·PL·중대재해·리콜·생산중단 등 실제 회사 손실
+    if topic in _LEVEL1_SAFETY_TOPICS or _LEVEL1_PL_SAFETY_KW.search(combined):
+        return 1
     if topic in _LEVEL1_TOPICS or _LEVEL1_FINANCIAL_KW.search(combined):
         return 1
     if topic in _LEVEL2_TOPICS or _LEVEL2_RIGHTS_KW.search(combined):
@@ -1389,6 +1404,204 @@ def _apply_project_installation_checklist(
 
 
 # =============================================================================
+# [STEP 4] Industry-Specific Legal Reasoning — requirement.md > STEP 4
+# 가구·설비·제조물 계약 12개 항목 자동 점검
+# =============================================================================
+
+_INDUSTRY_SPECIFIC_ITEMS: list[dict[str, Any]] = [
+    {
+        "id": "isr_pl_defect_liability",
+        "name": "제조물 결함 책임 귀속",
+        "present": re.compile(r"제조물\s*(결함|책임)|결함\s*책임|PL\s*책임", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "제조물 결함으로 인한 손해에 대한 책임 귀속 조항을 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — 제조물 결함 책임]\n"
+            "공급자는 제공한 물품의 제조상·설계상·표시상 결함으로 인한 손해에 대해 책임을 지며, "
+            "제조물책임법 제3조에 따른 입증 책임은 피해자에게 있음을 명시한다."
+        ),
+    },
+    {
+        "id": "isr_installation_defect",
+        "name": "설치 하자 책임 귀속",
+        "present": re.compile(r"설치\s*하자|설치\s*결함|설치\s*불량|시공\s*하자", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "설치 하자로 인한 손해에 대한 책임 귀속 조항을 추가하세요.",
+        "rewrite": (
+            "[추가 권고 — 설치 하자 책임]\n"
+            "설치 과정의 하자(오설치·부실 시공)로 발생한 손해는 공급자(설치자)가 책임지며, "
+            "발주자의 지시나 제공 자재의 결함으로 인한 경우에는 발주자가 책임을 부담한다."
+        ),
+    },
+    {
+        "id": "isr_user_safety",
+        "name": "사용자 안전 보호 조항",
+        "present": re.compile(r"사용자\s*안전|안전\s*보호|이용자\s*안전|소비자\s*안전", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "사용자 안전 보호를 위한 조항을 추가하세요.",
+        "rewrite": (
+            "[추가 권고 — 사용자 안전 보호]\n"
+            "공급자는 제품 사용 중 예상 가능한 위험에 대해 적절한 경고 표시 및 안전 조치를 제공하여야 하며, "
+            "사용자의 안전을 위해 합리적인 주의 의무를 이행한다."
+        ),
+    },
+    {
+        "id": "isr_manual_warning",
+        "name": "경고문구·사용자 매뉴얼 제공 의무",
+        "present": re.compile(r"사용설명서|매뉴얼|경고문|안내서|취급설명|주의사항", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "경고문구 및 사용자 매뉴얼 제공 의무를 계약서에 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — 경고문구·매뉴얼 제공]\n"
+            "공급자는 납품 시 한국어로 작성된 사용설명서, 경고문구, 안전 주의사항을 제공하며, "
+            "제조물책임법상 표시상 결함 방어를 위한 적절한 경고 표시를 부착한다."
+        ),
+    },
+    {
+        "id": "isr_safety_certification",
+        "name": "안전 인증 완료 보증",
+        "present": re.compile(r"안전\s*인증|KC\s*인증|CE\s*인증|UL\s*인증|형식\s*승인|안전\s*검사", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "관련 법령에 따른 안전 인증 완료 보증 조항을 추가하세요.",
+        "rewrite": (
+            "[추가 권고 — 안전 인증 보증]\n"
+            "공급자는 납품 물품이 관련 법령에 따른 안전 인증(KC, CE 등)을 완료하였음을 보증하며, "
+            "인증 관련 서류를 납품 시 제공한다."
+        ),
+    },
+    {
+        "id": "isr_recall_procedure",
+        "name": "리콜 절차 및 비용 부담",
+        "present": re.compile(r"리콜|결함\s*회수|제품\s*회수|자발적\s*회수", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "결함 발견 시 리콜 절차 및 비용 부담 기준을 계약서에 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — 리콜 절차]\n"
+            "공급자 귀책의 결함 발견 시, 공급자는 리콜 또는 교환·수리 조치를 취하며, "
+            "관련 비용(회수·수리·재납품·고객 통지 비용)은 공급자가 부담한다."
+        ),
+    },
+    {
+        "id": "isr_pl_insurance",
+        "name": "PL보험 가입 의무",
+        "present": re.compile(r"PL\s*보험|제조물\s*책임\s*보험|배상\s*책임\s*보험|생산물\s*배상", re.IGNORECASE),
+        "risk": "MEDIUM",
+        "direction": "제조물 책임보험(PL보험) 가입 의무 및 최소 보상 한도를 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — PL보험 가입]\n"
+            "공급자는 계약 기간 중 제조물 책임보험(PL보험)을 유지하며, "
+            "요청 시 보험증서를 제출한다."
+        ),
+    },
+    {
+        "id": "isr_third_party_damage",
+        "name": "제3자 손해 배상 책임",
+        "present": re.compile(r"제3자\s*손해|제3자\s*피해|제3자\s*배상|이용자\s*손해", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "공급 물품으로 인한 제3자 손해에 대한 배상 책임 조항을 추가하세요.",
+        "rewrite": (
+            "[추가 권고 — 제3자 손해 배상]\n"
+            "공급자의 귀책으로 공급 물품이 제3자에게 신체적·재산적 손해를 야기한 경우, "
+            "공급자는 해당 손해를 배상할 책임을 진다."
+        ),
+    },
+    {
+        "id": "isr_maintenance",
+        "name": "유지보수 및 정기점검 의무",
+        "present": re.compile(r"유지보수|정기\s*점검|A/S|AS\b|사후\s*관리|예방\s*정비", re.IGNORECASE),
+        "risk": "MEDIUM",
+        "direction": "납품 후 유지보수 및 정기 점검 의무를 계약서에 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — 유지보수·정기점검]\n"
+            "공급자는 납품 후 보증 기간 내 무상 유지보수를 제공하며, "
+            "연 [○]회 이상의 정기 점검을 실시한다."
+        ),
+    },
+    {
+        "id": "isr_defect_sla",
+        "name": "하자 대응 SLA",
+        "present": re.compile(r"SLA|하자\s*대응\s*시간|응답\s*시간|복구\s*시간|장애\s*대응", re.IGNORECASE),
+        "risk": "MEDIUM",
+        "direction": "하자·장애 발생 시 응답 및 복구 목표 시간(SLA)을 계약서에 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — 하자 대응 SLA]\n"
+            "공급자는 하자 신고 후 [○]시간 이내 현장 도착 또는 원격 지원을 개시하고, "
+            "[○]시간 이내 복구를 목표로 한다."
+        ),
+    },
+    {
+        "id": "isr_accident_reporting",
+        "name": "사고 발생 즉시 보고 의무",
+        "present": re.compile(r"사고.{0,15}보고|사고.{0,15}통보|즉시.{0,10}보고|즉시.{0,10}통지", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "제품 사용 중 사고 발생 시 즉시 보고 의무를 계약서에 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — 사고 발생 보고 의무]\n"
+            "공급자는 납품 물품과 관련한 사고 또는 결함 정보를 인지한 즉시 발주자에게 통보하고, "
+            "재발 방지 계획을 [○]일 이내에 서면으로 제출한다."
+        ),
+    },
+    {
+        "id": "isr_defect_correction",
+        "name": "결함 발견 시 시정 조치 의무",
+        "present": re.compile(r"결함\s*시정|개선\s*조치|시정\s*명령|결함\s*조치|불량\s*시정", re.IGNORECASE),
+        "risk": "HIGH",
+        "direction": "결함 발견 시 시정 조치 의무 및 기한을 계약서에 명시하세요.",
+        "rewrite": (
+            "[추가 권고 — 결함 시정 의무]\n"
+            "공급자는 결함 발견 시 발주자에게 즉시 통보하고, "
+            "[○]일 이내에 교환·수리·개선 등 시정 조치를 완료하여야 한다."
+        ),
+    },
+]
+
+
+def _apply_industry_specific_review(
+    clause_results: list[dict[str, Any]],
+    full_text: str,
+    contract_class: str,
+    contract_nature: str,
+) -> None:
+    """[STEP 4] 가구·설비·제조물 계약 12개 항목 자동 점검.
+    project_installation 또는 제조물공급 계약에서 누락 항목을 탐지한다.
+    """
+    if contract_class != "project_installation" and contract_nature != "제조물공급":
+        return
+    text = str(full_text or "")
+
+    for item in _INDUSTRY_SPECIFIC_ITEMS:
+        if any(str(cr.get("clause_id") or "") == item["id"] for cr in clause_results if isinstance(cr, dict)):
+            continue
+        if item["present"].search(text):
+            continue
+        risk = item["risk"]
+        clause_results.append({
+            "clause_id": item["id"],
+            "article_number": None,
+            "clause_title": f"[제조물검토] {item['name']}",
+            "original_text": "",
+            "suggested_rewrite": None,
+            "clause_topic": "damage" if risk == "HIGH" else "other",
+            "risk_tier": risk,
+            "must_fix": risk == "HIGH",
+            "review_tier": "MUST" if risk == "HIGH" else "SUGGEST",
+            "high_risk": risk == "HIGH",
+            "approval_required": risk == "HIGH",
+            "rewrite_reason": item["direction"],
+            "suggested_direction": [item["direction"]],
+            "recommendation_text": item["rewrite"],
+            "is_checklist_item": True,
+            "display_kind": "guidance",
+            "has_rewrite_change": False,
+            "user_focus_hit": False,
+            "factual_hit": False,
+            "dedup_suppressed": False,
+            "keep_as_is": False,
+            "_priority_level": 1 if risk == "HIGH" else 2,
+        })
+
+
+# =============================================================================
 # [No Inline Rewrite Policy] — requirement.md > Output Format Policy
 # =============================================================================
 
@@ -1501,20 +1714,167 @@ _LIABILITY_CAP_EXCEPTION_REWRITE = (
 )
 
 
-def _classify_contract_type(contract_type: str, text: str, filename: str | None) -> str:
-    """계약서 제목·목적 기반 엄격한 유형 분류.
+# ─────────────────────────────────────────────────────────────────────────────
+# [STEP 1] Contract Type Reasoning Engine — requirement.md > STEP 1
+# 경제적 실질 9개 질문 기반 계약 유형 확정 (키워드 단독 분류 금지)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SUBSTANCE_TANGIBLE_KW = re.compile(
+    r"물품|제품|가구|설비|장비|기계|자재|부품|완제품|완성품|납품|공급", re.IGNORECASE
+)
+_SUBSTANCE_INSTALL_KW = re.compile(
+    r"설치|시운전|시공|현장\s*작업|공장|생산\s*라인|commissioning|setup|installation", re.IGNORECASE
+)
+_SUBSTANCE_ACCIDENT_KW = re.compile(
+    r"사고|손상|파손|고장|결함|폭발|화재|감전|낙하|끼임|안전|위험|PL|제조물", re.IGNORECASE
+)
+_SUBSTANCE_OPS_KW = re.compile(
+    r"운영\s*인력|KPI|상시\s*업무|운영\s*대행|위탁\s*운영|매장\s*운영|운영\s*용역", re.IGNORECASE
+)
+_SUBSTANCE_CONTINUOUS_KW = re.compile(
+    r"월\s*단위|월정\s*요금|구독|SaaS|지속적\s*서비스|상시\s*지원|운영\s*기간", re.IGNORECASE
+)
+_SUBSTANCE_PRODUCT_SYS_KW = re.compile(
+    r"제조물|설비|시스템|자동화|생산\s*라인|Smart\s*Factory|SmartFactory", re.IGNORECASE
+)
+_SUBSTANCE_THIRD_PARTY_KW = re.compile(
+    r"제3자|제3인|사용자\s*피해|고객\s*피해|이용자\s*피해|타인\s*손해", re.IGNORECASE
+)
+
+# 계약 실질(법적 성격) 분류 — 적용 법령 결정에 사용
+_NATURE_PRODUCT_SUPPLY_KW = re.compile(
+    r"제조물|물품\s*(공급|납품|판매)|설비\s*(공급|납품)|장비\s*(공급|납품)", re.IGNORECASE
+)
+_NATURE_CONSTRUCTION_KW = re.compile(
+    r"도급|공사|건설|시공|인테리어|리모델링", re.IGNORECASE
+)
+
+
+def _classify_contract_nature(contract_type: str, text: str) -> str:
+    """[Contextual Awareness] 계약의 법적 실질을 선언한다.
+    Returns: "제조물공급" | "도급" | "매매"
+    적용 지배 법령 결정에 사용.
+    """
+    haystack = (contract_type or "") + " " + (text or "")[:600]
+    if _NATURE_PRODUCT_SUPPLY_KW.search(haystack) and (
+        _SUBSTANCE_INSTALL_KW.search(haystack) or _SUBSTANCE_ACCIDENT_KW.search(haystack)
+    ):
+        return "제조물공급"
+    if _NATURE_CONSTRUCTION_KW.search(haystack):
+        return "도급"
+    if _SUBSTANCE_TANGIBLE_KW.search(haystack):
+        return "매매"
+    return "도급"
+
+
+def _classify_contract_type_by_substance(
+    contract_type: str,
+    text: str,
+    filename: str | None,
+) -> str:
+    """[STEP 1 + EMERGENCY PATCH 2] 4단계 계약 유형 확정 엔진.
+    Stage 1: 계약 목적 (유형물/무형/인력/자문/시스템/설치공사/유지보수)
+    Stage 2: 핵심 의무 (제조납품/설치/인력투입/자문제공/시스템개발)
+    Stage 3: 대가 구조 (제품대금/운영비/인건비/프로젝트비/라이선스)
+    Stage 4: 운영 개입 여부 (7개 조건 ALL 충족 시에만 ops_outsourcing)
     Returns: "advisory" | "rental" | "construction" | "project_installation" | "general"
     """
-    haystack = (contract_type or "") + " " + (filename or "") + " " + (text or "")[:300]
+    haystack = (contract_type or "") + " " + (filename or "") + " " + (text or "")[:600]
+
+    # ── Stage 1: 계약 목적 ───────────────────────────────────────────────────
+    is_tangible = bool(_SUBSTANCE_TANGIBLE_KW.search(haystack))
+    has_installation = bool(_SUBSTANCE_INSTALL_KW.search(haystack))
+    accident_possible = bool(_SUBSTANCE_ACCIDENT_KW.search(haystack))
+    is_product_system = bool(_SUBSTANCE_PRODUCT_SYS_KW.search(haystack))
+    is_advisory_type = bool(_ADVISORY_CONTRACT_KW2.search(haystack))
+    is_rental_type = bool(_RENTAL_CONTRACT_KW2.search(haystack))
+    is_construction_type = bool(_CONSTRUCTION_CONTRACT_KW.search(haystack))
+
+    # ── Stage 2: 핵심 의무 판단 ─────────────────────────────────────────────
+    # 물품 + 설치 + 사고 가능 → 설치형 제조물 공급
+    if (is_tangible or is_product_system) and has_installation and accident_possible:
+        return "project_installation"
+    # project_installation KW fallback
     if _PROJECT_INSTALL_KW.search(haystack):
         return "project_installation"
-    if _ADVISORY_CONTRACT_KW2.search(haystack):
+
+    # ── Stage 3: 대가 구조 판단 ─────────────────────────────────────────────
+    # 월정 요금/구독/지속적 서비스: advisory 또는 rental 후보
+    is_continuous = bool(_SUBSTANCE_CONTINUOUS_KW.search(haystack))
+
+    # ── Stage 4: 운영 개입 여부 — ops_outsourcing은 7개 조건 ALL 필요 ──────────
+    # [PATCH 2] 조건이 하나라도 빠지면 ops_outsourcing 분류 금지
+    _OPS_COND_KW = [
+        re.compile(r"상시\s*운영\s*인력|운영\s*인력\s*상시", re.IGNORECASE),
+        re.compile(r"\bKPI\b|성과\s*지표", re.IGNORECASE),
+        re.compile(r"\bSLA\b|서비스\s*수준\s*협약", re.IGNORECASE),
+        re.compile(r"운영\s*센터|운영\s*본부", re.IGNORECASE),
+        re.compile(r"지속적\s*운영|상시\s*운영|월\s*단위\s*운영", re.IGNORECASE),
+        re.compile(r"고객\s*응대|고객\s*서비스\s*인력", re.IGNORECASE),
+        re.compile(r"시설\s*운영|시설\s*관리|매장\s*운영", re.IGNORECASE),
+    ]
+    ops_cond_count = sum(1 for kw in _OPS_COND_KW if kw.search(haystack))
+    is_ops_outsourcing = (ops_cond_count >= 5)  # 5개 이상 충족 시 ops 확정
+
+    if is_ops_outsourcing:
+        if is_advisory_type:
+            return "advisory"
+        return "general"  # ops_outsourcing → general 매핑 유지
+
+    # 기존 분류 fallback
+    if is_advisory_type:
         return "advisory"
-    if _RENTAL_CONTRACT_KW2.search(haystack):
+    if is_rental_type:
         return "rental"
-    if _CONSTRUCTION_CONTRACT_KW.search(haystack):
+    if is_construction_type:
         return "construction"
+    # 유형물이 있지만 설치나 사고가 없는 경우 → general (단순 납품)
+    if is_tangible and not has_installation:
+        return "general"
     return "general"
+
+
+def _classify_contract_type(contract_type: str, text: str, filename: str | None) -> str:
+    """계약 유형 확정 — 경제적 실질 우선, 키워드 fallback.
+    Returns: "advisory" | "rental" | "construction" | "project_installation" | "general"
+    """
+    return _classify_contract_type_by_substance(contract_type, text, filename)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [Contextual Awareness] Logic Hard-Lock — requirement.md > Contextual Awareness
+# 제조물공급 계약 확정 시 advisory/ops_outsourcing 로직을 완전 차단한다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _apply_contract_nature_lock(
+    clause_results: list[dict[str, Any]],
+    contract_nature: str,
+) -> None:
+    """contract_nature == '제조물공급' 시 용역/인력 관련 수정문안을 Hard-Block한다."""
+    if contract_nature != "제조물공급":
+        return
+    _ADVISORY_CONTAMINATION_KW = re.compile(
+        r"용역비|자문료|수탁자|위탁자|산출물|deliverable|SOW|결과물\s*납품"
+        r"|지식재산권\s*귀속|저작권\s*귀속|IP\s*귀속|인력\s*배치|KPI|운영\s*인력",
+        re.IGNORECASE,
+    )
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("is_checklist_item")):
+            continue
+        sr = str(cr.get("suggested_rewrite") or "")
+        rr = str(cr.get("rewrite_reason") or "")
+        if _ADVISORY_CONTAMINATION_KW.search(sr + " " + rr):
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["rewrite_reason"] = "제조물공급 계약 — 용역/인력 관련 로직 Hard-Block 적용"
+            cr["guardrail_block"] = {"filter": "contract_nature_lock", "nature": contract_nature}
+            cr["risk_tier"] = "LOW"
+            cr["must_fix"] = False
+            cr["approval_required"] = False
+            cr["high_risk"] = False
+            cr["review_tier"] = "NOTE"
 
 
 def _law_contract_type_for_search(contract_class: str, raw_contract_type: str) -> str:
@@ -1789,6 +2149,520 @@ def _apply_zero_hallucination_guardrail(
 
 
 # =============================================================================
+# [FINAL GOVERNING RULE] Relevance Validation Gate
+# requirement.md > Relevance Validation Gate 참조
+# 5개 조건 중 3개 이상 충족해야 출력 유지 (2개 이상 불충족 시 제거)
+# =============================================================================
+
+_BOILERPLATE_DETECT_KW = re.compile(
+    r"명확히\s*할\s*필요가\s*있(습니다|다)|검토가\s*필요(합니다|하다)|"
+    r"추가적인\s*검토가\s*필요|관련\s*법령을?\s*(검토|확인)|"
+    r"일반적으로|통상적으로|법적\s*검토가\s*필요|고려해\s*볼\s*필요|"
+    r"적절한\s*조치를?\s*취할|주의가\s*필요합니다",
+    re.IGNORECASE,
+)
+
+_TOPIC_CONTRACT_COMPAT: dict[str, frozenset[str]] = {
+    "advisory": frozenset({
+        "ip_ownership", "confidentiality", "payment_settlement",
+        "termination", "dispute", "personal_data", "damage",
+    }),
+    "project_installation": frozenset({
+        "safety", "safety_compliance", "damage", "payment_settlement",
+        "termination", "personal_data", "cost_burden",
+    }),
+    "rental": frozenset({
+        "payment_settlement", "termination", "personal_data", "damage",
+        "cost_burden",
+    }),
+    "construction": frozenset({
+        "payment_settlement", "safety", "termination", "damage",
+        "cost_burden",
+    }),
+    "general": frozenset({
+        "payment_settlement", "termination", "damage", "cost_burden",
+        "confidentiality", "ip_ownership", "personal_data", "safety",
+        "safety_compliance", "dealer_unfair",
+    }),
+}
+
+
+def _apply_relevance_validation_gate(
+    clause_results: list[dict[str, Any]],
+    contract_class: str,
+    contract_nature: str,
+) -> None:
+    """[FINAL GOVERNING RULE] Relevance Validation Gate.
+    5개 조건 중 3개 이상 충족 시 수정안 유지, 미달 시 제거.
+    체크리스트·dedup_suppressed·keep_as_is 항목은 대상 제외.
+    """
+    compat = _TOPIC_CONTRACT_COMPAT.get(contract_class, frozenset())
+
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        if bool(cr.get("is_checklist_item")):
+            continue
+
+        sr = str(cr.get("suggested_rewrite") or "")
+        if not sr.strip():
+            continue
+
+        rr = str(cr.get("rewrite_reason") or "")
+        tier = str(cr.get("risk_tier") or "").upper()
+        topic = str(cr.get("clause_topic") or "")
+        score = 0
+
+        # 조건 1: 이 리스크가 실제 이 계약에서 발생 가능한가?
+        if not compat or topic in compat or tier == "HIGH" or bool(cr.get("user_focus_hit")):
+            score += 1
+
+        # 조건 2: 전문 변호사가 실제 수정 요구할 수준인가?
+        if tier in ("HIGH", "MEDIUM") and bool(cr.get("has_rewrite_change")):
+            score += 1
+        elif bool(cr.get("approval_required")) or bool(cr.get("must_fix")):
+            score += 1
+
+        # 조건 3: 계약 유형과 논리적으로 일치하는가?
+        if not compat or topic in compat or not topic:
+            score += 1
+
+        # 조건 4: 사용자가 중요하다고 한 이슈와 관련 있는가?
+        if bool(cr.get("user_focus_hit")) or bool(cr.get("factual_hit")) or bool(cr.get("approval_required")):
+            score += 1
+
+        # 조건 5: generic boilerplate가 아닌가?
+        if not _BOILERPLATE_DETECT_KW.search(sr + " " + rr):
+            score += 1
+
+        if score < 3:
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["risk_tier"] = "MEDIUM" if tier == "HIGH" else "LOW"
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
+            cr["approval_required"] = False
+            cr["high_risk"] = False
+            cr["has_rewrite_change"] = False
+            if not cr.get("guardrail_block"):
+                cr["guardrail_block"] = {
+                    "filter": "relevance_validation_gate",
+                    "score": score,
+                    "topic": topic,
+                    "tier": tier,
+                }
+
+
+# =============================================================================
+# [CRITICAL FIX] Do Not Harm Our Side Gate — 당사 불이익 방지 최종 검증 게이트
+# requirement.md > [FINAL VALIDATION GATE] Do Not Harm Our Side
+# =============================================================================
+
+# 공급자에게 과도한 의무를 부과하는 표현 감지 패턴
+_SUPPLIER_OVERBURDEN_KW = re.compile(
+    r"포괄적\s*(안전\s*)?보증|무제한\s*(리콜|하자|책임|배상|부담)"
+    r"|즉시\s*(리콜|회수|배상|부담)"
+    r"|전액\s*(부담|배상|비용)"
+    r"|일방적으로|PL보험\s*(가입\s*)?(의무|필수)"
+    r"|반드시\s*(보험|인증|리콜|배상)"
+    r"|자동\s*(의무|부담|책임)",
+    re.IGNORECASE,
+)
+
+# 공급자 방어 필수 문구가 없는 경우 감지 (귀책사유·법령범위·예외사유)
+_SUPPLIER_GUARDRAIL_MISSING = re.compile(
+    r"귀책\s*사유|법령상\s*(요구|범위|규정)|관련\s*법령|직접\s*손해|합리적\s*범위|면책",
+    re.IGNORECASE,
+)
+
+# 자동 대체 쌍 (원래 표현 패턴 → 방어 문구)
+_SUPPLIER_AUTO_REWRITE: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"포괄적?\s*(안전\s*)?보증", re.IGNORECASE), "관련 법령상 요구되는 범위 내에서의 보증"),
+    (re.compile(r"무제한\s*(리콜\s*)?(비용\s*)?부담", re.IGNORECASE), "법령상 요구되거나 중대한 결함이 확인된 경우의 리콜 비용 부담"),
+    (re.compile(r"즉시\s*리콜", re.IGNORECASE), "법령상 요구되거나 중대한 결함이 확인된 경우의 리콜 조치"),
+    (re.compile(r"전액\s*(부담|배상)", re.IGNORECASE), "합리적 범위의 직접손해에 한하여 부담"),
+    (re.compile(r"무조건\s*(책임|배상)", re.IGNORECASE), "공급자의 귀책사유가 있는 경우에 한하여 책임"),
+    (re.compile(r"PL보험\s*(가입\s*)?(의무|필수)", re.IGNORECASE), "PL보험 가입은 별도 협의 또는 요청 시 검토"),
+    (re.compile(r"즉시\s*시정\s*조치를?\s*완료", re.IGNORECASE), "합리적인 기간 내 시정 조치 완료"),
+    (re.compile(r"안전\s*인증\s*완료를?\s*(보증|확약)", re.IGNORECASE), "해당 법령에서 요구하는 인증을 취득한 범위 내에서 확인"),
+]
+
+# =============================================================================
+# [STEP 2] Buyer-Favorable Manufacturing Template Blacklist
+# requirement.md > [STEP 2] Delete Buyer-Favorable Manufacturing Templates
+# =============================================================================
+_BUYER_FAVORABLE_TEMPLATES: list[re.Pattern[str]] = [
+    re.compile(r"안전\s*인증\s*완료를?\s*(보증|확약)", re.IGNORECASE),
+    re.compile(r"공급자가?\s*(리콜|회수)\s*비용을?\s*(전액\s*)?부담", re.IGNORECASE),
+    re.compile(r"공급자는?\s*PL\s*보험에?\s*(가입|체결)(하여야|해야|해야\s*한다)", re.IGNORECASE),
+    re.compile(r"공급자는?\s*제3자\s*손해를?\s*(전부\s*)?배상(한다|하여야|해야)", re.IGNORECASE),
+    re.compile(r"공급자는?\s*결함\s*발견\s*시\s*즉시\s*시정\s*조치를?\s*완료(하여야|해야|한다)", re.IGNORECASE),
+]
+
+# =============================================================================
+# [STEP 3] Supplier-Protective Product Contract Checklist
+# requirement.md > [STEP 3] Supplier-Protective Product Contract Logic
+# 우리 회사 = 공급자이고 물품공급계약일 때 누락된 보호 조항 자동 탐지·주입
+# =============================================================================
+_SUPPLIER_HIGH_CHECKLIST: list[dict[str, Any]] = [
+    {
+        "id": "sppc_inspection_standard",
+        "name": "검수 기준 및 검수 완료 간주",
+        "present": re.compile(r"검수\s*기준|합격\s*판정|검수\s*완료\s*간주|검수\s*기간.{0,20}이내", re.IGNORECASE),
+        "direction": "검수 기준·검수 기간·검수 완료 간주 조항을 계약서에 명시하여 무기한 검수 클레임을 차단하세요.",
+        "rewrite": "구매자는 물품 수령 후 [ ]영업일 이내에 검수를 완료하여야 한다. 상기 기간 내에 서면으로 이의를 제기하지 아니한 경우, 검수가 완료된 것으로 간주한다.",
+        "clause_topic": "payment_settlement",
+    },
+    {
+        "id": "sppc_defect_notice",
+        "name": "하자 통지 기한 및 절차",
+        "present": re.compile(r"하자\s*(통지|신고).{0,30}(기한|기간|이내)|발견.{0,15}일\s*이내.{0,15}통지", re.IGNORECASE),
+        "direction": "하자 통지 기한(발견일로부터 7일 이내 서면 통지)과 통지 해태 시 클레임 제한 조항을 추가하세요.",
+        "rewrite": "구매자는 하자를 발견한 경우 발견일로부터 7일 이내에 구체적 내용을 기재하여 서면으로 공급자에게 통지하여야 한다. 이를 해태한 경우 해당 하자에 관한 클레임을 제기할 수 없다.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "sppc_return_limit",
+        "name": "반품 제한 및 반품 조건",
+        "present": re.compile(r"반품\s*(제한|불가|조건|요건)|주문제작.{0,20}반품", re.IGNORECASE),
+        "direction": "주문제작·설치완료 제품의 반품을 제한하고, 반품 요건(검수 불합격 + 서면 통지 필수)을 명시하세요.",
+        "rewrite": "주문제작 또는 설치가 완료된 물품은 원칙적으로 반품이 불가하다. 반품이 허용되는 경우, 구매자는 물품 수령일로부터 [ ]일 이내에 구체적 하자 내용을 기재한 서면 반품 요청서를 공급자에게 제출하여야 한다.",
+        "clause_topic": "termination",
+    },
+    {
+        "id": "sppc_payment_retention",
+        "name": "대금 미지급 시 공급자 이행유보권",
+        "present": re.compile(r"이행\s*유보|대금\s*(미지급|지연).{0,20}이행\s*정지|지급\s*정지.{0,20}이행|유치권", re.IGNORECASE),
+        "direction": "대금 미지급 시 공급자가 이행을 유보할 수 있는 권리(이행유보권)를 계약서에 명시하세요.",
+        "rewrite": "구매자가 기한 내에 대금을 지급하지 아니하는 경우, 공급자는 대금 완납 시까지 물품 인도 또는 추가 서비스 이행을 유보할 수 있으며, 이로 인한 지연은 공급자의 귀책으로 보지 않는다.",
+        "clause_topic": "payment_settlement",
+    },
+    {
+        "id": "sppc_damage_cap",
+        "name": "손해배상 한도 및 간접손해 배제",
+        "present": re.compile(r"손해배상\s*(한도|상한|총액)|간접\s*손해.{0,15}(배제|제외|책임지지)", re.IGNORECASE),
+        "direction": "공급자의 손해배상책임을 공급대금 총액으로 한정하고, 간접손해·특별손해·일실이익을 배제하세요.",
+        "rewrite": "공급자의 손해배상책임은 해당 클레임의 원인이 된 물품의 공급대금을 한도로 하며, 특별손해, 간접손해, 결과적 손해, 일실이익에 대해서는 책임을 부담하지 아니한다. 단, 공급자의 고의 또는 중대한 과실로 인한 손해는 예외로 한다.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "sppc_misuse_exemption",
+        "name": "오사용/보관불량/임의개조 면책",
+        "present": re.compile(r"오사용|임의\s*개조.{0,20}(제외|면책|책임\s*없)|보관\s*(불량|하자).{0,20}(제외|면책)", re.IGNORECASE),
+        "direction": "구매자의 오사용·보관불량·임의개조·사용설명 위반으로 인한 하자·사고는 공급자 책임에서 명시적으로 제외하세요.",
+        "rewrite": "다음 각 호의 사유로 인한 하자·손해에 대하여 공급자는 책임을 부담하지 아니한다: ① 구매자 또는 사용자의 오사용 또는 사용설명서 위반, ② 구매자의 임의 개조·수리, ③ 구매자의 보관 불량 또는 설치환경 부적합, ④ 구매자 제공 사양·도면·지시에 기인한 결함, ⑤ 제3자 제품과의 결합으로 인한 손해.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "sppc_custom_cancel_limit",
+        "name": "주문제작·설치완료 제품 취소 제한",
+        "present": re.compile(r"주문제작.{0,20}취소\s*(제한|불가)|설치\s*완료.{0,20}취소\s*(제한|불가)", re.IGNORECASE),
+        "direction": "주문제작 또는 설치완료 단계 이후의 주문 취소를 제한하고, 취소 시 이미 발생한 비용 부담을 구매자에게 귀속하세요.",
+        "rewrite": "주문제작 공정이 개시된 이후 또는 설치가 완료된 후에는 구매자가 일방적으로 계약을 취소할 수 없다. 부득이한 취소의 경우, 구매자는 공급자가 이미 투입한 재료비·인건비·제반 비용을 부담한다.",
+        "clause_topic": "termination",
+    },
+    {
+        "id": "sppc_as_exclusion",
+        "name": "A/S 제외 사유",
+        "present": re.compile(r"A/S.{0,20}(제외|불가|해당\s*없)|AS.{0,20}(제외|불가)|무상\s*수리.{0,20}(제외|불가)", re.IGNORECASE),
+        "direction": "A/S 제외 사유(오사용·임의개조·보관불량·소모품 등)를 구체적으로 열거하여 무분별한 A/S 요청을 방어하세요.",
+        "rewrite": "다음 각 호의 경우 무상 A/S 대상에서 제외한다: ① 사용설명서를 준수하지 아니하거나 오사용으로 인한 고장, ② 구매자 또는 제3자의 임의 개조·수리로 인한 손상, ③ 정상 마모·소모품 교체, ④ 구매자의 보관 불량 또는 설치환경 부적합으로 인한 손상, ⑤ 구매자의 부주의로 인한 파손.",
+        "clause_topic": "damage",
+    },
+]
+
+_SUPPLIER_MEDIUM_CHECKLIST: list[dict[str, Any]] = [
+    {
+        "id": "sppc_spec_liability",
+        "name": "고객 제공 사양/도면 책임 귀속",
+        "present": re.compile(r"사양.{0,20}(책임|귀책)|도면.{0,20}(책임|귀책)|고객\s*제공.{0,20}(책임|귀책)", re.IGNORECASE),
+        "direction": "고객이 제공한 사양·도면·지시에 기인한 결함·손해는 공급자 책임에서 제외하는 조항을 명시하세요.",
+        "rewrite": "구매자가 제공하는 사양, 도면, 설계서 또는 지시에 따라 제작된 물품에서 발생하는 결함·손해는 공급자의 귀책으로 보지 않으며, 해당 책임은 구매자에게 귀속된다.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "sppc_install_env",
+        "name": "설치환경 미비 시 책임 제외",
+        "present": re.compile(r"설치\s*환경.{0,20}(미비|부적합|미충족).{0,20}(책임|면책|제외)", re.IGNORECASE),
+        "direction": "구매자가 설치 환경 요건을 충족하지 못하여 발생하는 손해는 공급자 책임에서 제외하는 조항을 추가하세요.",
+        "rewrite": "구매자가 공급자가 사전에 고지한 설치 환경 요건(전원, 바닥 하중, 온도·습도 등)을 충족하지 아니하여 발생하는 설비 손상·사고·성능 저하에 대하여 공급자는 책임을 부담하지 아니한다.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "sppc_buyer_delay_extension",
+        "name": "구매자 지연 시 납기 연장",
+        "present": re.compile(r"구매자.{0,20}지연.{0,20}(납기\s*연장|기간\s*연장)|발주자.{0,20}지연.{0,20}연장", re.IGNORECASE),
+        "direction": "구매자 귀책으로 인한 납기 지연 시 납기가 자동 연장되고 추가비용은 구매자가 부담하는 조항을 추가하세요.",
+        "rewrite": "구매자의 귀책사유(자재 미공급, 설치환경 미준비, 승인 지연, 정보 미제공 등)로 인한 납기 지연의 경우, 납기는 그 지연 기간만큼 자동 연장되며, 이로 인한 추가 비용은 구매자가 부담한다.",
+        "clause_topic": "cost_burden",
+    },
+    {
+        "id": "sppc_risk_transfer",
+        "name": "위험이전 시점 명확화",
+        "present": re.compile(r"위험\s*(이전|부담).{0,20}(인도|검수|시점)|인도\s*완료.{0,20}위험", re.IGNORECASE),
+        "direction": "물품 인도 완료(또는 검수 완료) 시점에 위험이 구매자에게 이전됨을 명시하세요.",
+        "rewrite": "물품에 대한 위험은 공급자가 구매자 또는 구매자가 지정한 장소에 물품을 인도(또는 설치 완료)한 시점에 구매자에게 이전된다. 인도 이후의 멸실·훼손에 대하여 공급자는 책임을 부담하지 아니한다.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "sppc_setoff_limit",
+        "name": "상계 제한 또는 상계 요건 명확화",
+        "present": re.compile(r"상계\s*(제한|요건|합의|금지)|일방적\s*상계.{0,20}금지", re.IGNORECASE),
+        "direction": "구매자의 일방적 상계를 제한하고, 상계 시 서면 합의 또는 확정 판결을 요건으로 명시하세요.",
+        "rewrite": "구매자는 공급자의 사전 서면 동의 없이 공급대금 채무와 다른 채권을 일방적으로 상계할 수 없다. 상계는 법원의 확정 판결 또는 당사자 간 서면 합의에 의해서만 허용된다.",
+        "clause_topic": "payment_settlement",
+    },
+]
+
+
+def _apply_supplier_product_checklist(
+    clause_results: list[dict[str, Any]],
+    full_text: str,
+    contract_class: str,
+    our_role: str,
+    review_posture: str,
+) -> None:
+    """[STEP 3] Supplier-Protective Product Contract Checklist.
+    우리 회사 = 공급자이고 물품공급 계약일 때 누락된 보호 조항을 자동 탐지하여
+    HIGH/MEDIUM 수정안을 주입한다.
+    """
+    _our_role = str(our_role or "").lower()
+    _is_supplier = _our_role in ("supplier", "seller", "rental_provider", "contractor")
+    if not _is_supplier:
+        return
+    if review_posture != "seller_favorable":
+        return
+    is_product_supply = contract_class in (
+        "general", "project_installation",
+        "물품공급", "제조물공급", "납품", "구매", "설치포함공급", "판매", "B2B공급",
+    ) or contract_class not in ("advisory", "ops_outsourcing")
+
+    if not is_product_supply:
+        return
+
+    text = str(full_text or "")
+
+    def _add_item(item: dict[str, Any], risk: str) -> None:
+        if item["present"].search(text):
+            return
+        if any(str(cr.get("clause_id") or "") == item["id"] for cr in clause_results if isinstance(cr, dict)):
+            return
+        clause_results.append({
+            "clause_id": item["id"],
+            "article_number": None,
+            "clause_title": f"[공급자 보호] {item['name']}",
+            "original_text": "",
+            "suggested_rewrite": None,
+            "clause_topic": item.get("clause_topic", "damage"),
+            "risk_tier": risk,
+            "must_fix": risk == "HIGH",
+            "review_tier": "MUST" if risk == "HIGH" else "SUGGEST",
+            "high_risk": risk == "HIGH",
+            "approval_required": risk == "HIGH",
+            "rewrite_reason": item["direction"],
+            "suggested_direction": [item["direction"]],
+            "recommendation_text": item["rewrite"],
+            "is_checklist_item": True,
+            "display_kind": "guidance",
+            "has_rewrite_change": False,
+            "user_focus_hit": False,
+            "factual_hit": False,
+            "dedup_suppressed": False,
+            "keep_as_is": False,
+            "_priority_level": 1 if risk == "HIGH" else 2,
+        })
+
+    for item in _SUPPLIER_HIGH_CHECKLIST:
+        _add_item(item, "HIGH")
+    for item in _SUPPLIER_MEDIUM_CHECKLIST:
+        _add_item(item, "MEDIUM")
+
+
+_SUPPLIER_DEFENSE_KW = re.compile(
+    r"귀책|면책|한정|제외|예외|구상|방어|보호|한도|합리적\s*기간|서면\s*(통지|합의)|이의\s*제기",
+    re.IGNORECASE,
+)
+
+_SUPPLIER_UNFAVORABLE_CONFIRM = re.compile(
+    r"공급자는?\s*(보증|확약|책임진다|부담한다|이행하여야|이행해야|가입하여야|가입해야)",
+    re.IGNORECASE,
+)
+
+_BUYER_FAVORABLE_KW = re.compile(
+    r"구매자에게\s*(추가|새로운|더\s*많은)\s*(권리|보호|혜택)"
+    r"|공급자.{0,30}(즉시|전액|무조건|포괄적)(으로)?\s*(이행|배상|보증|부담)",
+    re.IGNORECASE,
+)
+
+
+def _apply_do_not_harm_our_side_gate(
+    clause_results: list[dict[str, Any]],
+    our_role: str,
+    review_posture: str,
+) -> None:
+    """[CRITICAL FIX + STEP 2 + FINAL VALIDATION] Do Not Harm Our Side Gate.
+    우리 회사 = 공급자인 경우:
+    - STEP 2: 구매자 유리 템플릿 블랙리스트 체크 후 즉시 폐기/대체
+    - FINAL VALIDATION: 5개 항목 체크, 2개 이상 YES → 폐기 또는 방어 문구로 대체
+    """
+    _our_role = str(our_role or "").lower()
+    _is_supplier = _our_role in ("supplier", "seller", "rental_provider", "contractor")
+    if review_posture != "seller_favorable" and not _is_supplier:
+        return
+
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        if bool(cr.get("is_checklist_item")):
+            continue
+
+        sr = str(cr.get("suggested_rewrite") or "")
+        if not sr.strip():
+            continue
+
+        rr = str(cr.get("rewrite_reason") or "")
+
+        # ── [STEP 2] 구매자 유리 템플릿 블랙리스트 즉시 차단 ─────────────────
+        blacklisted = any(pat.search(sr) for pat in _BUYER_FAVORABLE_TEMPLATES)
+        if blacklisted:
+            patched = sr
+            for pattern, replacement in _SUPPLIER_AUTO_REWRITE:
+                patched = pattern.sub(replacement, patched)
+            if patched != sr:
+                cr["suggested_rewrite"] = patched
+                cr.setdefault("guardrail_block", {})["step2_blacklist"] = "auto_rewrite"
+            else:
+                cr["suggested_rewrite"] = None
+                cr["changed_segments"] = []
+                cr["has_rewrite_change"] = False
+                cr.setdefault("guardrail_block", {})["step2_blacklist"] = "discarded"
+            continue
+
+        # ── [FINAL VALIDATION] 5개 항목 체크 (YES = 문제) ───────────────────
+        harm_score = 0
+
+        # 1. 이 문구가 우리 회사의 책임을 새로 늘리는가?
+        if _SUPPLIER_OVERBURDEN_KW.search(sr):
+            harm_score += 1
+
+        # 2. 이 문구가 법령상 필수 수준을 넘는가?
+        if _SUPPLIER_OVERBURDEN_KW.search(sr) and not _SUPPLIER_GUARDRAIL_MISSING.search(sr):
+            harm_score += 1
+
+        # 3. 구매자에게 유리한 추가 권리를 부여하는가?
+        if _BUYER_FAVORABLE_KW.search(sr) or _SUPPLIER_UNFAVORABLE_CONFIRM.search(sr):
+            harm_score += 1
+
+        # 4. 공급자 방어 문구 없이 의무만 추가하는가?
+        if _SUPPLIER_OVERBURDEN_KW.search(sr) and not _SUPPLIER_DEFENSE_KW.search(sr):
+            harm_score += 1
+
+        # 5. 실제 협상에서 우리 법무팀이 거부할 가능성이 높은가?
+        if not _SUPPLIER_DEFENSE_KW.search(sr) and _SUPPLIER_UNFAVORABLE_CONFIRM.search(sr):
+            harm_score += 1
+
+        if harm_score < 2:
+            continue
+
+        # 2개 이상 YES → 자동 대체 시도
+        patched = sr
+        for pattern, replacement in _SUPPLIER_AUTO_REWRITE:
+            patched = pattern.sub(replacement, patched)
+
+        if patched != sr:
+            cr["suggested_rewrite"] = patched
+            cr.setdefault("guardrail_block", {})["supplier_harm_gate"] = {
+                "harm_score": harm_score,
+                "action": "auto_rewrite",
+            }
+        else:
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["has_rewrite_change"] = False
+            cr.setdefault("guardrail_block", {})["supplier_harm_gate"] = {
+                "harm_score": harm_score,
+                "action": "discarded",
+            }
+
+
+# =============================================================================
+# [STEP 5B] Redline Safety Check — 문장 훼손 감지 및 guidance-only 전환
+# requirement.md > [STEP 5] Redline 생성 수정
+# =============================================================================
+
+_REDLINE_CORRUPTION_KW = re.compile(
+    r"\[원문\]\s*\[수정\]|\{before\}|\{after\}|<before>|<after>"
+    r"|원문\s*:\s*.+\s*수정\s*:\s*.+"
+    r"|\.\.\.\s*$|^\s*\.\.\.",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_REDLINE_TOKEN_MERGE_KW = re.compile(
+    r"[가-힣]{1,3}\s+[a-zA-Z]{1,5}\s+[가-힣]{1,3}|"
+    r"[^\s]{50,}",
+)
+
+
+def _apply_redline_safety_check(
+    clause_results: list[dict[str, Any]],
+    our_role: str,
+    review_posture: str,
+) -> None:
+    """[STEP 5B] Redline Safety Check.
+    문장 중간 삽입/문자열 병합/regex overwrite로 훼손된 redline을 감지하여
+    해당 suggested_rewrite를 폐기하고 guidance-only 모드로 전환한다.
+    공급자 모드 외에도 공통 적용한다.
+    """
+    import difflib as _dl
+
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        if bool(cr.get("is_checklist_item")):
+            continue
+
+        sr = str(cr.get("suggested_rewrite") or "")
+        if not sr.strip():
+            continue
+
+        original = str(cr.get("original_text") or "").strip()
+        is_corrupted = False
+        corruption_reason = ""
+
+        # 감지 1: 명시적 훼손 마커
+        if _REDLINE_CORRUPTION_KW.search(sr):
+            is_corrupted = True
+            corruption_reason = "explicit_corruption_marker"
+
+        # 감지 2: 원문이 충분히 길 때, 수정안이 원문과 지나치게 유사하면서 매우 짧은 경우
+        if not is_corrupted and original and len(original) > 150 and len(sr) < len(original) * 0.3:
+            ratio = _dl.SequenceMatcher(None, original[:300], sr[:300]).ratio()
+            if ratio > 0.75:
+                is_corrupted = True
+                corruption_reason = "truncated_fragment"
+
+        # 감지 3: 수정안이 원문과 동일한 경우 (변경 없음)
+        if not is_corrupted and original and sr.strip() == original.strip():
+            is_corrupted = True
+            corruption_reason = "identical_to_original"
+
+        if is_corrupted:
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["has_rewrite_change"] = False
+            cr.setdefault("guardrail_block", {})["redline_safety"] = {
+                "reason": corruption_reason,
+                "action": "guidance_only",
+            }
+
+
+# =============================================================================
 
 
 def build_clause_level_result(
@@ -1831,9 +2705,10 @@ def build_clause_level_result(
             meta=meta,
         )
 
-    # ── [Classification First] 계약 유형 최우선 확정 ─────────────────────────
-    # requirement.md > Advanced Strategic Logic > Phase 1 참조.
+    # ── [STEP 1 / Classification First] 계약 유형·실질 최우선 확정 ────────────
+    # requirement.md > STEP 1 (경제적 실질 기반), Advanced Strategic Logic > Phase 1
     _contract_class = _classify_contract_type(str(contract_type), str(text or ""), filename)
+    _contract_nature = _classify_contract_nature(str(contract_type), str(text or ""))
     _is_advisory_class = (_contract_class == "advisory")
     _is_rental_class = (_contract_class == "rental")
     _is_construction_class = (_contract_class == "construction")
@@ -1841,6 +2716,33 @@ def build_clause_level_result(
 
     # [REMOVED] 관련 법령 retrieval 영구 비활성화 — requirement.md > Section Removal Specs
     law_service = None
+
+    # Phase 2: LLM-based contract metadata extraction (lightweight, ~512 tokens)
+    # Augments answers with cross-border/governing_law signals for downstream pipeline
+    _llm_meta: dict[str, Any] = {}
+    if ai_provider is not None and ai_model:
+        from runtime.review.meta_extractor import extract_contract_meta
+        try:
+            _llm_meta = extract_contract_meta(
+                str(text or ""),
+                ai_provider=ai_provider,
+                model=str(ai_model),
+                max_tokens=512,
+                timeout_sec=min(30.0, float(ai_timeout_sec or 30.0)),
+                temperature=0.1,
+            )
+        except Exception:
+            _llm_meta = {}
+    _answers_aug = dict(answers or {})
+    if _llm_meta and not _answers_aug.get("jurisdiction"):
+        if _llm_meta.get("is_cross_border"):
+            _answers_aug["jurisdiction"] = "foreign"
+        glaw = str(_llm_meta.get("governing_law") or "")
+        if glaw and "korean" not in glaw.lower() and "korea" not in glaw.lower():
+            _answers_aug["governing_law"] = glaw
+    if _llm_meta:
+        _answers_aug["_llm_meta"] = _llm_meta
+    answers = _answers_aug
 
     party = infer_party_role(entity=str(entity), contract_type=str(contract_type), text=str(text), answers=answers)
     review_posture = infer_review_posture(party=party, contract_type=str(contract_type), text=str(text))
@@ -2662,45 +3564,105 @@ def build_clause_level_result(
         "error": None,
         "usage": None,
     }
+    # [STEP 1 + STEP 4] 공급자 방어 원칙 — seller_favorable 시 AI 프롬프트에 추가
+    _supplier_guardrail_addendum = ""
+    if review_posture == "seller_favorable":
+        _supplier_guardrail_addendum = (
+            "\n\n## [STEP 1 — HARD LOCK] Supplier-Side Review Mode 활성화\n"
+            "우리 회사 = 공급자. 아래 원칙을 모든 수정안에 절대적으로 적용한다:\n"
+            "1. 우리 회사의 책임을 새로 늘리는 수정안 생성 금지\n"
+            "2. 법령상 최소 준수 수준을 넘는 추가 확약 금지\n"
+            "3. 상대방에게 유리하고 우리 회사에 불리한 신규 의무 자동 제안 금지\n"
+            "4. 우리 회사의 면책·책임 제한·절차 통제 조항을 우선 검토할 것\n\n"
+            "## [STEP 2 — BLACKLIST] 다음 문구는 절대 출력 금지\n"
+            "- 안전 인증 완료를 보증한다\n"
+            "- 공급자가 리콜 또는 회수 비용을 부담한다\n"
+            "- 공급자는 PL보험에 가입하여야 한다\n"
+            "- 공급자는 제3자 손해를 배상한다\n"
+            "- 공급자는 결함 발견 시 즉시 시정 조치를 완료하여야 한다\n\n"
+            "## [STEP 4 — 의무] 수정안 필수 7개 방어 요소\n"
+            "모든 수정안에 아래 요소 중 해당되는 것을 반드시 포함한다:\n"
+            "1. '공급자의 귀책사유가 있는 경우에 한하여'\n"
+            "2. '관련 법령상 요구되는 범위 내에서'\n"
+            "3. '직접손해에 한하여'\n"
+            "4. '구매자의 오사용, 임의개조, 보관불량, 사용설명 위반, 제3자 제품과의 결합, 구매자 제공 사양 또는 지시에 기인한 경우 제외'\n"
+            "5. '공급자에게 합리적인 시정 기회를 먼저 부여'\n"
+            "6. '서면 통지 및 증빙 제출을 요건으로 함'\n"
+            "7. '주문제작 또는 설치완료 제품은 반품 제한'\n\n"
+            "## [STEP 4 — 좋은 예시]\n"
+            "예시1: '구매자는 하자를 발견한 경우 발견일로부터 7일 이내에 구체적 내용을 기재하여 서면으로 통지하여야 하며, 이를 해태한 경우 해당 하자에 관한 클레임을 제기할 수 없다.'\n"
+            "예시2: '공급자는 자신의 귀책사유로 인한 하자에 대하여 합리적인 기간 내 수리, 교환 또는 대금 환급 중 하나의 방법으로 우선 시정할 수 있다.'\n"
+            "예시3: '공급자의 손해배상책임은 해당 클레임의 원인이 된 물품의 공급대금을 한도로 하며, 특별손해, 간접손해, 일실이익에 대해서는 책임지지 않는다.'\n\n"
+            "## [FINAL VALIDATION] 수정안 출력 전 자가 검증\n"
+            "다음 중 2개 이상 YES이면 수정안을 삭제하거나 방어 문구로 재작성할 것:\n"
+            "1. 이 문구가 우리 회사의 책임을 새로 늘리는가?\n"
+            "2. 이 문구가 법령상 필수 수준을 넘는가?\n"
+            "3. 구매자에게 유리한 추가 권리를 부여하는가?\n"
+            "4. 공급자 방어 문구 없이 의무만 추가하는가?\n"
+            "5. 실제 협상에서 우리 법무팀이 거부할 가능성이 높은가?\n"
+        )
+
     if ai_enabled and selected:
         if _is_advisory_class:
             # Advisory/자문/용역 계약 전용 AI 프롬프트 — Logic Isolation (Phase 2)
+            # [FOUNDATIONAL SYSTEM CHANGE] Legal Scenario Reasoning Engine 적용
             system = (
-                "너는 한국 기업 법무팀의 시니어 계약검토 변호사다. 현재 검토 대상은 자문·용역·개발 계약이다. "
-                "party_role과 review_posture를 강하게 반영하되, 퍼시스가 비용을 지급하는 위탁자(갑)인 경우 다음 3개를 최우선으로 점검하라. "
-                "① [IP 귀속 CRITICAL] 산출물의 저작권·지식재산권이 수탁자에게 귀속되거나 이용권만 부여되면 반드시 '위탁자(퍼시스) 전적 귀속'으로 수정 제안하라. "
-                "근거: 저작권법 제9조 — 도급 계약에서 원칙적으로 수탁자 귀속이므로 명시 규정이 없으면 분쟁 발생. "
-                "② [제3자 침해 보증 CRITICAL] IP 조항에 '수탁자는 제3자 권리를 침해하지 않음을 보증하며 침해 시 면책·배상' 문구가 없으면 삽입 제안하라. "
-                "③ [배상 한도 예외 HIGH] 손해배상이 용역대금 총액으로 제한된 경우 IP침해·비밀유지위반·고의중과실은 한도 예외로 처리하는 단서를 삽입하라. "
-                "관련 법령은 저작권법·부정경쟁방지법·민법(위임/도급)만 인용하라. "
-                "렌탈·물류시설법·부동산세법·방문판매법·B2C 약관 관련 문구는 절대 생성하지 마라. "
-                "제1·2·3조(목적·원칙·정의) 등 선언적 조항에 실무 의무 문구를 삽입하지 마라. "
-                "원문을 최대한 유지하면서 문제되는 표현만 최소 변경으로 수정하라. "
-                "근거 없는 추정 금지: 입력에 없는 사실을 새로 만들지 마라. "
-                "rewrite_reason은 법률 근거 + 실무 리스크 중심으로 220자 이내로 작성하라. "
-                "suggested_rewrite는 900자 이내, 계약서 법무 문체로 작성하라. "
+                "너는 한국 대형 로펌의 시니어 파트너 변호사다. 현재 검토 대상은 자문·용역·개발 계약이다.\n\n"
+                "## [필수] 5단계 Reasoning 순서 — 반드시 이 순서로 사고할 것\n"
+                "STEP 1: 이 계약으로 실제 어떤 분쟁·손실이 발생하는가? (IP 귀속 분쟁, 결과물 활용 제한, 배상 한도 미비 등)\n"
+                "STEP 2: 회사가 실제 어디서 돈을 잃는가? (IP 미귀속 → 재사용 불가, 배상 한도 초과, 비밀 유출 손해 등)\n"
+                "STEP 3: 제3자 손해가 발생하는가? (수탁자 IP 침해 → 위탁자 연대 책임)\n"
+                "STEP 4: 누가 책임을 부담하는가? (저작권법 제9조 수탁자 귀속 원칙 → 명시 규정 필수)\n"
+                "STEP 5: 실제 분쟁 가능성이 높은 경우에만 수정안 생성. boilerplate·일반론 금지.\n\n"
+                "## 최우선 점검 3개 (위탁자 갑인 경우)\n"
+                "① [IP 귀속 CRITICAL] 산출물의 저작권·지식재산권이 수탁자에게 귀속되거나 이용권만 부여되면 '위탁자(퍼시스) 전적 귀속'으로 수정하라. 근거: 저작권법 제9조.\n"
+                "② [제3자 침해 보증 CRITICAL] IP 조항에 '수탁자는 제3자 권리를 침해하지 않음을 보증하며 침해 시 면책·배상' 문구 없으면 삽입하라.\n"
+                "③ [배상 한도 예외 HIGH] 손해배상이 용역대금 총액으로 제한된 경우 IP침해·비밀유지위반·고의중과실은 한도 예외 단서를 삽입하라.\n\n"
+                "## 수정안 필수 6개 요소 (모두 포함해야 함)\n"
+                "주체 / 조건(발동 요건) / 절차 / 기한 / 비용부담 / 책임범위\n\n"
+                "## 금지\n"
+                "- 'XX를 명확히 할 필요가 있습니다' 같은 generic guidance\n"
+                "- 추상적 법률 설명만 있고 실제 문구가 없는 출력\n"
+                "- 렌탈·물류시설법·부동산세법·방문판매법·B2C 약관 관련 문구\n"
+                "- 제1·2·3조(목적·원칙·정의) 등 선언적 조항에 실무 의무 삽입\n"
+                "- 입력에 없는 사실·상황·의무를 새로 만드는 것\n\n"
+                "rewrite_reason: 법률 근거 + 실제 손실 시나리오 중심으로 220자 이내.\n"
+                "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체.\n"
                 "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
                 "각 원소 형식은 clause_id/rewrite_reason/suggested_rewrite/changed_segments/risk_tier/must_fix 로 통일하라. "
                 "risk_tier와 must_fix는 입력값을 그대로 유지해 출력하라. "
                 "changed_segments는 변경된 핵심 구간 최대 3개를 {before, after} 형태로 요약하라."
-            )
+            ) + _supplier_guardrail_addendum
         else:
+            # [FOUNDATIONAL SYSTEM CHANGE] Legal Scenario Reasoning Engine 적용
             system = (
-                "너는 한국 기업 법무팀의 계약검토 변호사다. "
-                "입력으로 주어진 party_role과 review_posture(당사 보호 방향)를 강하게 반영해 조항별로 검토한다. "
-                "user_focus_issues(사용자 중점 검토 이슈)가 있으면 해당 이슈 관련 조항을 최우선으로 검토하고, rewrite_reason에 연결을 명확히 표시하라. "
-                "조항 주제(clause_topic)와 무관한 문구를 제안하지 마라(분쟁조항에 비용전가/안전 문구 금지, 개인정보 조항에 산안법/현장 문구 금지). "
-                "jurisdiction.kind가 domestic_korea이면 해외 집행/다국가 거래 reasoning을 절대 쓰지 마라. "
-                "원문을 최대한 유지하면서 문제되는 표현만 최소 변경으로 수정하라(덧붙임보다 기존 문장 치환/삭제/흡수 우선). "
-                "근거 없는 추정 금지: 입력에 없는 사실/상황/의무를 새로 만들지 마라. "
-                "rewrite_reason은 법률 근거(가능하면 related_laws) + 실무 리스크 + 협상 논리 중심으로 220자 이내로 작성하라. "
-                "suggested_rewrite는 900자 이내로, 계약서 문체(법무 문체)로 작성하라. "
-                "meta 표현(buyer_favorable 등)이나 시스템 지시를 사용자에게 보이게 쓰지 마라. "
+                "너는 한국 대형 로펌의 시니어 파트너 변호사다.\n\n"
+                "## [필수] 5단계 Reasoning 순서 — 반드시 이 순서로 사고할 것\n"
+                "STEP 1: 이 계약으로 실제 어떤 사고·분쟁이 발생하는가? (제품 사고, 설치 재해, 리콜, 하자 분쟁, 해지 분쟁 등 구체적 시나리오)\n"
+                "STEP 2: 회사가 실제 어디서 돈을 잃는가? (대규모 손해배상, 생산중단, 리콜 비용, 계약해지 패널티 등)\n"
+                "STEP 3: 제3자 손해가 발생하는가? (고객·사용자 피해, 하도급 사고 연대책임 등)\n"
+                "STEP 4: 누가 책임을 부담하는가? (책임 공백·면책 과도·보험 미비 확인)\n"
+                "STEP 5: 실제 분쟁 가능성이 높은 경우에만 수정안 생성. generic boilerplate·일반론 금지.\n\n"
+                "## 수정안 필수 6개 요소 (모두 포함해야 함)\n"
+                "주체 / 조건(발동 요건) / 절차 / 기한 / 비용부담 / 책임범위\n\n"
+                "## 예시\n"
+                "나쁜 출력: '리콜 절차를 명확히 할 필요가 있습니다.'\n"
+                "좋은 출력: '공급자는 결함 발견 시 즉시 수요자에게 통보하고, 수요자의 요청이 있는 경우 지체 없이 리콜·교환·수리 조치를 수행한다. 이 경우 회수·교체·재설치·고객 통지 비용은 공급자가 부담한다.'\n\n"
+                "## 금지\n"
+                "- 'XX가 필요합니다', 'XX를 검토하세요' 같은 generic guidance\n"
+                "- 추상적 법률 설명만 있고 실제 계약 문구가 없는 출력\n"
+                "- 조항 주제(clause_topic)와 무관한 문구 (분쟁조항에 비용전가/안전 문구 금지)\n"
+                "- jurisdiction.kind가 domestic_korea이면 해외 집행/다국가 거래 reasoning 금지\n"
+                "- 입력에 없는 사실·상황·의무를 새로 만드는 것\n"
+                "- party_role과 review_posture에 반하는 방향으로 수정\n\n"
+                "user_focus_issues가 있으면 해당 이슈 관련 조항을 최우선으로 검토하고, rewrite_reason에 연결을 명확히 표시하라.\n"
+                "rewrite_reason: 실제 손실 시나리오 + 법률 근거 + 협상 논리, 220자 이내.\n"
+                "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체.\n"
                 "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
                 "각 원소 형식은 clause_id/rewrite_reason/suggested_rewrite/changed_segments/risk_tier/must_fix 로 통일하라. "
                 "risk_tier와 must_fix는 입력값을 그대로 유지해 출력하라. "
                 "changed_segments는 변경된 핵심 구간 최대 3개를 {before, after} 형태로 요약하라."
-            )
+            ) + _supplier_guardrail_addendum
 
         def chunked(xs: list[dict[str, Any]], n: int) -> list[list[dict[str, Any]]]:
             if n <= 0:
@@ -2851,6 +3813,12 @@ def build_clause_level_result(
             cr["changed_segments"] = []
             if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
                 cr["rewrite_reason"] = "조항 주제와 무관한 수정문안은 제외(guardrail)."
+
+    # ── [STEP 4] Industry-Specific Legal Reasoning (가구·설비·제조물 12개 항목) ──
+    _apply_industry_specific_review(clause_results, str(text or ""), _contract_class, _contract_nature)
+
+    # ── [Contextual Awareness] Contract Nature Lock ────────────────────────
+    _apply_contract_nature_lock(clause_results, _contract_nature)
 
     _dedup_rewrite_suggestions(clause_results)
     for cr in clause_results:
@@ -3054,7 +4022,9 @@ def build_clause_level_result(
     # requirement.md 참조: [Advanced Review Logic] / [Expert Advisory Review Logic]
     #                      / [Zero-Hallucination Guardrail]
     _is_rental = _is_rental_contract(str(contract_type), str(text or ""))
-    _is_domestic = _is_domestic_only(str(text or ""), answers)
+    # Phase 3: Use comprehensive jurisdiction profile (detects GmbH, AG, foreign law, etc.)
+    # instead of the limited _is_domestic_only() marker list.
+    _is_domestic = (jur_kind0 == "domestic_korea") if jur_kind0 is not None else _is_domestic_only(str(text or ""), answers)
     # 1순위: Zero-Hallucination Guardrail (제1·2·3조 보호 + Advisory 금지키워드)
     _apply_zero_hallucination_guardrail(clause_results, str(contract_type), str(text or ""))
     # 2순위: Advisory IP & Copyright (자문/용역 → IP 귀속·보증 CRITICAL 점검)
@@ -3076,10 +4046,18 @@ def build_clause_level_result(
     _apply_service_contract_checklist(clause_results, str(text or ""), _contract_class)
     # 1-1. Project Installation 필수 안전·교육 체크리스트
     _apply_project_installation_checklist(clause_results, str(text or ""), _contract_class)
+    # 1-2. [STEP 3] Supplier-Protective Product Contract 체크리스트
+    _apply_supplier_product_checklist(clause_results, str(text or ""), _contract_class, party.our_role, review_posture)
     # 2. 리뷰 우선순위 엔진 (LEVEL 1~3 분류, HIGH 최대 5개 — 체크리스트 제외)
     _apply_review_priority_engine(clause_results, max_high=5)
     # 3. No Inline Rewrite 정책 (advisory: 원문 보존 + [추가 권고] 형태)
     _apply_no_inline_rewrite_policy(clause_results, _is_advisory_class)
+    # 4. [FINAL GOVERNING RULE] Relevance Validation Gate — 관련성 검증 후 제거
+    _apply_relevance_validation_gate(clause_results, _contract_class, _contract_nature)
+    # 5. [STEP 2 + FINAL VALIDATION] Do Not Harm Our Side Gate — 당사 불이익 방지 최종 검증
+    _apply_do_not_harm_our_side_gate(clause_results, party.our_role, review_posture)
+    # 6. [STEP 5B] Redline Safety Check — 문장 훼손 감지 및 guidance-only 전환
+    _apply_redline_safety_check(clause_results, party.our_role, review_posture)
     # ─────────────────────────────────────────────────────────────────────────
 
     for cr in clause_results:
@@ -3342,9 +4320,36 @@ def build_clause_level_result(
         "ai": ai_state,
         "deep_review_shortlist_clause_ids": deep_review_shortlist_ids[:60] if isinstance(deep_review_shortlist_ids, list) else [],
         "clause_extraction_report": clause_report.to_dict() if isinstance(clause_report, object) else None,
+        "contract_nature": _contract_nature,
+        "contract_class": _contract_class,
     }
+
+    # ── [Risk Scenario Modeling] 가상 사고 시나리오 기반 리스크 추출 ────────
+    risk_scenarios = detect_risk_scenarios(str(text or ""), _contract_nature)
+
+    # ── [Strategic Inquiry] 계약 유형별 쟁점 질문 생성 ───────────────────────
+    strategic_questions = generate_strategic_inquiry(
+        contract_class=_contract_class,
+        contract_nature=_contract_nature,
+        existing_answers=answers if isinstance(answers, dict) else None,
+        user_focus=review_focus,
+        our_role=party.our_role,
+    )
+
+    # ── [Clause-Level Conflict Check] 조항 간 모순 감지 ─────────────────────
+    clause_conflicts = detect_clause_conflicts(clause_results)
+
+    # ── [Executive Summary] 변호사식 핵심 요약 생성 ─────────────────────────
+    executive_summary = generate_executive_summary(clause_results, clause_conflicts)
+
     return ClauseLevelResult(
-        review=review,
+        review={
+            **review,
+            "risk_scenarios": risk_scenarios,
+            "strategic_questions": strategic_questions,
+            "clause_conflicts": clause_conflicts,
+            "executive_summary": executive_summary,
+        },
         revision=revision,
         clauses=clauses,
         clause_results=clause_results,
