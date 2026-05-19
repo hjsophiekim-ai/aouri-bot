@@ -979,6 +979,17 @@ def propose_clause_specific_rewrite(
         matched_keywords = ar.get("matched_keywords") if isinstance(ar.get("matched_keywords"), list) else []
         mk = [str(x) for x in matched_keywords if isinstance(x, str) and x.strip()]
 
+        # Clause identity guard: APP-001 (IP ownership template) is ONLY for
+        # development/delivery contracts, NOT for dealer trademark usage clauses.
+        _clause_identity = ""
+        if isinstance(contract_context, dict):
+            _clause_identity = str(contract_context.get("_clause_identity") or "")
+        _is_dealer_ip_clause = _clause_identity in (
+            "trademark_ip_use", "dealer_structure", "compliance_general"
+        ) or _has_any(text, ["사전 승인없이", "상호", "상표", "저작물", "지식재산권"]) and not _has_any(
+            text, ["산출물", "소스코드", "개발", "결과물", "수탁자는 결과물"]
+        )
+
         p: RewriteProposal | None = None
         if rid == "RISK-001":
             p = _rewrite_risk_001_liability_cap(detoxed_text, matched_keywords=mk, posture=posture)
@@ -991,7 +1002,10 @@ def propose_clause_specific_rewrite(
         elif rid == "RISK-006":
             p = _rewrite_risk_006_cost_shift(detoxed_text, matched_keywords=mk, posture=posture)
         elif rid == "APP-001":
-            p = _rewrite_app_001_ip(detoxed_text, posture=posture, party=party)
+            # APP-001 (IP ownership / 수탁자 결과물 보증) is ONLY for development/deliverable contracts.
+            # Hard-block for dealer trademark/IP usage clauses to prevent hallucination.
+            if not _is_dealer_ip_clause:
+                p = _rewrite_app_001_ip(detoxed_text, posture=posture, party=party)
         elif rid == "APP-002":
             p = _rewrite_app_002_oss(detoxed_text, posture=posture, party=party)
         elif rid == "APP-003":

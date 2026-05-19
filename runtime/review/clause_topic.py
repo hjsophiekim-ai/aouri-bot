@@ -14,6 +14,12 @@ TOPIC_COST = "cost_burden"
 TOPIC_DEALER_UNFAIR = "dealer_unfair"
 TOPIC_OTHER = "other"
 
+# Dealer-direct structure topics (direct_customer_contract_with_dealer_service)
+TOPIC_DEALER_STRUCTURE = "dealer_structure"
+TOPIC_INVOICE_BILLING = "invoice_billing"
+TOPIC_COLLECTION = "collection_support"
+TOPIC_TRADEMARK_IP = "trademark_ip_use"
+
 
 def _has_any_ci(text: str, needles: list[str]) -> bool:
     low = (text or "").lower()

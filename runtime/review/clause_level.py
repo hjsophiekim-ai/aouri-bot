@@ -16,6 +16,8 @@ from runtime.law.search_service import LawSearchService
 from runtime.review.clause_extraction import ClauseChunk, extract_clauses
 from runtime.review.party_role import infer_party_role, infer_review_posture
 from runtime.review.revision import suggest_revisions
+from runtime.review.contract_structure import detect_contract_structure, STRUCTURE_DIRECT_CUSTOMER
+from runtime.review.dealer_direct_findings import generate_structure_diagnosis_section
 from runtime.review.word_markers import contains_wordprocessingml_markers
 from runtime.review.korean_polish import polish_korean_legal_style
 from runtime.review.clause_topic import classify_clause_topic, infer_rewrite_topics, is_topic_compatible
@@ -27,6 +29,79 @@ from runtime.review.risk_scenarios import detect_risk_scenarios
 from runtime.review.strategic_inquiry import generate_strategic_inquiry
 from runtime.review.clause_conflicts import detect_clause_conflicts
 from runtime.review.executive_summary import generate_executive_summary
+
+# ─── [Phase 2] 지능형 법무검토 시스템 프롬프트 ──────────────────────────────────
+CLAUSE_REVIEW_SYSTEM = (
+    "당신은 대한민국 대형 로펌 출신의 기업법무 파트너 변호사입니다. "
+    "Fursys Inc.(퍼시스) 법무팀의 내부 법률자문으로서, 퍼시스의 이익을 최우선으로 검토합니다.\n\n"
+    "검토 원칙:\n"
+    "1. 상대방 표준 계약서는 상대방에게 유리하게 설계되어 있다고 가정하고 시작하라.\n"
+    "2. 실제 분쟁이 발생했을 때 퍼시스가 입을 수 있는 최악의 시나리오를 먼저 상정하라.\n"
+    "3. 모든 위험은 금전적·운영적·평판적 영향으로 구체화하여 서술하라.\n"
+    "4. 영문 계약서의 경우 영미법·독일법·오스트리아법·EU법의 맥락에서 해석하라.\n"
+    "5. 수정 제안은 반드시 대체 문안(영문 또는 국문)을 제시하라.\n"
+    "6. 근거 없는 위험을 과장하지 말고, 실재하는 위험만 정확히 지적하라.\n\n"
+    "출력 형식: 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하라. "
+    "각 원소 형식: clause_id / rewrite_reason / suggested_rewrite / changed_segments / "
+    "risk_tier / must_fix / worst_case_scenario / negotiation_strategy\n"
+    "- worst_case_scenario: 분쟁 발생 시 퍼시스가 직면할 최악의 구체적 상황 1~2문장 (null 허용)\n"
+    "- negotiation_strategy: PDG 또는 상대방과의 구체적 협상 전략 (null 허용)\n"
+    "risk_tier와 must_fix는 입력값을 그대로 유지하라. 코드펜스/설명 문장 절대 금지."
+)
+
+EN_NDA_CLAUSE_REVIEW_SYSTEM = (
+    "You are a senior partner attorney from a major Korean law firm, acting as in-house counsel for Fursys Inc. "
+    "You specialize in cross-border transactions, German law, Austrian law, and international arbitration.\n\n"
+    "Review principles:\n"
+    "1. The counterparty's standard NDA is drafted in their favor — assume the worst.\n"
+    "2. Identify the worst-case scenario for Fursys if a dispute arises under foreign law.\n"
+    "3. Quantify all risks: cost exposure, jurisdictional disadvantage, enforcement difficulty.\n"
+    "4. Interpret under German/Austrian law and EU regulations where applicable.\n"
+    "5. Always propose alternative contract language (in English).\n"
+    "6. Flag exclusive foreign court jurisdiction as HIGH risk requiring legal approval.\n\n"
+    "Output format: ONLY a JSON array starting with '['. Each element:\n"
+    "clause_id / rewrite_reason / suggested_rewrite / changed_segments / "
+    "risk_tier / must_fix / worst_case_scenario / negotiation_strategy\n"
+    "- worst_case_scenario: 1-2 sentences on the concrete worst-case legal outcome for Fursys\n"
+    "- negotiation_strategy: specific negotiation strategy with 2-3 alternative approaches\n"
+    "Keep risk_tier and must_fix from input. No code fences, no explanation text."
+)
+
+TOP3_RISK_SYSTEM = (
+    "당신은 기업법무 파트너 변호사입니다. "
+    "아래 조항별 분석 결과를 바탕으로 퍼시스에게 가장 치명적인 리스크 Top 3~5를 선정하라. "
+    "반드시 JSON만 출력하라."
+)
+
+TOP3_RISK_USER_TEMPLATE = """\
+## 계약 전체 맥락
+{meta_summary}
+
+## 전체 조항 분석 결과 (요약)
+{all_clause_summaries}
+
+## 요청
+퍼시스에게 가장 치명적인 리스크 3~5개를 중요도 순으로 선정하고 아래 JSON으로만 응답하라.
+"치명적"의 기준: 분쟁 발생 시 금전적 손실, 사업 중단, 평판 손상, 법적 불이익 중 하나 이상이 실질적으로 발생할 가능성이 있는 것.
+
+{{
+  "top_risks": [
+    {{
+      "rank": 1,
+      "clause_id": "조항 ID",
+      "risk_title": "리스크 제목 (20자 이내)",
+      "severity": "CRITICAL|HIGH",
+      "one_line_summary": "경영진에게 보고하는 수준의 1문장 요약",
+      "financial_impact": "예상 금전적 영향 또는 '정량화 불가'",
+      "recommended_action": "서명 전 반드시 취해야 할 조치",
+      "deadline": "즉시|서명 전|계약 기간 중"
+    }}
+  ],
+  "overall_recommendation": "SIGN_AS_IS|SIGN_WITH_MINOR_CHANGES|NEGOTIATE_BEFORE_SIGNING|DO_NOT_SIGN",
+  "recommendation_reason": "2~3문장 종합 의견"
+}}
+"""
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
@@ -67,6 +142,66 @@ def _norm_dedup_key(s: str) -> str:
     x = _RX_DEDUP_PUNCT.sub(" ", x)
     x = _RX_DEDUP.sub(" ", x).strip()
     return x[:800]
+
+
+def _format_meta_summary(
+    llm_meta: dict[str, Any],
+    contract_type: str = "",
+    entity: str = "",
+) -> str:
+    lines: list[str] = []
+    if entity:
+        lines.append(f"의뢰인: {entity}")
+    if contract_type:
+        lines.append(f"계약 유형: {contract_type}")
+    pa = str(llm_meta.get("party_a") or llm_meta.get("party_a_name") or "").strip()
+    pb = str(llm_meta.get("party_b") or llm_meta.get("party_b_name") or "").strip()
+    if pa:
+        lines.append(f"당사자 A: {pa}")
+    if pb:
+        lines.append(f"당사자 B: {pb}")
+    pac = str(llm_meta.get("party_a_country") or "").strip()
+    pbc = str(llm_meta.get("party_b_country") or "").strip()
+    if pac or pbc:
+        lines.append(f"국가: A={pac or '불명'} / B={pbc or '불명'}")
+    gl = str(llm_meta.get("governing_law") or llm_meta.get("governing_law_country") or "").strip()
+    if gl:
+        lines.append(f"준거법: {gl}")
+    jc = str(llm_meta.get("jurisdiction_city") or "").strip()
+    if jc:
+        lines.append(f"관할 도시: {jc}")
+    if llm_meta.get("is_cross_border"):
+        lines.append("크로스보더 계약: 예")
+    if llm_meta.get("has_exclusive_jurisdiction"):
+        lines.append("전속 관할 조항: 있음")
+    return "\n".join(lines) if lines else "(계약 메타 정보 없음)"
+
+
+def _format_clause_summaries(clause_results: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    count = 0
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        rt = str(cr.get("risk_tier") or "").upper()
+        if rt not in ("HIGH", "MEDIUM"):
+            continue
+        cid = str(cr.get("clause_id") or cr.get("display_path") or "")
+        rr = str(cr.get("rewrite_reason") or "").strip()
+        wcs = str(cr.get("worst_case_scenario") or "").strip()
+        must_fix = bool(cr.get("must_fix")) or bool(cr.get("approval_required"))
+        parts = [f"[{rt}] {cid}"]
+        if must_fix:
+            parts.append("필수 수정")
+        if rr:
+            parts.append(rr[:120])
+        if wcs:
+            parts.append(f"최악: {wcs[:80]}")
+        lines.append(" | ".join(parts))
+        count += 1
+        if count >= 20:
+            break
+    return "\n".join(lines) if lines else "(분석된 HIGH/MEDIUM 조항 없음)"
 
 
 def _norm_text_for_change(s: str) -> str:
@@ -862,8 +997,26 @@ def _apply_rental_filter(clause_results: list[dict[str, Any]], is_rental: bool) 
 _INTL_RISK_KW = re.compile(r"다국가|국제 관할|해외 집행|cross.border|준거법 중복|국외 이전|해외 법원", re.IGNORECASE)
 
 
-def _apply_domestic_filter(clause_results: list[dict[str, Any]], is_domestic: bool) -> None:
-    """[Domestic Filter] 국내 전용 계약에서 dispute 조항의 국제 관할 리스크 코멘트를 차단한다."""
+def _apply_domestic_filter(
+    clause_results: list[dict[str, Any]],
+    is_domestic: bool,
+    llm_meta: dict[str, Any] | None = None,
+) -> None:
+    """[Domestic Filter v2] 국내 전용 계약에서 dispute 조항의 국제 관할 리스크 코멘트를 차단한다.
+    퍼시스가 한국 법인이더라도 상대방이 해외 법인이면 국제 거래로 처리 — 필터 미적용.
+    """
+    # LLM 메타데이터로 국제 거래 여부를 재확인 (domestic flag 오탐 방지)
+    if llm_meta:
+        if bool(llm_meta.get("is_cross_border")):
+            return
+        party_a_c = str(llm_meta.get("party_a_country") or "").lower()
+        party_b_c = str(llm_meta.get("party_b_country") or "").lower()
+        non_kr = [
+            c for c in [party_a_c, party_b_c]
+            if c and "korea" not in c and "한국" not in c and c not in ("", "kr")
+        ]
+        if non_kr:
+            return
     if not is_domestic:
         return
     for cr in clause_results:
@@ -2821,6 +2974,12 @@ def build_clause_level_result(
         review_focus=review_focus,
         party_role=(party.to_dict() if party is not None else None),
     )
+    # Detect dealer-direct contract structure for structure-aware review
+    _struct = detect_contract_structure(
+        text=str(text or ""),
+        entity=str(entity or ""),
+        contract_type=str(contract_type or ""),
+    )
     contract_context = {
         "entity": str(entity),
         "contract_type": str(contract_type),
@@ -2828,6 +2987,8 @@ def build_clause_level_result(
         "jurisdiction": (derived.get("jurisdiction") if isinstance(derived, dict) else None),
         "contract_profile": prof.to_dict(),
         "final_review_context": frc.to_dict(),
+        "contract_structure": _struct.contract_structure,
+        "structure_result": _struct.to_dict(),
     }
     revision = suggest_revisions(
         clauses,
@@ -3690,6 +3851,9 @@ def build_clause_level_result(
                 "risk_tier와 must_fix는 입력값을 그대로 유지해 출력하라. "
                 "changed_segments는 변경된 핵심 구간 최대 3개를 {before, after} 형태로 요약하라."
             ) + _supplier_guardrail_addendum
+        elif cross_border0 and str(jur_kind0 or "") != "domestic_korea":
+            # Cross-border / English NDA 전용 프롬프트 — 국제 법무 특화
+            system = EN_NDA_CLAUSE_REVIEW_SYSTEM + _supplier_guardrail_addendum
         else:
             # [FOUNDATIONAL SYSTEM CHANGE] Legal Scenario Reasoning Engine 적용
             system = (
@@ -3802,10 +3966,18 @@ def build_clause_level_result(
                     rr = upd.get("rewrite_reason")
                     sr = upd.get("suggested_rewrite")
                     cs = upd.get("changed_segments")
+                    wcs = upd.get("worst_case_scenario")
+                    neg = upd.get("negotiation_strategy")
                     if isinstance(rr, str) and rr.strip():
                         cr["rewrite_reason"] = polish_korean_legal_style(rr.strip())
                     if isinstance(sr, str) and sr.strip():
                         cr["suggested_rewrite"] = polish_korean_legal_style(sr.strip())
+                    # worst_case_scenario: AI 생성값이 있으면 우선, 없으면 기존 룰셋값 유지
+                    if isinstance(wcs, str) and wcs.strip():
+                        cr["worst_case_scenario"] = wcs.strip()
+                    # negotiation_strategy: AI 생성값이 있으면 우선, 없으면 기존 룰셋값 유지
+                    if isinstance(neg, str) and neg.strip():
+                        cr["negotiation_strategy"] = neg.strip()
                     if isinstance(cs, list):
                         cleaned: list[dict[str, str]] = []
                         for seg in cs[:3]:
@@ -4088,7 +4260,7 @@ def build_clause_level_result(
     _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity))
     # 3순위: 기존 필터 체인
     _apply_rental_filter(clause_results, _is_rental)
-    _apply_domestic_filter(clause_results, _is_domestic)
+    _apply_domestic_filter(clause_results, _is_domestic, llm_meta=_llm_meta)
     _apply_clause_integrity_filter(clause_results)
     _apply_sidiz_position_strategy(
         clause_results,
@@ -4124,6 +4296,39 @@ def build_clause_level_result(
         ot = cr.get("original_text")
         has_change = bool(isinstance(sr, str) and sr.strip() and _norm_text_for_change(sr) != _norm_text_for_change(str(ot or "")))
         cr["has_rewrite_change"] = bool(has_change)
+
+        # ── [STEP 3-2] Redline 위치 정보 주입 ────────────────────────────────
+        _ot_raw = str(ot or "").strip()
+        _sr_raw = str(sr or "").strip()
+        _an = str(cr.get("article_number") or "").strip()
+        _pn = str(cr.get("paragraph_number") or "").strip()
+        _ADD_MARKER = "\n\n[추가]\n"
+        if has_change and _ADD_MARKER in _sr_raw:
+            _base_part, _add_part = _sr_raw.split(_ADD_MARKER, 1)
+            _base_sim = _sim_ratio(
+                re.sub(r"[\s\r\n\t]+", " ", _base_part.strip().lower()),
+                re.sub(r"[\s\r\n\t]+", " ", _ot_raw.lower()),
+            )
+            if _base_sim >= 0.90:
+                cr["has_rewrite_change"] = False
+                cr["replace_text"] = None
+            else:
+                cr["replace_text"] = _ot_raw
+            cr["has_addition"] = True
+            cr["addition_text"] = "[추가]\n" + _add_part.strip()
+            cr["insert_after"] = ((_an + "." + _pn) if _pn else _an) or None
+        elif has_change:
+            cr["replace_text"] = _ot_raw
+            cr["has_addition"] = False
+            cr["addition_text"] = None
+            cr["insert_after"] = None
+        else:
+            cr["replace_text"] = None
+            cr["has_addition"] = False
+            cr["addition_text"] = None
+            cr["insert_after"] = None
+        # ─────────────────────────────────────────────────────────────────────
+
         if bool(cr.get("keep_as_is")):
             change_type = "keep_as_is"
         elif bool(cr.get("dedup_suppressed")):
@@ -4354,6 +4559,42 @@ def build_clause_level_result(
                 }
             )
 
+    # ── [Top 3 Risk Synthesis] LLM 기반 치명적 리스크 Top 3 생성 ────────────
+    _top_risks_llm: list[dict[str, Any]] = []
+    _overall_recommendation: str = ""
+    _recommendation_reason: str = ""
+    _high_med = [
+        cr for cr in clause_results
+        if isinstance(cr, dict) and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+    ]
+    if ai_enabled and ai_provider and ai_model and _high_med:
+        try:
+            _meta_summary = _format_meta_summary(_llm_meta, str(contract_type or ""), str(entity or ""))
+            _clause_summaries = _format_clause_summaries(clause_results)
+            _top3_user = TOP3_RISK_USER_TEMPLATE.format(
+                meta_summary=_meta_summary,
+                all_clause_summaries=_clause_summaries,
+            )
+            _req3 = AIRequest(
+                model=ai_model,
+                messages=build_messages(TOP3_RISK_SYSTEM, _top3_user),
+                temperature=float(ai_temperature),
+                max_tokens=min(int(ai_max_tokens), 2000),
+                timeout_sec=float(ai_timeout_sec),
+            )
+            _resp3 = ai_provider.complete(_req3)
+            _obj3 = _try_json(_resp3.content) if _resp3 and _resp3.content else None
+            if isinstance(_obj3, dict):
+                if isinstance(_obj3.get("top_risks"), list):
+                    _top_risks_llm = [r for r in _obj3["top_risks"] if isinstance(r, dict)][:5]
+                if isinstance(_obj3.get("overall_recommendation"), str):
+                    _overall_recommendation = _obj3["overall_recommendation"].strip()
+                if isinstance(_obj3.get("recommendation_reason"), str):
+                    _recommendation_reason = _obj3["recommendation_reason"].strip()
+        except Exception:
+            pass
+    # ─────────────────────────────────────────────────────────────────────────
+
     meta = {
         "review_posture": review_posture,
         "party_role": party.to_dict(),
@@ -4379,6 +4620,12 @@ def build_clause_level_result(
         "clause_extraction_report": clause_report.to_dict() if isinstance(clause_report, object) else None,
         "contract_nature": _contract_nature,
         "contract_class": _contract_class,
+        "top_risks_llm": _top_risks_llm,
+        "overall_recommendation": _overall_recommendation,
+        "recommendation_reason": _recommendation_reason,
+        "structure_diagnosis": generate_structure_diagnosis_section(_struct),
+        "contract_structure": _struct.contract_structure,
+        "structure_confidence": _struct.structure_confidence,
     }
 
     # ── [Risk Scenario Modeling] 가상 사고 시나리오 기반 리스크 추출 ────────

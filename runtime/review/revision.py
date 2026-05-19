@@ -9,6 +9,11 @@ from runtime.review.rewrite_engine import propose_clause_specific_rewrite
 from runtime.review.party_role import PartyRole
 from runtime.review.word_markers import contains_wordprocessingml_markers
 from runtime.review.clause_topic import classify_clause_topic, infer_rewrite_topics, is_topic_compatible, TOPIC_OTHER
+from runtime.review.dealer_direct_findings import (
+    analyze_clause_for_structure_findings,
+    is_false_positive_compliance,
+    STRUCTURE_DIRECT_CUSTOMER_KEY,
+)
 
 
 REPLACEMENT_TEXT_BY_RULE_ID = {
@@ -90,6 +95,9 @@ def suggest_revisions(
             if matched_kws:
                 r = matched_by_id[rid]
                 if rid in ("RISK-006", "ACT-009") and clause_topic not in ("cost_burden", "payment_settlement", "dealer_unfair"):
+                    continue
+                # False-positive suppression: harmless compliance clauses must not be flagged as cost burden
+                if rid in ("RISK-006", "ACT-009") and is_false_positive_compliance(str(c.text or ""), rid):
                     continue
                 if rid in ("RISK-003", "ACT-010") and clause_topic not in ("safety",):
                     continue
@@ -203,6 +211,13 @@ def suggest_revisions(
             }
         )
 
+    # ── Dealer direct structure: merge structure-specific findings ──────────
+    _contract_structure = None
+    if isinstance(contract_context, dict):
+        _contract_structure = contract_context.get("contract_structure")
+    if _contract_structure == STRUCTURE_DIRECT_CUSTOMER_KEY:
+        items = _merge_dealer_direct_findings(clauses=clauses, items=items)
+
     items.sort(key=lambda it: (0 if it.get("approval_required") else 1, 0 if it.get("high_risk") else 1, str(it.get("clause_id") or "")))
     summary = {
         "issue_clause_count": len(items),
@@ -212,6 +227,121 @@ def suggest_revisions(
         "unfavorable_to_us_clause_count": sum(1 for it in items if bool(it.get("unfavorable_to_us"))),
     }
     return {"summary": summary, "items": items}
+
+
+def _merge_dealer_direct_findings(
+    *,
+    clauses: list[ClauseChunk],
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Run dealer-direct structure analysis per clause and merge into items list."""
+    existing_clause_ids: set[str] = {str(it.get("clause_id") or "") for it in items}
+    items_by_clause_id: dict[str, dict[str, Any]] = {
+        str(it.get("clause_id") or ""): it for it in items
+    }
+
+    for c in clauses:
+        cid = str(c.clause_id or "")
+        findings = analyze_clause_for_structure_findings(
+            clause_title=str(c.title or ""),
+            clause_text=str(c.text or ""),
+            clause_id=cid,
+        )
+        if not findings:
+            continue
+
+        for f in findings:
+            is_high = f.severity == "HIGH"
+            is_medium = f.severity == "MEDIUM"
+
+            if cid and cid in existing_clause_ids:
+                # Enrich existing item
+                existing = items_by_clause_id.get(cid)
+                if existing is not None:
+                    if is_high:
+                        existing["high_risk"] = True
+                    if f.suggested_rewrite and not existing.get("recommended_rewrite"):
+                        existing["recommended_rewrite"] = f.suggested_rewrite
+                    if f.worst_case_scenario and not existing.get("worst_case_scenario"):
+                        existing["worst_case_scenario"] = f.worst_case_scenario
+                    # Add structure finding to detected issues
+                    existing_issues = existing.get("detected_issues")
+                    if not isinstance(existing_issues, list):
+                        existing_issues = []
+                        existing["detected_issues"] = existing_issues
+                    existing_issues.append({
+                        "rule_id": f.finding_id,
+                        "issue_title": f.issue_title,
+                        "issue_detail": f.risk_description,
+                        "review_action": [f.why_matters, f.supplier_strategy],
+                        "risk_level": f.severity,
+                        "high_risk": is_high,
+                        "approval_required": is_high,
+                        "summary_suppress": False,
+                        "supplemental_only": False,
+                        "is_structure_mismatch": f.is_structure_mismatch,
+                        "clause_identity": f.clause_identity,
+                        "worst_case_scenario": f.worst_case_scenario,
+                    })
+                    if is_high:
+                        existing["approval_required"] = True
+                    existing["unfavorable_to_us"] = True
+            else:
+                # Create new item for this clause
+                new_item: dict[str, Any] = {
+                    "clause_id": c.clause_id,
+                    "article_number": c.article_number,
+                    "paragraph_number": c.paragraph_number,
+                    "item_number": c.item_number,
+                    "subitem_number": c.subitem_number,
+                    "display_path": c.display_path,
+                    "parent_clause_id": c.parent_clause_id,
+                    "context_text": c.context_text,
+                    "clause_title": c.title,
+                    "original_clause": c.text,
+                    "detected_issues": [{
+                        "rule_id": f.finding_id,
+                        "issue_title": f.issue_title,
+                        "issue_detail": f.risk_description,
+                        "review_action": [f.why_matters, f.supplier_strategy],
+                        "risk_level": f.severity,
+                        "high_risk": is_high,
+                        "approval_required": is_high,
+                        "summary_suppress": False,
+                        "supplemental_only": False,
+                        "is_structure_mismatch": f.is_structure_mismatch,
+                        "clause_identity": f.clause_identity,
+                        "worst_case_scenario": f.worst_case_scenario,
+                    }],
+                    "applied_rules": [{
+                        "rule_id": f.finding_id,
+                        "rule_status": "confirmed_pattern",
+                        "risk_level": f.severity,
+                        "approval_required": is_high,
+                        "matched_keywords": [f.original_excerpt[:80]] if f.original_excerpt else [],
+                    }],
+                    "match_evidence": [{"rule_id": f.finding_id, "matched_keywords": [f.original_excerpt[:80]] if f.original_excerpt else []}],
+                    "suggested_direction": [f.supplier_strategy],
+                    "fallback_text": [],
+                    "recommended_rewrite": f.suggested_rewrite,
+                    "rewrite_reason": f.risk_description,
+                    "rewrite_reason_codes": [f.finding_id],
+                    "risk_tier": f"{'HIGH (구조적 mismatch — 계약당사자/청구주체/수금책임 정합성 문제)' if is_high else 'MEDIUM (절차적 불이익 또는 조건부 리스크)'}",
+                    "changed_segments": [],
+                    "clause_topic": f.clause_identity,
+                    "high_risk": is_high,
+                    "approval_required": is_high,
+                    "unfavorable_to_us": True,
+                    "worst_case_scenario": f.worst_case_scenario,
+                    "is_structure_mismatch": f.is_structure_mismatch,
+                    "structure_finding": f.to_dict(),
+                }
+                items.append(new_item)
+                if cid:
+                    existing_clause_ids.add(cid)
+                    items_by_clause_id[cid] = new_item
+
+    return items
 
 
 def _infer_unfavorable_to_us(
