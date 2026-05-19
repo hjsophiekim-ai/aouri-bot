@@ -455,7 +455,7 @@ def build_revision_docx(
     sec_sum = _p(body)
     _t(_r(sec_sum, bold=True), "1) 표지/요약")
     ps = _p(body)
-    _t(_r(ps), f"필수수정(HIGH): {len(redline_ids)} / 권장수정(MEDIUM): {len(medium_ids)} / 참고제안(LOW): {len(low_ids)}")
+    _t(_r(ps), f"필수수정(HIGH): {len(high_risk_rows)} / 권장수정(MEDIUM): {len(medium_ids)} / 참고제안(LOW): {len(low_ids)}")
     ps2 = _p(body)
     _t(_r(ps2), f"High risk 조항 수: {len(high_risk_rows)} / Approval required 조항 수: {len(approval_rows)}")
 
@@ -485,102 +485,145 @@ def build_revision_docx(
         _p(body)
 
         sec_top = _p(body)
-        _t(_r(sec_top, bold=True), "1-1) 치명적 리스크 Top 3~5 (변호사 Pick)")
-        topic_weight_supplier = {
-            "dealer_unfair": 40,
-            "payment_settlement": 35,
-            "termination": 32,
-            "cost_burden": 28,
-            "personal_data": 18,
-            "dispute": 5,
-        }
-        topic_weight_contractor = {
-            "payment_settlement": 40,
-            "other": 34,
-            "safety": 28,
-            "termination": 22,
-            "cost_burden": 18,
-            "dispute": 6,
-        }
-        tw0 = topic_weight_supplier if our_role0 == "supplier" else (topic_weight_contractor if our_role0 == "contractor" else {})
+        _t(_r(sec_top, bold=True), "1-1) 치명적 리스크 Top 3~5 (AI 법무 분석)")
 
-        def _score_top3(cr: dict[str, Any]) -> int:
-            s = 0
-            rt0 = str(cr.get("risk_tier") or "").upper()
-            if rt0 == "HIGH":
-                s += 110
-            elif rt0 == "MEDIUM":
-                s += 80
-            if bool(cr.get("approval_required")):
-                s += 50
-            if bool(cr.get("high_risk")):
-                s += 40
-            if bool(cr.get("must_fix")):
-                s += 30
-            if bool(cr.get("user_focus_hit")):
-                s += 25
-            ct0 = str(cr.get("clause_topic") or "")
-            s += int(tw0.get(ct0, 0))
-            if is_dealer_contract and str(jur_kind or "") == "domestic_korea" and ct0 == "dispute" and not bool(cr.get("user_focus_hit")):
-                s -= 80
-            return s
+        # LLM이 생성한 Top 3 데이터 우선 사용
+        _llm_top_risks = frc0.get("top_risks_llm") if isinstance(frc0.get("top_risks_llm"), list) else []
+        _llm_recommendation = str(frc0.get("overall_recommendation") or "").strip()
+        _llm_reason = str(frc0.get("recommendation_reason") or "").strip()
 
-        cand0 = [
-            cr
-            for cr in clause_results
-            if isinstance(cr, dict)
-            and not bool(cr.get("dedup_suppressed"))
-            and not bool(cr.get("keep_as_is"))
-            and (str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM") or bool(cr.get("user_focus_hit")) or bool(cr.get("high_risk")) or bool(cr.get("approval_required")))
-        ]
-        cand0 = sorted(cand0, key=lambda cr: (-_score_top3(cr), str(cr.get("clause_id") or "")))
-        picked: list[dict[str, Any]] = []
-        seen_articles: set[str] = set()
-        for cr in cand0:
-            cid = str(cr.get("clause_id") or "")
-            oc = orig_by_id.get(cid) or {}
-            head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc))
-            if head in seen_articles and head:
-                continue
-            if head:
-                seen_articles.add(head)
-            picked.append(cr)
-            if len(picked) >= 5:
-                break
-        if not picked:
-            pnone_top = _p(body)
-            _t(_r(pnone_top), "- 치명적 리스크 Top 3를 자동 선정할 충분한 근거가 부족합니다.")
-        else:
-            tbl_top = _tbl(body, col_widths=[1200, 2200, 2400, 2000])
+        if _llm_top_risks:
+            # LLM 종합 의견 출력
+            if _llm_recommendation:
+                _rec_ko = {
+                    "SIGN_AS_IS": "원문 서명 가능",
+                    "SIGN_WITH_MINOR_CHANGES": "경미한 수정 후 서명 가능",
+                    "NEGOTIATE_BEFORE_SIGNING": "서명 전 협상 필요",
+                    "DO_NOT_SIGN": "서명 불가 (법무 검토 필수)",
+                }.get(_llm_recommendation, _llm_recommendation)
+                p_rec = _p(body)
+                _t(_r(p_rec, bold=True), f"AI 종합 의견: {_rec_ko}")
+                if _llm_reason:
+                    p_rsn = _p(body)
+                    _t(_r(p_rsn), _llm_reason)
+            tbl_top = _tbl(body, col_widths=[600, 1200, 2200, 2200, 1600])
             tr_hdr = ET.SubElement(tbl_top, _w("tr"))
-            for hdr_txt, hdr_w in [("조항", 1200), ("리스크", 2200), ("최악 시나리오", 2400), ("협상 전략", 2000)]:
+            for hdr_txt, hdr_w in [("순위", 600), ("조항", 1200), ("리스크", 2200), ("최악 시나리오", 2200), ("권고 조치", 1600)]:
                 tc_h = _tc(tr_hdr, width=hdr_w)
                 _t(_r(_p(tc_h), bold=True), hdr_txt)
-            for cr in picked:
-                cid = str(cr.get("clause_id") or "")
-                oc = orig_by_id.get(cid) or {}
-                head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc)) or cid
-                issues = cr.get("detected_issue_list") if isinstance(cr.get("detected_issue_list"), list) else []
-                it = ""
-                for x in issues:
-                    if isinstance(x, dict) and bool(x.get("summary_suppress")):
-                        continue
-                    if isinstance(x, dict) and isinstance(x.get("issue_title"), str) and x["issue_title"].strip():
-                        it = x["issue_title"].strip()
-                        break
-                rr = str(cr.get("rewrite_reason") or "").strip()
-                risk1 = it or (rr[:90] if rr else "리스크/보완 필요")
-                wcs = str(cr.get("worst_case_scenario") or "").strip()
-                neg = str(cr.get("negotiation_strategy") or "").strip()
-                if not wcs:
-                    sr = str(cr.get("suggested_rewrite") or "").strip()
-                    if "[추가]" in sr:
-                        sr = sr.split("[추가]", 1)[1].strip()
-                    wcs = (sr[:180] + "…") if len(sr) > 180 else sr
+            for risk_item in _llm_top_risks:
+                rank_val = str(risk_item.get("rank") or "")
+                cid_val = str(risk_item.get("clause_id") or "")
+                title_val = str(risk_item.get("risk_title") or "")
+                sev_val = str(risk_item.get("severity") or "")
+                summary_val = str(risk_item.get("one_line_summary") or "").strip()
+                fin_val = str(risk_item.get("financial_impact") or "").strip()
+                action_val = str(risk_item.get("recommended_action") or "").strip()
+                risk_cell = f"[{sev_val}] {title_val}" if sev_val else title_val
+                wcs_cell = summary_val
+                if fin_val:
+                    wcs_cell += f"\n금전적 영향: {fin_val}"
                 tr_row = ET.SubElement(tbl_top, _w("tr"))
-                for cell_txt, cell_w in [(head, 1200), (risk1[:160], 2200), (wcs[:240], 2400), (neg[:240] if neg else "(협상 전략 없음)", 2000)]:
+                for cell_txt, cell_w in [(rank_val, 600), (cid_val[:60], 1200), (risk_cell[:200], 2200), (wcs_cell[:280], 2200), (action_val[:200], 1600)]:
                     tc_d = _tc(tr_row, width=cell_w)
                     _t(_r(_p(tc_d)), cell_txt)
+        else:
+            # LLM 데이터 없을 때 — 기존 점수 기반 선택
+            topic_weight_supplier = {
+                "dealer_unfair": 40,
+                "payment_settlement": 35,
+                "termination": 32,
+                "cost_burden": 28,
+                "personal_data": 18,
+                "dispute": 5,
+            }
+            topic_weight_contractor = {
+                "payment_settlement": 40,
+                "other": 34,
+                "safety": 28,
+                "termination": 22,
+                "cost_burden": 18,
+                "dispute": 6,
+            }
+            tw0 = topic_weight_supplier if our_role0 == "supplier" else (topic_weight_contractor if our_role0 == "contractor" else {})
+
+            def _score_top3(cr: dict[str, Any]) -> int:
+                s = 0
+                rt0 = str(cr.get("risk_tier") or "").upper()
+                if rt0 == "HIGH":
+                    s += 110
+                elif rt0 == "MEDIUM":
+                    s += 80
+                if bool(cr.get("approval_required")):
+                    s += 50
+                if bool(cr.get("high_risk")):
+                    s += 40
+                if bool(cr.get("must_fix")):
+                    s += 30
+                if bool(cr.get("user_focus_hit")):
+                    s += 25
+                ct0 = str(cr.get("clause_topic") or "")
+                s += int(tw0.get(ct0, 0))
+                if is_dealer_contract and str(jur_kind or "") == "domestic_korea" and ct0 == "dispute" and not bool(cr.get("user_focus_hit")):
+                    s -= 80
+                return s
+
+            cand0 = [
+                cr
+                for cr in clause_results
+                if isinstance(cr, dict)
+                and not bool(cr.get("dedup_suppressed"))
+                and not bool(cr.get("keep_as_is"))
+                and (str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM") or bool(cr.get("user_focus_hit")) or bool(cr.get("high_risk")) or bool(cr.get("approval_required")))
+            ]
+            cand0 = sorted(cand0, key=lambda cr: (-_score_top3(cr), str(cr.get("clause_id") or "")))
+            picked: list[dict[str, Any]] = []
+            seen_articles: set[str] = set()
+            for cr in cand0:
+                cid = str(cr.get("clause_id") or "")
+                oc = orig_by_id.get(cid) or {}
+                head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc))
+                if head in seen_articles and head:
+                    continue
+                if head:
+                    seen_articles.add(head)
+                picked.append(cr)
+                if len(picked) >= 5:
+                    break
+            if not picked:
+                pnone_top = _p(body)
+                _t(_r(pnone_top), "- 치명적 리스크 Top 3를 자동 선정할 충분한 근거가 부족합니다.")
+            else:
+                tbl_top = _tbl(body, col_widths=[1200, 2200, 2400, 2000])
+                tr_hdr = ET.SubElement(tbl_top, _w("tr"))
+                for hdr_txt, hdr_w in [("조항", 1200), ("리스크", 2200), ("최악 시나리오", 2400), ("협상 전략", 2000)]:
+                    tc_h = _tc(tr_hdr, width=hdr_w)
+                    _t(_r(_p(tc_h), bold=True), hdr_txt)
+                for cr in picked:
+                    cid = str(cr.get("clause_id") or "")
+                    oc = orig_by_id.get(cid) or {}
+                    head = " / ".join(_clause_hierarchy_lines_from_original_clause(oc)) or cid
+                    issues = cr.get("detected_issue_list") if isinstance(cr.get("detected_issue_list"), list) else []
+                    it = ""
+                    for x in issues:
+                        if isinstance(x, dict) and bool(x.get("summary_suppress")):
+                            continue
+                        if isinstance(x, dict) and isinstance(x.get("issue_title"), str) and x["issue_title"].strip():
+                            it = x["issue_title"].strip()
+                            break
+                    rr = str(cr.get("rewrite_reason") or "").strip()
+                    risk1 = it or (rr[:90] if rr else "리스크/보완 필요")
+                    wcs = str(cr.get("worst_case_scenario") or "").strip()
+                    neg = str(cr.get("negotiation_strategy") or "").strip()
+                    if not wcs:
+                        sr = str(cr.get("suggested_rewrite") or "").strip()
+                        if "[추가]" in sr:
+                            sr = sr.split("[추가]", 1)[1].strip()
+                        wcs = (sr[:180] + "...") if len(sr) > 180 else sr
+                    tr_row = ET.SubElement(tbl_top, _w("tr"))
+                    for cell_txt, cell_w in [(head, 1200), (risk1[:160], 2200), (wcs[:240], 2400), (neg[:240] if neg else "(협상 전략 없음)", 2000)]:
+                        tc_d = _tc(tr_row, width=cell_w)
+                        _t(_r(_p(tc_d)), cell_txt)
         _p(body)
     if show_ids:
         ph = _p(body)
@@ -761,7 +804,10 @@ def build_revision_docx(
     _t(_r(sec_red, bold=True), "5) 본문 redline 버전 (필수수정 조항만 표시)")
     if not redline_ids:
         pnone = _p(body)
-        _t(_r(pnone), "필수수정(redline) 조항이 없습니다.")
+        if high_risk_rows:
+            _t(_r(pnone), f"필수수정(redline) 조항이 없습니다. (HIGH 조항 {len(high_risk_rows)}개 — 4)항 안내를 참조하세요.)")
+        else:
+            _t(_r(pnone), "필수수정(HIGH) 조항이 없습니다.")
     for cid in redline_ids:
         oc = orig_by_id.get(cid) or {}
         cr = cr_by_id.get(cid) or {}
@@ -1006,3 +1052,57 @@ def build_revision_docx(
         z.writestr("_rels/.rels", rels)
         z.writestr("word/document.xml", document_xml)
     return buf.getvalue()
+
+
+def generate_redline(
+    contract_docx_path: "str | Any",
+    review_result: "Any",
+    *,
+    output_dir: "str | Any | None" = None,
+    author: str = "퍼시스법무",
+) -> "tuple[Any, Any]":
+    """
+    계약서 DOCX 파일과 검토 결과(ClauseLevelResult)로 redline + clean DOCX를 생성한다.
+
+    Args:
+        contract_docx_path: 원본 계약서 DOCX 파일 경로
+        review_result: ClauseLevelResult (build_clause_level_result 반환값)
+        output_dir: 출력 디렉토리 (None이면 원본 파일과 동일 위치)
+        author: tracked changes 작성자 이름
+
+    Returns:
+        (redline_path, clean_path) — Path 객체 쌍
+    """
+    from pathlib import Path
+    from runtime.review.docx_redline import generate_redline as _gen
+
+    src = Path(contract_docx_path)
+
+    # ClauseLevelResult or dict 모두 처리
+    if hasattr(review_result, "clauses"):
+        clauses = review_result.clauses or []
+        clause_results = review_result.clause_results or []
+    elif isinstance(review_result, dict):
+        clauses = review_result.get("clauses") or []
+        clause_results = review_result.get("clause_results") or []
+    else:
+        raise TypeError(f"review_result 타입 오류: {type(review_result)}")
+
+    original_clauses = [
+        {
+            "clause_id": c.clause_id if hasattr(c, "clause_id") else c.get("clause_id"),
+            "article_number": c.article_number if hasattr(c, "article_number") else c.get("article_number"),
+            "paragraph_number": c.paragraph_number if hasattr(c, "paragraph_number") else c.get("paragraph_number"),
+            "text": c.text if hasattr(c, "text") else c.get("text"),
+            "display_path": c.display_path if hasattr(c, "display_path") else c.get("display_path"),
+        }
+        for c in clauses
+    ]
+
+    return _gen(
+        contract_path=src,
+        original_clauses=original_clauses,
+        clause_results=list(clause_results),
+        output_dir=output_dir,
+        author=author,
+    )

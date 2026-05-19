@@ -2144,6 +2144,12 @@ def _apply_advisory_ip_review(
         if first_non_meta_cr is None:
             first_non_meta_cr = cr
 
+        # Guard: dealer trademark/IP usage clauses (e.g. "사전 승인없이 상호·상표 사용 불가")
+        # must NEVER receive development-deliverable IP warranty templates.
+        # Setting found_ip_clause=True prevents ③ from injecting them into the first clause.
+        if _is_dealer_trademark_ip_clause(title, ot):
+            continue
+
         # ① IP가 수탁자에게 귀속 → CRITICAL
         if is_ip_clause and _IP_CONTRACTOR_KW.search(combined):
             base = (sr or ot).rstrip()
@@ -2265,6 +2271,34 @@ _FORBIDDEN_LAW_KW = re.compile(
 def _is_service_advisory_contract(contract_type: str, text: str) -> bool:
     haystack = (contract_type or "") + " " + (text or "")[:400]
     return bool(_SERVICE_ADVISORY_KW.search(haystack))
+
+
+# ─── Dealer trademark/IP usage guard ─────────────────────────────────────────
+# Prevents development-deliverable IP templates from being applied to dealer
+# trademark-usage restriction clauses (e.g. "사전 승인없이 상호·상표 사용 불가").
+
+_DEALER_TRADEMARK_GUARD_KW = re.compile(
+    r"사전\s*승인\s*없이.{0,100}(?:상호|상표|저작물|지식재산권)"
+    r"|(?:간판|영업장|옥내.{0,5}외\s*간판).{0,60}(?:상호|상표|지식재산권)"
+    r"|대리점.{0,40}(?:상표|로고|상호).{0,40}사용",
+    re.IGNORECASE | re.DOTALL,
+)
+_DEALER_DEVELOPMENT_DELIVERABLE_KW = re.compile(
+    r"산출물|소스\s*코드|개발.{0,20}결과물|수탁자는\s*결과물|개발.{0,20}저작물",
+    re.IGNORECASE,
+)
+
+
+def _is_dealer_trademark_ip_clause(title: str, text: str) -> bool:
+    """Return True when the clause restricts dealer use of supplier trademarks/IP.
+
+    This is NOT a development-deliverable IP clause — the development IP warranty
+    templates (수탁자는 결과물이 제3자의 저작권...) must never be applied here.
+    """
+    combined = (title or "") + " " + (text or "")
+    if _DEALER_DEVELOPMENT_DELIVERABLE_KW.search(combined):
+        return False
+    return bool(_DEALER_TRADEMARK_GUARD_KW.search(combined))
 
 
 def _apply_zero_hallucination_guardrail(

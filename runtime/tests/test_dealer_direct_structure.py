@@ -418,5 +418,300 @@ class TestStructureDetectorEdgeCases(unittest.TestCase):
         self.assertEqual(result.contract_structure, STRUCTURE_DIRECT_CUSTOMER)
 
 
+class TestTrademarkIPClauseGuard(unittest.TestCase):
+    """Task 2: FIXTURE_G_IP — trademark/IP clause must not produce dev-IP warranty template."""
+
+    def test_clause_identity_is_trademark_ip(self) -> None:
+        identity = classify_clause_identity(title="지식재산권", text=FIXTURE_G_IP)
+        self.assertEqual(identity, CI_TRADEMARK_IP)
+
+    def test_no_dev_ip_template_in_findings(self) -> None:
+        findings = analyze_clause_for_structure_findings(
+            clause_title="지식재산권",
+            clause_text=FIXTURE_G_IP,
+        )
+        for f in findings:
+            self.assertNotIn(
+                "수탁자는 결과물이 제3자의 저작권",
+                f.suggested_rewrite or "",
+                "Dev-IP warranty template must never appear for dealer trademark/IP clause",
+            )
+            self.assertNotIn(
+                "제3자의 권리 침해로 인해 위탁자에게",
+                f.suggested_rewrite or "",
+                "Dev-IP warranty template must never appear for dealer trademark/IP clause",
+            )
+            self.assertNotIn(
+                "외부 소재(오픈소스, 무료 이미지",
+                f.suggested_rewrite or "",
+                "Dev-IP warranty template must never appear for dealer trademark/IP clause",
+            )
+
+    def test_suggested_rewrite_focuses_on_trademark_ip_control(self) -> None:
+        findings = analyze_clause_for_structure_findings(
+            clause_title="지식재산권",
+            clause_text=FIXTURE_G_IP,
+        )
+        self.assertTrue(len(findings) > 0, "Expected at least one finding for FIXTURE_G_IP")
+        rewrite = findings[0].suggested_rewrite or ""
+        # Must contain supplier trademark/IP use control language
+        self.assertTrue(
+            any(kw in rewrite for kw in ["사전 서면 승인", "사전서면승인", "승인된 사용범위"]),
+            f"Rewrite must mention approval scope, got: {rewrite[:200]}",
+        )
+        self.assertTrue(
+            any(kw in rewrite for kw in ["시정요구", "시정"]),
+            f"Rewrite must mention correction request, got: {rewrite[:200]}",
+        )
+        self.assertTrue(
+            "손해배상" in rewrite,
+            f"Rewrite must mention damages, got: {rewrite[:200]}",
+        )
+        self.assertTrue(
+            any(kw in rewrite for kw in ["갱신거절", "계약해지"]),
+            f"Rewrite must mention termination/renewal refusal proportionality, got: {rewrite[:200]}",
+        )
+
+    def test_clause_level_advisory_ip_guard(self) -> None:
+        """_apply_advisory_ip_review must not inject dev-IP template into dealer trademark clause."""
+        from runtime.review.clause_level import _apply_advisory_ip_review
+        cr = {
+            "clause_id": "test_g_01",
+            "clause_title": "지식재산권",
+            "original_text": FIXTURE_G_IP,
+            "suggested_rewrite": None,
+            "article_number": "10",
+        }
+        # Pass contract_type that would trigger advisory IP review ("용역" appears in body)
+        _apply_advisory_ip_review(
+            clause_results=[cr],
+            contract_type="위탁판매 대리점 용역 계약",
+            text="위탁판매 대리점 용역 계약. " + FIXTURE_G_IP,
+            entity="퍼시스",
+        )
+        sr = cr.get("suggested_rewrite") or ""
+        self.assertNotIn(
+            "수탁자는 결과물이 제3자의 저작권",
+            sr,
+            "clause_level advisory IP review must not inject dev-IP warranty for dealer trademark clause",
+        )
+        self.assertNotIn(
+            "제3자의 권리 침해로 인해 위탁자에게",
+            sr,
+            "clause_level advisory IP review must not inject dev-IP warranty for dealer trademark clause",
+        )
+
+
+class TestHarmlessComplianceClause(unittest.TestCase):
+    """Task 3: FIXTURE_I — anti-bribery compliance clause must not be flagged as cost burden."""
+
+    def test_clause_identity_is_compliance_general(self) -> None:
+        identity = classify_clause_identity(title="공정거래", text=FIXTURE_I_HARMLESS_COMPLIANCE)
+        self.assertEqual(identity, CI_COMPLIANCE)
+
+    def test_no_cost_burden_risk(self) -> None:
+        result = is_false_positive_compliance(FIXTURE_I_HARMLESS_COMPLIANCE, "RISK-006")
+        self.assertTrue(
+            result,
+            "Anti-bribery clause must be suppressed (false positive) for RISK-006 cost burden rule",
+        )
+
+    def test_no_setoff_payment_recommendation(self) -> None:
+        findings = analyze_clause_for_structure_findings(
+            clause_title="공정거래 준수",
+            clause_text=FIXTURE_I_HARMLESS_COMPLIANCE,
+        )
+        for f in findings:
+            self.assertNotIn(
+                "payment_settlement", f.risk_category or "",
+                "Anti-bribery compliance clause must not produce payment_settlement risk finding",
+            )
+            self.assertNotIn(
+                "상계", f.risk_description or "",
+                "Anti-bribery compliance clause must not recommend setoff/상계",
+            )
+            self.assertNotIn(
+                "cost_burden", f.risk_category or "",
+                "Anti-bribery compliance clause must not produce cost_burden risk finding",
+            )
+
+
+class TestCollectionDutyWithStructureContext(unittest.TestCase):
+    """Task 4: FIXTURE_E with direct_customer_contract_with_dealer_service structure context."""
+
+    def test_high_severity_finding(self) -> None:
+        findings = analyze_clause_for_structure_findings(
+            clause_title="대리점 의무",
+            clause_text=FIXTURE_E_CONTRACT_COLLECTION,
+        )
+        severities = [f.severity for f in findings]
+        self.assertIn("HIGH", severities, "Collection duty clause must produce a HIGH finding")
+
+    def test_structure_mismatch_is_true(self) -> None:
+        findings = analyze_clause_for_structure_findings(
+            clause_title="대리점 의무",
+            clause_text=FIXTURE_E_CONTRACT_COLLECTION,
+        )
+        high_findings = [f for f in findings if f.severity == "HIGH"]
+        self.assertTrue(len(high_findings) > 0, "Expected at least one HIGH finding")
+        self.assertTrue(
+            any(f.is_structure_mismatch for f in high_findings),
+            "At least one HIGH finding must have is_structure_mismatch=True",
+        )
+
+    def test_suggested_rewrite_supplier_is_contracting_party(self) -> None:
+        """Rewrite must clarify supplier is the customer-facing contracting/billing party."""
+        findings = analyze_clause_for_structure_findings(
+            clause_title="대리점 의무",
+            clause_text=FIXTURE_E_CONTRACT_COLLECTION,
+        )
+        self.assertTrue(len(findings) > 0)
+        rewrites = " ".join(f.suggested_rewrite or "" for f in findings)
+        self.assertTrue(
+            any(kw in rewrites for kw in ["공급업자", "공급업자가 정한", "공급업자의 대금청구"]),
+            f"Rewrite must state supplier is the billing/contracting party, got: {rewrites[:300]}",
+        )
+        self.assertTrue(
+            any(kw in rewrites for kw in ["지원", "협조", "안내"]),
+            f"Rewrite must state dealer supports/assists (not directly contracts), got: {rewrites[:300]}",
+        )
+
+    def test_suggest_revisions_with_structure_context(self) -> None:
+        """suggest_revisions with direct_customer_contract context must produce HIGH items."""
+        from runtime.review.clause_extraction import ClauseChunk
+        from runtime.review.revision import suggest_revisions
+
+        c = ClauseChunk(
+            clause_id="test_e_coll",
+            article_number="5",
+            paragraph_number="1",
+            item_number=None,
+            subitem_number=None,
+            display_path="제5조 제1항",
+            parent_clause_id=None,
+            context_text=None,
+            title="대리점 의무",
+            text=FIXTURE_E_CONTRACT_COLLECTION,
+        )
+        result = suggest_revisions(
+            clauses=[c],
+            matched_rules=[],
+            posture="neutral",
+            contract_context={"contract_structure": STRUCTURE_DIRECT_CUSTOMER_KEY},
+        )
+        items = result["items"]
+        high_items = [it for it in items if it.get("high_risk")]
+        self.assertGreater(len(high_items), 0, "Expected ≥1 HIGH item from suggest_revisions")
+        # Rewrite must mention supplier as the contracting party
+        all_rewrites = " ".join(str(it.get("recommended_rewrite") or "") for it in items)
+        self.assertTrue(
+            "공급업자" in all_rewrites,
+            f"Rewrite must reference 공급업자 as the party, got: {all_rewrites[:300]}",
+        )
+
+
+class TestReportSummaryHighCount(unittest.TestCase):
+    """Task 5: Final report summary HIGH count must be accurate when dealer-direct HIGH items exist."""
+
+    def test_summary_high_count_with_dealer_direct_structure(self) -> None:
+        from runtime.review.clause_extraction import ClauseChunk
+        from runtime.review.revision import suggest_revisions
+
+        c = ClauseChunk(
+            clause_id="test_sum_e",
+            article_number="5",
+            paragraph_number="1",
+            item_number=None,
+            subitem_number=None,
+            display_path="제5조 제1항",
+            parent_clause_id=None,
+            context_text=None,
+            title="대리점 의무",
+            text=FIXTURE_E_CONTRACT_COLLECTION,
+        )
+        result = suggest_revisions(
+            clauses=[c],
+            matched_rules=[],
+            posture="neutral",
+            contract_context={"contract_structure": STRUCTURE_DIRECT_CUSTOMER_KEY},
+        )
+        summary = result["summary"]
+        self.assertGreaterEqual(
+            summary["high_risk_clause_count"], 1,
+            f"high_risk_clause_count must be ≥ 1 when HIGH dealer-direct findings exist, got={summary}",
+        )
+
+    def test_summary_high_count_equals_items_high_risk(self) -> None:
+        """summary.high_risk_clause_count must exactly match count of items with high_risk=True."""
+        from runtime.review.clause_extraction import ClauseChunk
+        from runtime.review.revision import suggest_revisions
+
+        c = ClauseChunk(
+            clause_id="test_sum_f",
+            article_number="6",
+            paragraph_number="1",
+            item_number=None,
+            subitem_number=None,
+            display_path="제6조 제1항",
+            parent_clause_id=None,
+            context_text=None,
+            title="책임",
+            text=FIXTURE_F_ALL_LIABILITY,
+        )
+        result = suggest_revisions(
+            clauses=[c],
+            matched_rules=[],
+            posture="neutral",
+            contract_context={"contract_structure": STRUCTURE_DIRECT_CUSTOMER_KEY},
+        )
+        items = result["items"]
+        summary = result["summary"]
+        expected_high = sum(1 for it in items if it.get("high_risk"))
+        self.assertEqual(
+            summary["high_risk_clause_count"], expected_high,
+            "summary.high_risk_clause_count must exactly match items with high_risk=True",
+        )
+        self.assertGreater(expected_high, 0, "Expected at least one HIGH item for overbroad liability")
+
+    def test_no_false_zero_high_count(self) -> None:
+        """When HIGH findings exist, summary must never report high_risk_clause_count=0."""
+        from runtime.review.clause_extraction import ClauseChunk
+        from runtime.review.revision import suggest_revisions
+
+        clauses = [
+            ClauseChunk(
+                clause_id=f"test_multi_{i}",
+                article_number=str(i + 1),
+                paragraph_number="1",
+                item_number=None,
+                subitem_number=None,
+                display_path=f"제{i+1}조 제1항",
+                parent_clause_id=None,
+                context_text=None,
+                title=title,
+                text=text,
+            )
+            for i, (title, text) in enumerate([
+                ("거래형태", FIXTURE_B_STRUCTURE),
+                ("대리점 의무", FIXTURE_E_CONTRACT_COLLECTION),
+                ("책임", FIXTURE_F_ALL_LIABILITY),
+            ])
+        ]
+        result = suggest_revisions(
+            clauses=clauses,
+            matched_rules=[],
+            posture="neutral",
+            contract_context={"contract_structure": STRUCTURE_DIRECT_CUSTOMER_KEY},
+        )
+        summary = result["summary"]
+        items = result["items"]
+        any_high = any(it.get("high_risk") for it in items)
+        if any_high:
+            self.assertGreater(
+                summary["high_risk_clause_count"], 0,
+                "summary.high_risk_clause_count must be > 0 when any item has high_risk=True",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
