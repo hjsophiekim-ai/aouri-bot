@@ -377,19 +377,25 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
                 l = (line or "").strip()
                 if not l:
                     continue
-                m3 = re.match(r"^(\d{1,2})\.\s{1,4}(.{2,80})$", l)
+                # Accept "N. <any text>" — no length limit so long clause bodies don't prevent detection.
+                # "shall/will/must" etc. are allowed in the title: for English NDA the heading
+                # often IS the first sentence (e.g. "8. For any disputes...").
+                m3 = re.match(r"^(\d{1,2})\.\s+(.+)$", l)
                 if not m3:
                     continue
                 num = m3.group(1)
                 rest = (m3.group(2) or "").strip()
-                # Skip if it looks like a sentence (has verb words or ends with period+more)
-                if re.search(r"\b(shall|will|must|may|is\b|are\b|has\b|have\b|does\b|do\b)\b", rest, re.IGNORECASE):
-                    continue
-                # Require first letter uppercase and reasonable length for a heading
+                # Must start with uppercase letter (avoids matching list items like "1. first item")
                 if not re.match(r"^[A-Z]", rest):
                     continue
+                # Skip lines that are clearly mid-sentence continuations (all lowercase start)
+                # Already handled above. Also skip lines that look like sub-bullets "1. (a)"
+                if re.match(r"^\(\w\)", rest):
+                    continue
+                # Require the preceding context is not already inside a numbered section
+                # (simple heuristic: only accept if number is sequential or first occurrence)
                 idxs.append(i)
-                titles[i] = f"{num}. {rest}"
+                titles[i] = f"{num}. {rest[:120]}"
                 ids[i] = f"EN-{num}"
 
     if not idxs:

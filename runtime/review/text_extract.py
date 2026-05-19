@@ -393,7 +393,29 @@ def _extract_visible_text_from_word_xml(
     return {"texts": paras, "has_track_changes": has_track_changes, "raw_markup_text": raw_markup_text[:20000]}
 
 
+def _ocr_pdf_pages(file_path: Path) -> str:
+    """이미지 기반 PDF를 pymupdf로 렌더링 후 pytesseract OCR."""
+    import fitz  # pymupdf
+    import pytesseract
+    from PIL import Image
+    import io
+
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    doc = fitz.open(str(file_path))
+    texts: list[str] = []
+    for page_num, page in enumerate(doc, 1):
+        mat = fitz.Matrix(2.0, 2.0)  # 2x 해상도 (OCR 정확도 향상)
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        text = pytesseract.image_to_string(img, lang="kor+eng")
+        if text and text.strip():
+            texts.append(f"[페이지 {page_num}]\n{text.strip()}")
+    doc.close()
+    return "\n\n".join(texts)
+
+
 def extract_text_from_pdf(file_path: Path) -> str:
+    # 1차: pdfplumber (텍스트 레이어 있는 PDF)
     import pdfplumber
 
     texts: list[str] = []
@@ -402,7 +424,26 @@ def extract_text_from_pdf(file_path: Path) -> str:
             text = page.extract_text()
             if text and text.strip():
                 texts.append(f"[페이지 {page_num}]\n{text.strip()}")
-    return "\n\n".join(texts)
+    if texts:
+        return "\n\n".join(texts)
+
+    # 2차: pymupdf (암호화·구조 복잡한 텍스트 PDF)
+    try:
+        import fitz
+        doc = fitz.open(str(file_path))
+        fitz_texts: list[str] = []
+        for page_num, page in enumerate(doc, 1):
+            text = page.get_text()
+            if text and text.strip():
+                fitz_texts.append(f"[페이지 {page_num}]\n{text.strip()}")
+        doc.close()
+        if fitz_texts:
+            return "\n\n".join(fitz_texts)
+    except Exception:
+        pass
+
+    # 3차: OCR (이미지 기반 스캔 PDF)
+    return _ocr_pdf_pages(file_path)
 
 
 def extract_text_from_hwp(file_path: Path) -> str:

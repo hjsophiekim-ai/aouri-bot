@@ -1039,6 +1039,79 @@
           "trigger:수신자",
           "confirmed"
         ]
+      },
+      {
+        "rule_id": "NDA-EN-004",
+        "entity": "all",
+        "contract_type": [
+          "NDA/비밀유지",
+          "해외발주(미국/유럽/덴마크/이태리 등)"
+        ],
+        "clause_type": "데이터 삭제/반환",
+        "rule_level": "confirmed_pattern",
+        "title": "복구 불가능한 데이터 삭제 의무 — 영문 NDA",
+        "description": "전자 데이터를 복구 불가능한 방식으로 삭제하도록 의무화하는 조항은 기업 IT 백업/DR 시스템, 회계·세무 법정 보존 의무와 충돌한다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "en_nda_data_deletion_pattern",
+          "example_files": [],
+          "example_phrase": "permanently delete"
+        },
+        "risk_level": "MEDIUM",
+        "review_action": [
+          "재해복구(DR)/백업 시스템 보유 복사본의 예외 명시 요청",
+          "법정 보존 의무 기간 동안은 비밀유지 의무 하에 보유 허용 조항 삽입",
+          "삭제 완료 증명 절차 및 기한을 합리적으로 설정"
+        ],
+        "approval_required": false,
+        "worst_case_scenario": "DR 백업에 잔존하는 정보로 인해 NDA 위반 주장 및 손해배상 청구 가능. 법정 보존 의무 이행과 NDA 의무 간 충돌 시 어느 쪽도 완전히 이행 불가한 불가능 의무 발생.",
+        "negotiation_strategy": "표준 DR/백업 정책 적용 예외 + 법령상 보존 의무 기간 동안 비밀유지 조건부 보유 허용 문구 삽입. 삭제 대신 '접근 제한(access restriction)' 방식 대안 제시.",
+        "tags": [
+          "source:en_nda_pattern",
+          "clause:data_deletion",
+          "trigger:cannot be recovered",
+          "trigger:irrecoverable",
+          "trigger:permanently delete",
+          "trigger:unrecoverable manner",
+          "trigger:deleted in such a manner",
+          "confirmed"
+        ]
+      },
+      {
+        "rule_id": "NDA-EN-005",
+        "entity": "all",
+        "contract_type": [
+          "NDA/비밀유지",
+          "해외발주(미국/유럽/덴마크/이태리 등)"
+        ],
+        "clause_type": "준거법/관할",
+        "rule_level": "confirmed_pattern",
+        "title": "오스트리아·유럽법 준거 — 영문 NDA",
+        "description": "오스트리아법 또는 EU법을 준거법으로 지정한 경우 한국 법무팀의 해석 역량을 벗어나며 현지 법무법인 자문이 필요하다.",
+        "contract_evidence": {
+          "confirmed": true,
+          "source": "en_nda_governing_law_pattern",
+          "example_files": [],
+          "example_phrase": "Austrian law"
+        },
+        "risk_level": "HIGH",
+        "review_action": [
+          "중립국(싱가포르, 영국) 법으로 대체 협상",
+          "오스트리아법 유지 시 ICC 중재로 관할 변경",
+          "현지 법무법인 자문 비용 및 절차 사전 검토"
+        ],
+        "approval_required": true,
+        "worst_case_scenario": "오스트리아법 확정 시 현지 법원 소송 불가피 — 현지 법무법인 선임 비용 수천만원 + 패소 시 한국 내 강제집행 불확실, 추가 소송 비용 발생. EU GDPR 등 추가 규제 적용 리스크.",
+        "negotiation_strategy": "1안: 중립국(싱가포르) 법 + ICC 중재로 대체. 2안: 오스트리아법 유지하되 분쟁은 ICC 싱가포르 중재로 변경. 3안: 한국법 + 서울중앙지방법원 병렬 비전속 관할 삽입.",
+        "tags": [
+          "source:en_nda_pattern",
+          "clause:governing_law",
+          "trigger:Austrian law",
+          "trigger:laws of Austria",
+          "trigger:Austria",
+          "trigger:Zell am See",
+          "confirmed"
+        ]
       }
     ],
     "exception_possible": [

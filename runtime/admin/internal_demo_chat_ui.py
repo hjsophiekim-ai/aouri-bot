@@ -243,7 +243,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
               <div style="margin-top:10px;">
                 <div class="label">계약서 첨부</div>
-                <input id="file" type="file" />
+                <input id="file" type="file" accept=".txt,.docx,.xlsx,.pdf,.hwp" />
+                <div style="font-size:12px;color:#888;margin-top:4px;">지원: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF는 OCR 자동 처리)</div>
               </div>
 
               <div style="margin-top:10px;">
@@ -691,7 +692,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             return;
           }
           if (data && data.extraction && data.extraction.success === false) {
-            _setStartMsg((data.extraction.error || '텍스트 추출 실패') + ' (OCR/hwp/pdf는 미지원)', true);
+            _setStartMsg('텍스트 추출 실패: ' + (data.extraction.error || '알 수 없는 오류'), true);
             return;
           }
           ctx.entity = (data.classification && data.classification.entity) ? data.classification.entity : (entity || 'all');

@@ -45,6 +45,7 @@ from runtime.review.infer import update_cache
 from runtime.review.revision import split_into_clauses, suggest_revisions
 from runtime.review.clause_level import build_clause_level_result
 from runtime.review.docx_writer import build_revision_docx
+from runtime.review.redline_builder import build_redline_from_analysis
 from runtime.review.text_extract import extract_text_from_file
 from runtime.services.query_service import ReviewInput, RuleQueryService
 from runtime.law.cache import JsonFileCache
@@ -601,6 +602,9 @@ def create_handler(service: RuleQueryService):
                 return
             if parsed.path == "/api/revision/download_docx":
                 self._handle_revision_download_docx(service)
+                return
+            if parsed.path in ("/api/revision/download_redline", "/api/revision/download_clean"):
+                self._handle_revision_download_redline(service, parsed.path)
                 return
             if parsed.path == "/api/questions/generate":
                 self._handle_questions_generate(service)
@@ -1551,6 +1555,17 @@ def create_handler(service: RuleQueryService):
                     review_focus=(review_focus if isinstance(review_focus, str) else None),
                 )
                 try:
+                    _frc_base = clause_meta.get("final_review_context") if isinstance(clause_meta, dict) else None
+                    _frc_for_docx: dict | None = None
+                    if isinstance(_frc_base, dict):
+                        _frc_for_docx = dict(_frc_base)
+                        if isinstance(clause_meta, dict):
+                            if clause_meta.get("top_risks_llm"):
+                                _frc_for_docx["top_risks_llm"] = clause_meta["top_risks_llm"]
+                            if clause_meta.get("overall_recommendation"):
+                                _frc_for_docx["overall_recommendation"] = clause_meta["overall_recommendation"]
+                            if clause_meta.get("recommendation_reason"):
+                                _frc_for_docx["recommendation_reason"] = clause_meta["recommendation_reason"]
                     docx_bytes = build_revision_docx(
                         entity=entity,
                         contract_type=contract_type,
@@ -1561,7 +1576,7 @@ def create_handler(service: RuleQueryService):
                         law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
                         questions=[question_to_dict(q) for q in qs],
                         answers=(answers if isinstance(answers, dict) else None),
-                        final_review_context=(clause_meta.get("final_review_context") if isinstance(clause_meta, dict) else None),
+                        final_review_context=_frc_for_docx,
                         checklist_items=checklist_items_for_docx if checklist_items_for_docx else None,
                     )
                 except Exception as exc:
@@ -1659,6 +1674,99 @@ def create_handler(service: RuleQueryService):
                 HTTPStatus.OK,
                 docx_bytes,
                 filename="aouribot_revision.docx",
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+        def _handle_revision_download_redline(self, service: RuleQueryService, path: str) -> None:
+            import base64
+            want_clean = path.endswith("/download_clean")
+            try:
+                content_len = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(content_len)
+                body = json.loads(raw.decode("utf-8")) if raw else {}
+            except Exception as exc:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"invalid JSON: {exc}"})
+                return
+
+            session_id = body.get("session_id")
+            if not (isinstance(session_id, str) and session_id):
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "session_id required"})
+                return
+            try:
+                doc = load_session(session_id)
+            except Exception as exc:
+                _json_response(self, HTTPStatus.NOT_FOUND, {"error": str(exc)})
+                return
+
+            # 원본 DOCX bytes 확인
+            orig_b64 = doc.get("original_docx_b64")
+            if not orig_b64:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {
+                    "error": "원본 DOCX가 세션에 없습니다. DOCX 파일로 업로드한 세션만 지원합니다.",
+                    "hint": "Upload a .docx file (not txt/pdf) to enable redline generation."
+                })
+                return
+            original_bytes = base64.b64decode(orig_b64)
+
+            # 검토 결과 확인 (없으면 빠른 재실행)
+            review_result = doc.get("review_result")
+            if not (isinstance(review_result, dict) and isinstance(review_result.get("clause_results"), list)):
+                review_result = run_review_with_session(service, session_id)
+
+            clause_results = review_result.get("clause_results") or []
+            entity = str(doc.get("entity") or "퍼시스")
+            filename_base = (doc.get("input") or {}).get("filename") or "contract"
+            stem = filename_base.rsplit(".", 1)[0] if "." in filename_base else filename_base
+
+            # original_clauses 세션에서 조회 (정확한 단락 매칭용)
+            original_clauses: list[dict] = []
+            if isinstance(review_result, dict) and isinstance(review_result.get("original_clauses"), list):
+                original_clauses = review_result.get("original_clauses") or []
+            if not original_clauses and isinstance(doc.get("original_clauses"), list):
+                original_clauses = doc.get("original_clauses") or []
+
+            try:
+                author = body.get("author") or "퍼시스법무"
+                from datetime import datetime, timezone
+                date_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                # docx_redline 엔진 우선 사용 (위치 기반 정확한 추적 변경)
+                if original_clauses:
+                    from runtime.review.docx_redline import build_redline_docx as _build_rdl
+                    redline_bytes, clean_bytes = _build_rdl(
+                        docx_bytes=original_bytes,
+                        original_clauses=original_clauses,
+                        clause_results=clause_results,
+                        author=author,
+                        date=date_str,
+                    )
+                else:
+                    # fallback: 패턴 기반 (original_clauses 없을 때)
+                    redline_bytes, clean_bytes = build_redline_from_analysis(
+                        original_bytes=original_bytes,
+                        clause_results=clause_results,
+                        author=author,
+                        date=date_str,
+                    )
+            except Exception as exc:
+                from runtime.ai.safe import sanitize_error_message
+                _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {
+                    "error": "redline generation failed",
+                    "detail": sanitize_error_message(str(exc))
+                })
+                return
+
+            if want_clean:
+                out_bytes = clean_bytes
+                out_name = f"clean_{stem}.docx"
+            else:
+                out_bytes = redline_bytes
+                out_name = f"redline_{stem}.docx"
+
+            _binary_response(
+                self,
+                HTTPStatus.OK,
+                out_bytes,
+                filename=out_name,
                 content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
@@ -1984,7 +2092,7 @@ def create_handler(service: RuleQueryService):
                                     "error": extraction.error,
                                 },
                                 "intake": intake_to_dict(intake),
-                                "note": "지원하지 않는 포맷이거나 텍스트 추출 실패. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp",
+                                "note": f"텍스트 추출 실패: {extraction.error}. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF OCR 포함)",
                             },
                         )
                         return
@@ -2185,7 +2293,7 @@ def create_handler(service: RuleQueryService):
                                     "contract_type_source": "user_input" if contract_type else "unavailable",
                                 },
                                 "review": None,
-                                "note": "지원하지 않는 포맷이거나 텍스트 추출 실패. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp",
+                                "note": f"텍스트 추출 실패: {extraction.error}. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF OCR 포함)",
                             },
                         )
                         return
@@ -2213,6 +2321,13 @@ def create_handler(service: RuleQueryService):
                         intake={},
                         source="upload",
                     )
+                    # DOCX 원본이면 redline 생성용 bytes를 세션에 저장
+                    if suffix.lower() == ".docx":
+                        import base64
+                        session["original_docx_b64"] = base64.b64encode(
+                            file_item.get("content") or b""
+                        ).decode("ascii")
+                        save_session(session)
                     if cls.is_inferred:
                         update_cache(filename, cls.entity, cls.contract_type)
                     _json_response(

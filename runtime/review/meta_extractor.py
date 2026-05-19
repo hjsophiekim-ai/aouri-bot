@@ -8,20 +8,28 @@ from runtime.ai.http_openai_compatible_provider import build_messages
 from runtime.ai.provider import AIProvider, AIRequest
 
 META_EXTRACTION_SYSTEM = (
-    "You are a contract metadata extraction assistant. "
-    "Extract key metadata from contract text and return ONLY valid JSON, no markdown, no explanation."
+    "You are a senior corporate attorney specializing in contract review for Korean companies. "
+    "Extract key metadata from the contract text and return ONLY valid JSON, no markdown, no explanation. "
+    "For international contracts, identify the Fursys entity position (갑/을) and foreign jurisdiction risks."
 )
 
 META_EXTRACTION_USER_TEMPLATE = """\
 Extract metadata from the contract text below.
 Return ONLY a JSON object with exactly these fields:
 - "party_a": name of first party (string)
+- "party_a_country": country of first party (string or null)
 - "party_b": name of second party (string)
-- "governing_law": governing law (e.g., "German law", "Korean law", "New York law", null if unclear)
+- "party_b_country": country of second party (string or null)
+- "governing_law": governing law jurisdiction (e.g., "German law", "Korean law", "New York law", null if unclear)
+- "governing_law_country": country of governing law (e.g., "Germany", "Korea", "USA", null if unclear)
 - "jurisdiction": dispute resolution venue or city or court (e.g., "Stuttgart", "Seoul Central District Court", "ICC", null if unclear)
+- "jurisdiction_city": specific city for dispute resolution (e.g., "Stuttgart", "Seoul", null if unclear)
 - "contract_type": type in English (e.g., "NDA", "Service Agreement", "Supply Agreement")
 - "language": primary language — one of "Korean", "English", "Bilingual"
 - "is_cross_border": true if parties appear to be from different countries, false otherwise
+- "fursys_position": Fursys role in contract — one of "party_a", "party_b", "unknown"
+- "has_exclusive_jurisdiction": true if contract designates an exclusive foreign court for disputes
+- "has_arbitration": true if contract includes arbitration clause
 
 Contract text (first 3000 chars):
 {text}
