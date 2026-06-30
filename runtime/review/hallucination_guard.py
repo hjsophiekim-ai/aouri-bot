@@ -118,6 +118,8 @@ ASSIGNMENT_CLAUSE_FORBIDDEN: list[str] = [
     "마케팅 비용",
     "프로모션 비용",
     "판촉 활동 비용",
+    "반품비",
+    "원상회복비",
 ]
 
 # Map clause identity name → forbidden phrase list (identity names match CI_* constants)
@@ -125,6 +127,7 @@ _CLAUSE_IDENTITY_FORBIDDEN: dict[str, list[str]] = {
     "termination": TERMINATION_CLAUSE_FORBIDDEN,
     "confidentiality": CONFIDENTIALITY_CLAUSE_FORBIDDEN,
     "assignment": ASSIGNMENT_CLAUSE_FORBIDDEN,
+    "assignment_party_change": ASSIGNMENT_CLAUSE_FORBIDDEN,  # alias
 }
 
 
