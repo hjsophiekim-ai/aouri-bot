@@ -642,45 +642,43 @@ def build_legal_review_docx(
 
     _blank(body)
 
-    # ── Section 2: TOP 5 핵심 리스크 ──────────────────────────────────────
-    _heading1(body, "2. TOP 5 핵심 리스크")
+    # dealer_rental은 TOP 5 섹션 생략 (필수수정/권장수정과 중복 제거)
+    _is_dealer_rental_docx = (contract_type_code == "dealer_rental_service_contract")
+    _sec_offset = -1 if _is_dealer_rental_docx else 0  # dealer_rental: 번호 1씩 당김
 
-    if not top_issues:
-        _para(body, "분석된 핵심 리스크가 없습니다.", italic=True)
-    else:
-        for i, issue in enumerate(top_issues[:5], 1):
-            c = _severity_color(issue.severity)
-            # Issue header
-            p_head = _p(body)
-            r_sev = _r(p_head, bold=True, color=c)
-            _t(r_sev, f"[{issue.severity}] {i}. {issue.clause_title} — {issue.issue_title}")
-
-            if issue.original_text and not issue.original_text.startswith("["):
-                _para(body, f"원문: {issue.original_text[:200]}", indent=1)
-
-            _para(body, f"문제점: {issue.problem[:300]}", indent=1)
-
-            if issue.proposed_revision:
-                _para(body, "수정문안:", bold=True, indent=1)
-                for line in issue.proposed_revision.splitlines()[:12]:
-                    line = line.strip()
-                    if line:
-                        _para(body, line[:250], indent=2)
-
-            if issue.negotiation_position and not _has_placeholder(issue.negotiation_position):
-                _para(body, f"협상 포지션: {issue.negotiation_position[:200]}", indent=1, italic=True)
-
-            if issue.related_clauses:
-                _para(body, f"함께 수정할 조항: {', '.join(issue.related_clauses[:6])}", indent=1)
-
-            _blank(body)
+    if not _is_dealer_rental_docx:
+        # ── Section 2: TOP 5 핵심 리스크 ──────────────────────────────────────
+        _heading1(body, "2. TOP 5 핵심 리스크")
+        if not top_issues:
+            _para(body, "분석된 핵심 리스크가 없습니다.", italic=True)
+        else:
+            for i, issue in enumerate(top_issues[:5], 1):
+                c = _severity_color(issue.severity)
+                p_head = _p(body)
+                r_sev = _r(p_head, bold=True, color=c)
+                _t(r_sev, f"[{issue.severity}] {i}. {issue.clause_title} — {issue.issue_title}")
+                if issue.original_text and not issue.original_text.startswith("["):
+                    _para(body, f"원문: {issue.original_text[:200]}", indent=1)
+                _para(body, f"문제점: {issue.problem[:300]}", indent=1)
+                if issue.proposed_revision:
+                    _para(body, "수정문안:", bold=True, indent=1)
+                    for line in issue.proposed_revision.splitlines()[:12]:
+                        line = line.strip()
+                        if line:
+                            _para(body, line[:250], indent=2)
+                if issue.negotiation_position and not _has_placeholder(issue.negotiation_position):
+                    _para(body, f"협상 포지션: {issue.negotiation_position[:200]}", indent=1, italic=True)
+                if issue.related_clauses:
+                    _para(body, f"함께 수정할 조항: {', '.join(issue.related_clauses[:6])}", indent=1)
+                _blank(body)
 
     _separator(body)
 
-    # ── Section 3: 필수수정 조항 (HIGH) ─────────────────────────────────
+    # ── Section 3(or 2): 필수수정 조항 (HIGH) ─────────────────────────────────
+    _sec_high = str(3 + _sec_offset)
     p_h3 = _p(body)
     r_h3 = _r(p_h3, bold=True, color=COLOR_HIGH)
-    _t(r_h3, "3. 필수수정 조항 — HIGH")
+    _t(r_h3, f"{_sec_high}. 필수수정 조항 — HIGH")
 
     if not high_issues:
         _para(body, "HIGH 조항이 없습니다.", italic=True)
@@ -723,10 +721,11 @@ def build_legal_review_docx(
 
     _separator(body)
 
-    # ── Section 4: 권장수정 조항 (MEDIUM) ──────────────────────────────
+    # ── Section 4(or 3): 권장수정 조항 (MEDIUM) ──────────────────────────────
+    _sec_med = str(4 + _sec_offset)
     p_h4 = _p(body)
     r_h4 = _r(p_h4, bold=True, color=COLOR_MEDIUM)
-    _t(r_h4, "4. 권장수정 조항 — MEDIUM")
+    _t(r_h4, f"{_sec_med}. 권장수정 조항 — MEDIUM")
 
     if not medium_issues:
         _para(body, "권장 수정 조항이 없습니다.", italic=True)
@@ -751,12 +750,13 @@ def build_legal_review_docx(
 
             _blank(body)
 
-    # ── Section 5: LOW 부록 (옵션) ─────────────────────────────────────
+    # ── Section 5(or 4): LOW 부록 (옵션) ─────────────────────────────────────
+    _sec_low = str(5 + _sec_offset)
     if include_low:
         _separator(body)
         p_h5 = _p(body)
         r_h5 = _r(p_h5, bold=True, color=COLOR_LOW)
-        _t(r_h5, "5. 참고 조항 — LOW (사용자 요청 시만 표시)")
+        _t(r_h5, f"{_sec_low}. 참고 조항 — LOW (사용자 요청 시만 표시)")
         if not low_issues:
             _para(body, "LOW 분류 항목이 없습니다.", color=COLOR_LOW)
         else:
@@ -765,10 +765,10 @@ def build_legal_review_docx(
                 r_li = _r(p_li, color=COLOR_LOW)
                 _t(r_li, f"[LOW] {issue.clause_title}: {issue.issue_title}")
 
-    # ── Section 6: 제외된 항목 요약 ──────────────────────────────────────
+    # ── Section (5 or 4 or 6): 제외된 항목 요약 ──────────────────────────────────────
     _separator(body)
-    sec_num = "5" if not include_low else "6"
-    _heading1(body, f"{sec_num}. 제외된 항목 요약")
+    _sec_excl = str((5 if not include_low else 6) + _sec_offset)
+    _heading1(body, f"{_sec_excl}. 제외된 항목 요약")
     if excluded_count > 0:
         _para(body, (
             f"계약유형과 무관하거나 수정문안이 없는 일반론적 의견 {excluded_count}건은 "

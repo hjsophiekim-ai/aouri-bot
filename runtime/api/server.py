@@ -706,9 +706,10 @@ def create_handler(service: RuleQueryService):
                     ai_temperature=None,
                     max_clause_law_items=0,
                 )
+                from runtime.review.clause_level import apply_dealer_rental_final_gate as _fast_gate
                 result = dict(bundle.review)
                 result["mode"] = "fast"
-                result["clause_results"] = bundle.clause_results
+                result["clause_results"] = _fast_gate(bundle.clause_results, str(contract_type or ""))
                 result["clause_meta"] = bundle.meta
                 result["law_search"] = {
                     "enabled": False,
@@ -793,9 +794,10 @@ def create_handler(service: RuleQueryService):
             except Exception as exc:
                 _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
                 return
+            from runtime.review.clause_level import apply_dealer_rental_final_gate as _deep_gate
             result = dict(bundle.review)
             result["mode"] = "deep"
-            result["clause_results"] = bundle.clause_results
+            result["clause_results"] = _deep_gate(bundle.clause_results, str(contract_type or ""))
             result["clause_meta"] = bundle.meta
             result["review_elapsed_sec"] = round(time.perf_counter() - _deep_t0, 2)
             if law_service is not None:
@@ -1292,6 +1294,9 @@ def create_handler(service: RuleQueryService):
                 ai_temperature=cfg.temperature if ai_provider else None,
                 max_clause_law_items=2,
             )
+            # dealer_rental: API 응답에도 최종 gate 적용 (UI가 raw clause_results를 직접 읽으므로)
+            from runtime.review.clause_level import apply_dealer_rental_final_gate as _resp_gate
+            _resp_cr = _resp_gate(bundle.clause_results, str(contract_type or ""))
             _json_response(
                 self,
                 HTTPStatus.OK,
@@ -1299,7 +1304,7 @@ def create_handler(service: RuleQueryService):
                     "input": {"entity": entity, "contract_type": contract_type, "filename": filename},
                     "review_summary": bundle.review.get("summary"),
                     "revision": bundle.revision,
-                    "clause_results": bundle.clause_results,
+                    "clause_results": _resp_cr,
                     "meta": bundle.meta,
                 },
             )

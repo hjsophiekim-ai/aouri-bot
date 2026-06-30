@@ -1768,10 +1768,14 @@ def _apply_industry_specific_review(
     full_text: str,
     contract_class: str,
     contract_nature: str,
+    contract_type_code: str = "",
 ) -> None:
     """[STEP 4] 가구·설비·제조물 계약 12개 항목 자동 점검.
     project_installation 또는 제조물공급 계약에서 누락 항목을 탐지한다.
+    dealer_rental_service_contract는 제조물/산업안전 항목이 불필요하므로 완전 스킵.
     """
+    if contract_type_code == "dealer_rental_service_contract":
+        return
     if contract_class != "project_installation" and contract_nature != "제조물공급":
         return
     text = str(full_text or "")
@@ -2931,18 +2935,29 @@ def _apply_redline_safety_check(
 # =============================================================================
 
 _DEALER_RENTAL_HARD_BLOCKED_IDS: frozenset = frozenset({
-    "isr_accident_reporting",
-    "isr_pl_defect_liability",
-    "isr_installation_defect",
-    "isr_user_safety",
-    "isr_safety_certification",
-    "isr_pl_insurance",
-    "isr_defect_sla",
-    "sppc_inspection_standard",
-    "sppc_return_limit",
-    "sppc_payment_retention",
+    # isr_* (industry-specific review — 제조물/설치 안전)
+    "isr_accident_reporting", "isr_pl_defect_liability", "isr_installation_defect",
+    "isr_user_safety", "isr_safety_certification", "isr_pl_insurance", "isr_defect_sla",
+    "isr_defect_correction",
+    # sppc_* (supplier product purchase checklist)
+    "sppc_inspection_standard", "sppc_return_limit", "sppc_payment_retention",
     "sppc_custom_cancel_limit",
+    # pi_* (project/installation/산업안전보건/중대재해)
+    "pi_safety_responsibility", "pi_safety_manager", "pi_legal_compliance",
+    "pi_subcontractor_safety", "pi_work_stop_right", "pi_risk_assessment",
+    "pi_accident_reporting", "pi_ppe_education", "pi_access_control",
+    "pi_commissioning_accident_liability",
 })
+
+# 프리픽스 기반 차단 (ID가 구체적으로 등록되지 않은 파생 항목 포함)
+_DEALER_RENTAL_BLOCKED_PREFIXES: tuple = ("isr_", "sppc_", "pi_")
+
+# clause_title 키워드 기반 차단
+_DEALER_RENTAL_BLOCKED_TITLE_KEYWORDS: tuple = (
+    "제조물검토", "안전권고", "산업안전보건법", "중대재해처벌법",
+    "시공", "시운전", "착공", "하도급 안전", "보호구", "위험성 평가",
+    "안전관리자",
+)
 
 # (clause_title 키워드 목록, forbidden 키워드 목록) 쌍
 _DEALER_RENTAL_CLAUSE_TOPIC_GATE: list[tuple[list[str], list[str]]] = [
@@ -2958,17 +2973,30 @@ def apply_dealer_rental_final_gate(
     clause_results: list[dict],
     contract_type_code: str,
 ) -> list[dict]:
-    """dealer_rental_service_contract 전용 최종 차단:
-    1) 11개 hard-blocked ID 완전 제거
-    2) 조항 주제와 수정문안 불일치 시 suggested_rewrite 삭제 및 메시지 표시
+    """dealer_rental_service_contract 전용 최종 차단 (Defense-in-depth Layer 2):
+    1) isr_*/sppc_*/pi_* 프리픽스 또는 hard-blocked ID 완전 제거
+    2) 차단된 clause_title 키워드 포함 항목 제거
+    3) 조항 주제와 수정문안 불일치 시 suggested_rewrite 삭제
     """
     if contract_type_code != "dealer_rental_service_contract":
         return clause_results
 
-    filtered: list[dict] = [
-        cr for cr in clause_results
-        if isinstance(cr, dict) and str(cr.get("clause_id") or "") not in _DEALER_RENTAL_HARD_BLOCKED_IDS
-    ]
+    filtered: list[dict] = []
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        cid = str(cr.get("clause_id") or "")
+        # ID 기반 차단
+        if cid in _DEALER_RENTAL_HARD_BLOCKED_IDS:
+            continue
+        # 프리픽스 기반 차단
+        if any(cid.startswith(p) for p in _DEALER_RENTAL_BLOCKED_PREFIXES):
+            continue
+        # clause_title 키워드 기반 차단
+        _ctitle = str(cr.get("clause_title") or "")
+        if any(kw in _ctitle for kw in _DEALER_RENTAL_BLOCKED_TITLE_KEYWORDS):
+            continue
+        filtered.append(cr)
 
     for cr in filtered:
         if not isinstance(cr, dict):
@@ -4164,7 +4192,7 @@ def build_clause_level_result(
                 cr["rewrite_reason"] = "조항 주제와 무관한 수정문안은 제외(guardrail)."
 
     # ── [STEP 4] Industry-Specific Legal Reasoning (가구·설비·제조물 12개 항목) ──
-    _apply_industry_specific_review(clause_results, str(text or ""), _contract_class, _contract_nature)
+    _apply_industry_specific_review(clause_results, str(text or ""), _contract_class, _contract_nature, str(contract_type or ""))
 
     # ── [Contextual Awareness] Contract Nature Lock ────────────────────────
     _apply_contract_nature_lock(clause_results, _contract_nature)

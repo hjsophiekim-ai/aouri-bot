@@ -1213,9 +1213,18 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     const _DLR_HARD_BLOCKED_IDS = new Set([
       'isr_accident_reporting','isr_pl_defect_liability','isr_installation_defect',
       'isr_user_safety','isr_safety_certification','isr_pl_insurance','isr_defect_sla',
+      'isr_defect_correction',
       'sppc_inspection_standard','sppc_return_limit','sppc_payment_retention',
-      'sppc_custom_cancel_limit'
+      'sppc_custom_cancel_limit',
+      'pi_safety_responsibility','pi_safety_manager','pi_legal_compliance',
+      'pi_subcontractor_safety','pi_work_stop_right','pi_risk_assessment',
+      'pi_accident_reporting','pi_ppe_education','pi_access_control',
+      'pi_commissioning_accident_liability'
     ]);
+    // 프리픽스 차단 (isr_*/sppc_*/pi_* 전체)
+    const _DLR_BLOCKED_PREFIXES = ['isr_','sppc_','pi_'];
+    // clause_title 키워드 차단
+    const _DLR_BLOCKED_TITLE_KW = ['제조물검토','안전권고','산업안전보건법','중대재해처벌법','시운전','착공','하도급 안전','보호구','위험성 평가','안전관리자'];
     const _DLR_BLOCKED_KEYWORDS = ['사고 발생 보고','검수 완료 간주','반품 제한','이행유보권','주문제작 취소 제한'];
     const _DLR_CLAUSE_GATE = [
       { titleKeys:['해지','종료','해제'], forbidden:['소유권','채권추심','신용정보','개인정보'] },
@@ -1233,7 +1242,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const cid = String(it.clause_id || it.rule_id || '');
         const issueTitle = String(it.issue_title || it.clause_title || '');
         const isBlocked = _DLR_HARD_BLOCKED_IDS.has(cid) ||
-          cid.startsWith('isr_') || cid.startsWith('sppc_') ||
+          _DLR_BLOCKED_PREFIXES.some(p => cid.startsWith(p)) ||
+          _DLR_BLOCKED_TITLE_KW.some(k => issueTitle.includes(k)) ||
           _DLR_BLOCKED_KEYWORDS.some(k => issueTitle.includes(k));
         if (isBlocked) {
           hidden.push(cid || issueTitle);
