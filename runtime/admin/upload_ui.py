@@ -287,8 +287,44 @@ async function doReview() {
   show('stepRaw');
 }
 
+// === dealer_rental 렌더링 게이트 (upload_ui) ===
+const _UPL_DLR_BLOCKED = new Set([
+  'isr_accident_reporting','isr_pl_defect_liability','isr_installation_defect',
+  'isr_user_safety','isr_safety_certification','isr_pl_insurance','isr_defect_sla',
+  'sppc_inspection_standard','sppc_return_limit','sppc_payment_retention',
+  'sppc_custom_cancel_limit'
+]);
+const _UPL_DLR_KW = ['사고 발생 보고','검수 완료 간주','반품 제한','이행유보권','주문제작 취소 제한'];
+const _UPL_DLR_GATE = [
+  { tk:['해지','종료','해제'], fb:['소유권','채권추심','신용정보','개인정보'] },
+  { tk:['양도','지위 이전','계약자 변경'], fb:['판촉비','광고비','반품비','원상회복비','비용분담'] },
+  { tk:['비밀','기밀'], fb:['인력','채용','배치','평가','징계','경영간섭'] },
+];
+const _UPL_MISMATCH = '자동수정 보류: 조항 주제와 수정문안 불일치';
+
+function _uplApplyDlrGate(items, contractType) {
+  if (!String(contractType || '').includes('dealer_rental')) return items;
+  return items.filter(it => {
+    if (!it) return false;
+    const cid = String(it.clause_id || it.rule_id || '');
+    const title = String(it.issue_title || it.clause_title || '');
+    return !(_UPL_DLR_BLOCKED.has(cid) || cid.startsWith('isr_') || cid.startsWith('sppc_') || _UPL_DLR_KW.some(k => title.includes(k)));
+  }).map(it => {
+    const tlo = String(it.clause_title || '').toLowerCase();
+    const rw = String(it.suggested_rewrite || '').trim();
+    if (!rw || rw === _UPL_MISMATCH) return it;
+    for (const g of _UPL_DLR_GATE) {
+      if (g.tk.some(k => tlo.includes(k)) && g.fb.some(f => rw.includes(f))) {
+        return Object.assign({}, it, { suggested_rewrite: _UPL_MISMATCH, has_rewrite_change: false });
+      }
+    }
+    return it;
+  });
+}
+
 function renderResults(review, revision) {
-  const crs = (review.clause_results || []);
+  const _contractType = (review.clause_meta && review.clause_meta.contract_type) || (review.classification && review.classification.contract_type) || '';
+  const crs = _uplApplyDlrGate((review.clause_results || []), _contractType);
   const high = crs.filter(c => (c.risk_tier||'').toUpperCase() === 'HIGH').length;
   const med  = crs.filter(c => (c.risk_tier||'').toUpperCase() === 'MEDIUM').length;
   const crit = crs.filter(c => (c.risk_tier||'').toUpperCase() === 'CRITICAL').length;

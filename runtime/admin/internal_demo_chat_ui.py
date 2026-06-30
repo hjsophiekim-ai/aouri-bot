@@ -347,6 +347,13 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
               <div class="meta" id="answerSummary">-</div>
             </div>
 
+            <div id="debugPanelWrap" style="margin-top:10px;display:none;">
+              <details>
+                <summary style="font-size:11px;color:#5b7086;cursor:pointer;user-select:none;">▶ 디버그 패널 (render gate 검증)</summary>
+                <pre id="debugPanelContent" style="font-size:10px;line-height:1.6;background:#f8fafc;border:1px solid #dde;padding:8px 10px;border-radius:4px;white-space:pre-wrap;word-break:break-all;max-height:180px;overflow-y:auto;margin-top:4px;"></pre>
+              </details>
+            </div>
+
             <div style="margin-top:12px;">
               <div class="badge" style="margin-bottom:8px;">조항별 수정 제안</div>
               <div id="clauseList"></div>
@@ -418,6 +425,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     let reviewResult = null;
     let revisionResult = null;
     let draftSuggest = null;
+    let _filteredClauseResults = [];
+    let _hiddenFindingIds = [];
     let analyzeState = {
       active: false,
       startedAt: 0,
@@ -1200,6 +1209,58 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       }
     }
 
+    // === dealer_rental 렌더링 게이트 (JS side) ===
+    const _DLR_HARD_BLOCKED_IDS = new Set([
+      'isr_accident_reporting','isr_pl_defect_liability','isr_installation_defect',
+      'isr_user_safety','isr_safety_certification','isr_pl_insurance','isr_defect_sla',
+      'sppc_inspection_standard','sppc_return_limit','sppc_payment_retention',
+      'sppc_custom_cancel_limit'
+    ]);
+    const _DLR_BLOCKED_KEYWORDS = ['사고 발생 보고','검수 완료 간주','반품 제한','이행유보권','주문제작 취소 제한'];
+    const _DLR_CLAUSE_GATE = [
+      { titleKeys:['해지','종료','해제'], forbidden:['소유권','채권추심','신용정보','개인정보'] },
+      { titleKeys:['양도','지위 이전','계약자 변경'], forbidden:['판촉비','광고비','반품비','원상회복비','비용분담'] },
+      { titleKeys:['비밀','기밀'], forbidden:['인력','채용','배치','평가','징계','경영간섭'] },
+    ];
+    const _DLR_MISMATCH_MSG = '자동수정 보류: 조항 주제와 수정문안 불일치';
+
+    function applyDealerRentalRenderGate(items, contractType) {
+      if (!String(contractType || '').includes('dealer_rental')) return { filtered: items || [], hidden: [] };
+      const hidden = [];
+      const filtered = [];
+      for (let it of (items || [])) {
+        if (!it) continue;
+        const cid = String(it.clause_id || it.rule_id || '');
+        const issueTitle = String(it.issue_title || it.clause_title || '');
+        const isBlocked = _DLR_HARD_BLOCKED_IDS.has(cid) ||
+          cid.startsWith('isr_') || cid.startsWith('sppc_') ||
+          _DLR_BLOCKED_KEYWORDS.some(k => issueTitle.includes(k));
+        if (isBlocked) {
+          hidden.push(cid || issueTitle);
+          console.debug('[DLR gate] hidden:', cid || issueTitle);
+          continue;
+        }
+        const titleLo = String(it.clause_title || '').toLowerCase();
+        const rewrite = String(it.suggested_rewrite || '').trim();
+        if (rewrite && rewrite !== _DLR_MISMATCH_MSG) {
+          for (const gate of _DLR_CLAUSE_GATE) {
+            if (gate.titleKeys.some(k => titleLo.includes(k))) {
+              if (gate.forbidden.some(f => rewrite.includes(f))) {
+                it = Object.assign({}, it, {
+                  suggested_rewrite: _DLR_MISMATCH_MSG,
+                  has_rewrite_change: false,
+                  display_kind: 'guidance'
+                });
+              }
+              break;
+            }
+          }
+        }
+        filtered.push(it);
+      }
+      return { filtered, hidden };
+    }
+
     function buildResult() {
       const s = (reviewResult && reviewResult.summary) ? reviewResult.summary : {};
       const matched = Array.isArray(reviewResult && reviewResult.matched_rules) ? reviewResult.matched_rules : [];
@@ -1210,8 +1271,12 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
       const revSum = (revisionResult && revisionResult.revision && revisionResult.revision.summary) ? revisionResult.revision.summary : {};
       const meta0 = (reviewResult && reviewResult.clause_meta) ? reviewResult.clause_meta : {};
-      const itemsAll = Array.isArray(revisionResult && revisionResult.clause_results) ? revisionResult.clause_results
+      const _rawItems = Array.isArray(revisionResult && revisionResult.clause_results) ? revisionResult.clause_results
                     : (Array.isArray(reviewResult && reviewResult.clause_results) ? reviewResult.clause_results : []);
+      const _gateOut = applyDealerRentalRenderGate(_rawItems, ctx.contract_type);
+      const itemsAll = _gateOut.filtered;
+      _filteredClauseResults = itemsAll;
+      _hiddenFindingIds = _gateOut.hidden;
       const issueClauseCount = Number(revSum.issue_clause_count || meta0.issue_clause_count || 0) || 0;
       const mustCount = itemsAll.filter(x => x && (x.approval_required || x.high_risk)).length;
       const medCount = itemsAll.filter(x => x && !x.approval_required && !x.high_risk && (String(x.risk_tier || '').toUpperCase() === 'MEDIUM')).length;
@@ -1220,6 +1285,31 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       const suggested = (draftSuggest && Array.isArray(draftSuggest.suggested_template_ids)) ? draftSuggest.suggested_template_ids : [];
 
       document.getElementById('resultMeta').innerText = `${ctx.entity || '-'} / ${ctx.contract_type || '-'} · issues=${s.matched_rule_count || 0} · 필수수정=${mustCount} 권장=${medCount} 참고=${lowCount}`;
+
+      // 디버그 패널 업데이트
+      try {
+        const _meta0Debug = (reviewResult && reviewResult.clause_meta) ? reviewResult.clause_meta : {};
+        const _ff = _meta0Debug.final_findings || {};
+        const _docxCount = (_ff.high_count !== undefined) ? (Number(_ff.high_count || 0) + Number(_ff.medium_count || 0)) : 'N/A';
+        const _uiTotal = mustCount + medCount + lowCount;
+        const _topRiskIds = itemsAll.slice(0, 5).map(x => String(x.clause_id || x.rule_id || '')).filter(Boolean);
+        const _srcPath = _meta0Debug.source_json_path || 'N/A';
+        const _docxPath = _meta0Debug.docx_report_json_path || 'N/A';
+        const _dbgLines = [
+          'contract_type: ' + (ctx.contract_type || '-'),
+          'final_findings_count(ui): ' + _uiTotal,
+          'final_findings_count(docx): ' + String(_docxCount),
+          'counts_match: ' + (String(_uiTotal) === String(_docxCount) ? 'OK' : 'MISMATCH ← 확인 필요'),
+          'top_risk_ids: ' + (_topRiskIds.join(', ') || '(없음)'),
+          'hidden_finding_ids: ' + (_hiddenFindingIds.join(', ') || '(없음)'),
+          'source_json_path: ' + _srcPath,
+          'docx_report_json_path: ' + _docxPath,
+        ];
+        const _dbgEl = document.getElementById('debugPanelContent');
+        const _dbgWrap = document.getElementById('debugPanelWrap');
+        if (_dbgEl) _dbgEl.textContent = _dbgLines.join('\\n');
+        if (_dbgWrap) _dbgWrap.style.display = '';
+      } catch(_e) {}
 
       try {
         const frc = meta0 && meta0.final_review_context ? meta0.final_review_context : null;
@@ -1387,7 +1477,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         if (ctx.session_id) {
           payload = { session_id: ctx.session_id };
         } else if (revisionResult && revisionResult.clause_results) {
-          payload = { input: { entity: ctx.entity || 'all', contract_type: ctx.contract_type || 'all', filename: ctx.filename || 'demo.txt' }, clause_results: revisionResult.clause_results };
+          payload = { input: { entity: ctx.entity || 'all', contract_type: ctx.contract_type || 'all', filename: ctx.filename || 'demo.txt' }, clause_results: (_filteredClauseResults.length > 0 ? _filteredClauseResults : revisionResult.clause_results) };
         } else {
           document.getElementById('confirmNote').innerText = '수정본 생성에 필요한 데이터가 없습니다.';
           return;

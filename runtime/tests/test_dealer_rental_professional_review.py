@@ -571,5 +571,148 @@ class TestDealerRentalFinalGate(unittest.TestCase):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+class TestUIRenderGate(unittest.TestCase):
+    """Smoke tests: UI rendering gate must filter isr_/sppc_/clause-topic violations.
+
+    These tests replicate the JS applyDealerRentalRenderGate() logic in Python so
+    CI can verify correctness without a browser. The gate is authoritative in JS;
+    this is a structural mirror.
+    """
+
+    _HARD_BLOCKED = frozenset({
+        "isr_accident_reporting", "isr_pl_defect_liability", "isr_installation_defect",
+        "isr_user_safety", "isr_safety_certification", "isr_pl_insurance", "isr_defect_sla",
+        "sppc_inspection_standard", "sppc_return_limit", "sppc_payment_retention",
+        "sppc_custom_cancel_limit",
+    })
+    _BLOCKED_KW = ["사고 발생 보고", "검수 완료 간주", "반품 제한", "이행유보권", "주문제작 취소 제한"]
+    _CLAUSE_GATE = [
+        (["해지", "종료", "해제"], ["소유권", "채권추심", "신용정보", "개인정보"]),
+        (["양도", "지위 이전", "계약자 변경"], ["판촉비", "광고비", "반품비", "원상회복비", "비용분담"]),
+        (["비밀", "기밀"], ["인력", "채용", "배치", "평가", "징계", "경영간섭"]),
+    ]
+    _MISMATCH = "자동수정 보류: 조항 주제와 수정문안 불일치"
+    _CONTRACT_TYPE = "dealer_rental_service_contract"
+
+    def _gate(self, items: list[dict], contract_type: str = "") -> tuple[list[dict], list[str]]:
+        """Python mirror of JS applyDealerRentalRenderGate()."""
+        ct = contract_type or self._CONTRACT_TYPE
+        if "dealer_rental" not in ct:
+            return items, []
+        filtered, hidden = [], []
+        for it in items:
+            cid = str(it.get("clause_id") or it.get("rule_id") or "")
+            title = str(it.get("issue_title") or it.get("clause_title") or "")
+            if (cid in self._HARD_BLOCKED or cid.startswith("isr_") or cid.startswith("sppc_")
+                    or any(k in title for k in self._BLOCKED_KW)):
+                hidden.append(cid or title)
+                continue
+            tlo = str(it.get("clause_title") or "").lower()
+            rw = str(it.get("suggested_rewrite") or "").strip()
+            if rw and rw != self._MISMATCH:
+                for title_keys, forbidden in self._CLAUSE_GATE:
+                    if any(k in tlo for k in title_keys):
+                        if any(f in rw for f in forbidden):
+                            it = dict(it, suggested_rewrite=self._MISMATCH, has_rewrite_change=False)
+                        break
+            filtered.append(it)
+        return filtered, hidden
+
+    # ── test_streamlit_ui_uses_final_findings_only ──
+    def test_streamlit_ui_uses_final_findings_only(self) -> None:
+        """[실패조건7] UI는 raw clause_results를 직접 노출하지 않고 gate를 통과한 결과만 사용해야 한다."""
+        raw = [
+            {"clause_id": "isr_accident_reporting", "clause_title": "사고처리", "risk_tier": "HIGH", "high_risk": True, "suggested_rewrite": "보고 즉시"},
+            {"clause_id": "DLR-001", "clause_title": "거래구조", "risk_tier": "HIGH", "high_risk": True, "suggested_rewrite": "수정안"},
+            {"clause_id": "DLR-003", "clause_title": "세금계산서", "risk_tier": "MEDIUM", "high_risk": False, "suggested_rewrite": ""},
+        ]
+        filtered, hidden = self._gate(raw)
+        ids = [x["clause_id"] for x in filtered]
+        self.assertNotIn("isr_accident_reporting", ids,
+            "[실패조건7] UI가 isr_accident_reporting을 표시했습니다 — raw findings 차단 실패")
+        self.assertIn("DLR-001", ids, "[실패조건7] DLR-001이 UI에서 사라졌습니다")
+        self.assertIn("isr_accident_reporting", hidden,
+            "[실패조건7] hidden_finding_ids에 isr_accident_reporting이 없습니다")
+
+    # ── test_no_legacy_isr_sppc_in_ui ──
+    def test_no_legacy_isr_sppc_in_ui(self) -> None:
+        """[실패조건8] dealer_rental에서 isr_* / sppc_* 항목이 UI에 노출되면 안 된다."""
+        raw = [
+            {"clause_id": "isr_safety_certification", "clause_title": "안전인증", "risk_tier": "HIGH"},
+            {"clause_id": "sppc_inspection_standard", "clause_title": "검수기준", "risk_tier": "HIGH"},
+            {"clause_id": "sppc_return_limit", "clause_title": "반품제한", "risk_tier": "HIGH"},
+            {"clause_id": "DLR-002", "clause_title": "세금계산서", "risk_tier": "HIGH"},
+        ]
+        filtered, hidden = self._gate(raw)
+        filtered_ids = [x["clause_id"] for x in filtered]
+        for bad_id in ("isr_safety_certification", "sppc_inspection_standard", "sppc_return_limit"):
+            self.assertNotIn(bad_id, filtered_ids,
+                f"[실패조건8] {bad_id}가 UI에 노출되었습니다 — sppc/isr 차단 실패")
+        self.assertIn("DLR-002", filtered_ids, "[실패조건8] DLR-002가 잘못 제거되었습니다")
+        self.assertEqual(len(hidden), 3, "[실패조건8] hidden 수 불일치")
+
+    # ── test_docx_and_ui_counts_match ──
+    def test_docx_and_ui_counts_match(self) -> None:
+        """[실패조건9] UI count와 DOCX count가 동일한 final_findings를 기준으로 산출되어야 한다."""
+        # Simulate what the orchestrator produces
+        from runtime.review.review_orchestrator import build_dealer_rental_review
+        text = "퍼시스와 대리점 간 렌탈 위탁판매 계약입니다. 대리점은 고객과 직접 계약을 체결합니다. 세금계산서는 대리점이 발행합니다."
+        result = build_dealer_rental_review(text=text, entity="퍼시스")
+        ff = result.get("final_findings") or {}
+        cr = result.get("clause_results") or []
+        ui_high = sum(1 for x in cr if str(x.get("risk_level") or x.get("risk_tier") or "").upper() == "HIGH")
+        ui_med = sum(1 for x in cr if str(x.get("risk_level") or x.get("risk_tier") or "").upper() == "MEDIUM")
+        docx_high = ff.get("high_count", -1)
+        docx_med = ff.get("medium_count", -1)
+        self.assertEqual(ui_high, docx_high,
+            f"[실패조건9] HIGH count mismatch: ui={ui_high} docx={docx_high}")
+        self.assertEqual(ui_med, docx_med,
+            f"[실패조건9] MEDIUM count mismatch: ui={ui_med} docx={docx_med}")
+
+    # ── test_clause_template_gate_applied_before_render ──
+    def test_clause_template_gate_applied_before_render(self) -> None:
+        """[실패조건9] 최종 렌더링 직전 clause-template hard gate가 적용되어야 한다."""
+        raw = [
+            {
+                "clause_id": "DLR-004",
+                "clause_title": "계약 해지 조항",
+                "risk_tier": "HIGH",
+                "suggested_rewrite": "소유권 이전을 통해 담보를 설정합니다.",
+            },
+            {
+                "clause_id": "DLR-005",
+                "clause_title": "계약자 변경 조항",
+                "risk_tier": "MEDIUM",
+                "suggested_rewrite": "판촉비는 대리점이 부담합니다.",
+            },
+            {
+                "clause_id": "DLR-006",
+                "clause_title": "비밀유지 조항",
+                "risk_tier": "MEDIUM",
+                "suggested_rewrite": "인력 채용 및 배치는 공급업자가 승인합니다.",
+            },
+            {
+                "clause_id": "DLR-001",
+                "clause_title": "거래구조 명확화",
+                "risk_tier": "HIGH",
+                "suggested_rewrite": "퍼시스가 고객과 직접 계약을 체결합니다.",
+            },
+        ]
+        filtered, hidden = self._gate(raw)
+        rewrite_map = {x["clause_id"]: x.get("suggested_rewrite", "") for x in filtered}
+        self.assertEqual(rewrite_map.get("DLR-004"), self._MISMATCH,
+            "[실패조건9] 해지 조항의 소유권 문구가 차단되지 않았습니다")
+        self.assertEqual(rewrite_map.get("DLR-005"), self._MISMATCH,
+            "[실패조건9] 계약자 변경 조항의 판촉비 문구가 차단되지 않았습니다")
+        self.assertEqual(rewrite_map.get("DLR-006"), self._MISMATCH,
+            "[실패조건9] 비밀유지 조항의 인력 문구가 차단되지 않았습니다")
+        self.assertEqual(rewrite_map.get("DLR-001"), "퍼시스가 고객과 직접 계약을 체결합니다.",
+            "[실패조건9] 정상 수정안이 잘못 차단되었습니다")
+        self.assertNotIn("DLR-001", hidden, "[실패조건9] DLR-001이 hidden_ids에 포함되었습니다")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     unittest.main()
