@@ -1,0 +1,536 @@
+"""Detailed contract profile classification for multi-dimensional legal review.
+
+Implements the full ContractProfile with legal-role metadata for:
+  - content_production_service   (콘텐츠 제작 용역)
+  - advertising_content_production  (제품 광고 콘텐츠 제작 대행)
+  - creative_agency_service      (광고 대행사 용역)
+  - consignment_sales_agency  (위탁판매 대리점 — supplier contracts directly with customer)
+  - direct_customer_sales_support  (고객·공급업자 직접계약 + 대리점 지원)
+  - dealer_agency  (대리점 직접판매 구조)
+  - distribution_resale  (유통/재판매)
+  - purchase_supply, equipment_purchase_installation
+  - store_operation_outsourcing, advisory_service
+  - software_app_development, ai_search_marketing
+  - rental, construction, general
+
+Recognised Fursys Group brands:
+  퍼시스, 일룸, 시디즈, 데스커, 바로스, 퍼시스홀딩스
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+
+# ─── Fursys group recognition ─────────────────────────────────────────────────
+
+FURSYS_GROUP_NAMES: list[str] = [
+    "퍼시스홀딩스", "Fursys Holdings", "fursys holdings",
+    "퍼시스", "FURSYS", "fursys", "Fursys",
+    "일룸", "ILOOM", "iloom", "Iloom",
+    "시디즈", "SIDIZ", "sidiz", "Sidiz",
+    "데스커", "DESKER", "desker", "Desker",
+    "바로스", "BAROS", "baros", "Baros",
+]
+
+_BRAND_PRIORITY: list[tuple[str, list[str]]] = [
+    ("퍼시스홀딩스", ["퍼시스홀딩스", "fursys holdings"]),
+    ("시디즈", ["시디즈", "sidiz"]),
+    ("일룸", ["일룸", "iloom"]),
+    ("데스커", ["데스커", "desker"]),
+    ("바로스", ["바로스", "baros"]),
+    ("퍼시스", ["퍼시스", "fursys"]),
+]
+
+
+def is_fursys_group(entity: str) -> bool:
+    """Return True if entity text belongs to any Fursys Group brand."""
+    if not entity:
+        return False
+    s = entity.strip().lower()
+    return any(name.lower() in s for name in FURSYS_GROUP_NAMES)
+
+
+def detect_our_party_from_text(text: str, hint_entity: str = "") -> str | None:
+    """Scan contract text to identify which Fursys group company is 'ours'.
+
+    Case-insensitive. hint_entity (the entity field set by the uploader) is
+    trusted FIRST — if it matches a Fursys brand we return it immediately
+    without scanning the body. This prevents a subsidiary brand mentioned as
+    an A/S or logistics partner from overriding the actual issuing entity.
+    Falls back to text scan only when hint_entity is absent or unknown.
+    Returns canonical brand name or None.
+    """
+    # Trust uploader hint before scanning body text
+    if hint_entity:
+        h = hint_entity.strip().lower()
+        for canonical, aliases in _BRAND_PRIORITY:
+            if any(alias.lower() in h for alias in aliases):
+                return canonical
+    # Fall back to text scan
+    t = (text or "").lower()
+    for canonical, aliases in _BRAND_PRIORITY:
+        if any(alias.lower() in t for alias in aliases):
+            return canonical
+    return None
+
+
+# ─── ContractProfile dataclass ────────────────────────────────────────────────
+
+@dataclass
+class ContractProfile:
+    """Full legal-role metadata for a classified contract."""
+    contract_type: str
+    our_party: str
+    counterparty: str
+    our_legal_role: str
+    counterparty_legal_role: str
+    customer_contracting_party: str | None
+    payment_collection_party: str | None
+    tax_invoice_issuer: str | None
+    agency_authority: bool | None
+    confidence: float
+    reasons: list[str]
+    unresolved_questions: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "contract_type": self.contract_type,
+            "our_party": self.our_party,
+            "counterparty": self.counterparty,
+            "our_legal_role": self.our_legal_role,
+            "counterparty_legal_role": self.counterparty_legal_role,
+            "customer_contracting_party": self.customer_contracting_party,
+            "payment_collection_party": self.payment_collection_party,
+            "tax_invoice_issuer": self.tax_invoice_issuer,
+            "agency_authority": self.agency_authority,
+            "confidence": round(self.confidence, 3),
+            "reasons": list(self.reasons),
+            "unresolved_questions": list(self.unresolved_questions),
+        }
+
+
+# ─── Main classification function ─────────────────────────────────────────────
+
+def classify_contract_detailed(
+    *,
+    entity: str,
+    contract_type: str,
+    text: str,
+    filename: str | None = None,
+) -> ContractProfile:
+    """Return a fully populated ContractProfile for the given contract."""
+    t = text or ""
+    ct = contract_type or ""
+    ent = entity or ""
+    reasons: list[str] = []
+    unresolved: list[str] = []
+
+    our_party = detect_our_party_from_text(t, hint_entity=ent) or ent or "미상"
+    counterparty = _detect_counterparty(t, our_party)
+
+    type_code, type_reasons = _classify_type_code(ct, t, filename or "")
+    reasons.extend(type_reasons)
+
+    our_legal_role, counterparty_legal_role = _infer_legal_roles(type_code, ct, t)
+
+    customer_contracting_party: str | None = None
+    payment_collection_party: str | None = None
+    tax_invoice_issuer: str | None = None
+    agency_authority: bool | None = None
+
+    if type_code in ("consignment_sales_agency", "direct_customer_sales_support", "dealer_rental_service_contract"):
+        cpres = _infer_customer_contract_details(t, our_party)
+        customer_contracting_party = cpres["customer_contracting_party"]
+        payment_collection_party = cpres["payment_collection_party"]
+        tax_invoice_issuer = cpres["tax_invoice_issuer"]
+        agency_authority = cpres["agency_authority"]
+        unresolved.extend(cpres["unresolved"])
+    elif type_code == "dealer_agency":
+        customer_contracting_party = counterparty
+        payment_collection_party = counterparty
+        tax_invoice_issuer = counterparty
+        agency_authority = False
+
+    confidence = _compute_confidence(type_code, reasons, t)
+
+    return ContractProfile(
+        contract_type=type_code,
+        our_party=our_party,
+        counterparty=counterparty,
+        our_legal_role=our_legal_role,
+        counterparty_legal_role=counterparty_legal_role,
+        customer_contracting_party=customer_contracting_party,
+        payment_collection_party=payment_collection_party,
+        tax_invoice_issuer=tax_invoice_issuer,
+        agency_authority=agency_authority,
+        confidence=confidence,
+        reasons=reasons,
+        unresolved_questions=unresolved,
+    )
+
+
+# ─── Private helpers ──────────────────────────────────────────────────────────
+
+def _has(text: str, *needles: str) -> bool:
+    t = text.lower()
+    return any(n.lower() in t for n in needles)
+
+
+def _classify_type_code(
+    contract_type: str, text: str, filename: str
+) -> tuple[str, list[str]]:
+    combined = (contract_type + "\n" + text + "\n" + filename).lower()
+    reasons: list[str] = []
+
+    def has(*s: str) -> bool:
+        return any(n.lower() in combined for n in s)
+
+    # ── Step 0: Content production detection — HIGHEST priority for creative contracts ─
+    # Must come before all other checks to prevent "광고" from matching ai_search_marketing.
+    # Key differentiators vs ai_search_marketing:
+    #   content_production: 콘텐츠 제작, 촬영, 편집, 시안, 콘티, 결과물, 저작권, 소유권 이전
+    #   ai_search_marketing: AI 검색, 검색 노출, SEO, GEO, AEO, LLM, 생성형 AI 검색
+
+    has_production_core = has(
+        "콘텐츠 제작", "광고 콘텐츠", "제품 광고", "콘텐츠 제작 대행",
+        "영상 제작", "촬영", "편집", "시안", "콘티", "스토리보드",
+        "콘텐츠 제작 용역", "제작 대행",
+    )
+    has_creative_elements = has(
+        "폰트", "이미지", "음원", "초상권", "모델", "촬영 장소",
+        "저작권 이전", "소유권 이전", "저작재산권", "2차적저작물",
+        "결과물", "산출물",
+    )
+    has_ai_search_specific = has(
+        "ai 검색", "검색 노출", "검색 최적화", "aeo", "geo", "llm",
+        "생성형 ai", "검색 알고리즘", "키워드 광고", "검색 알고리즘",
+    )
+    has_ad_content_or_ownership_transfer = has(
+        "소유권의 귀속", "저작권 이전", "저작재산권", "2차적저작물작성권",
+        "결과물 소유권", "콘텐츠 소유권",
+    )
+
+    # Advertising content production (제품 광고 콘텐츠 제작 대행)
+    if has_production_core and not has_ai_search_specific:
+        if has_creative_elements or has_ad_content_or_ownership_transfer:
+            reasons.append("advertising_content_production_strong")
+            return "advertising_content_production", reasons
+        reasons.append("content_production_service_generic")
+        return "content_production_service", reasons
+
+    if has_creative_elements and has_ad_content_or_ownership_transfer and not has_ai_search_specific:
+        if has("광고", "제작", "콘텐츠"):
+            reasons.append("content_production_from_ip_transfer")
+            return "advertising_content_production", reasons
+
+    # ── Step 1: Evaluate consignment/dealer signals first ──────────────────
+    # These must take priority over incidental dev-language in Article 19 etc.
+
+    has_consignment = has("위탁판매")
+    has_dealer = has("대리점", "판매대리점", "위탁판매 대리점")
+    has_service_fee = has("용역수수료", "기본수수료", "추가수수료")
+    has_direct_customer_signal = has(
+        "검수마스터", "위탁커넥트플러스",
+        "고객과 공급업자", "공급업자가 고객과", "공급업자는 고객과",
+    )
+    has_dealer_contract_flow = has("수주등록", "납품 일정", "수금 지원", "상품공급계약")
+
+    # Consignment sales agency — HIGHEST dealer priority
+    if has_consignment and has_dealer and (has_service_fee or has_direct_customer_signal or has_dealer_contract_flow):
+        reasons.append("위탁판매_대리점_service_fee_or_direct")
+        return "consignment_sales_agency", reasons
+
+    if has_consignment and has_dealer:
+        reasons.append("위탁판매_대리점_generic")
+        return "consignment_sales_agency", reasons
+
+    # Direct customer sales support
+    if has_dealer and has_service_fee and has("고객") and (
+        has_direct_customer_signal or has_dealer_contract_flow
+    ):
+        reasons.append("direct_customer_support_service_fee")
+        return "direct_customer_sales_support", reasons
+
+    # ── Step 1b: Rental + dealer = dealer_rental_service_contract ────────────
+    # A rental contract where the dealer manages customer touchpoints on behalf
+    # of the supplier must be classified separately from a pure "rental" contract.
+    # Must come BEFORE the generic rental fallback at Step 5.
+    has_rental = has("렌탈", "렌트")
+    if has_rental and (has_dealer or has("대리점")):
+        if has_service_fee or has_direct_customer_signal or has("위탁판매") or has("용역수수료"):
+            reasons.append("dealer_rental_service_contract_service_fee")
+            return "dealer_rental_service_contract", reasons
+        reasons.append("dealer_rental_service_contract_generic")
+        return "dealer_rental_service_contract", reasons
+
+    # ── Step 2: Strong software/dev signals (only when no dealer context) ──
+    # "소스코드" in Article 19 of a dealer contract must NOT trigger this branch.
+    # Only classify as software if there are NO dealer/consignment signals.
+    if not has_dealer and not has_consignment:
+        if has("소스코드", "source code") and has("개발", "산출물", "deliverable"):
+            reasons.append("source_code_signal")
+            return "software_app_development", reasons
+        if has("오픈소스", "open source", "sbom") and has("개발", "라이선스"):
+            reasons.append("open_source_dev_signal")
+            return "software_app_development", reasons
+        if has("앱 개발", "앱개발", "소프트웨어 개발", "시스템 개발") and has("산출물", "deliverable", "sow"):
+            reasons.append("app_dev_strong")
+            return "software_app_development", reasons
+
+    # ── Step 3: Store operation outsourcing ───────────────────────────────
+    if has("운영대행", "위탁운영", "매장운영", "공간운영", "라운지운영", "시설운영"):
+        reasons.append("store_operation_outsourcing")
+        return "store_operation_outsourcing", reasons
+
+    # ── Step 4: Standard dealer ───────────────────────────────────────────
+    if has_dealer and has("대리점법", "재판매", "유통") and not has_consignment:
+        reasons.append("standard_dealer_agency")
+        return "dealer_agency", reasons
+
+    if has_dealer and has("구매", "판매", "공급") and not has_consignment and not has_service_fee:
+        reasons.append("dealer_agency_generic")
+        return "dealer_agency", reasons
+
+    # ── Step 5: Other specific types ─────────────────────────────────────
+    if has("유통", "distributor", "resale", "재판매") and has_dealer:
+        reasons.append("distribution_resale")
+        return "distribution_resale", reasons
+
+    if has("자문", "컨설팅", "consulting", "sow", "statement of work") and not has_dealer:
+        reasons.append("advisory_service")
+        return "advisory_service", reasons
+
+    if has("장비", "설치", "시운전") and has("구매", "공급", "납품"):
+        reasons.append("equipment_purchase_installation")
+        return "equipment_purchase_installation", reasons
+
+    if has("구매", "매매", "purchase") and has("공급", "supply"):
+        reasons.append("purchase_supply")
+        return "purchase_supply", reasons
+
+    if has("렌탈", "렌트", "임대차", "lease"):
+        reasons.append("rental")
+        return "rental", reasons
+
+    if has("공사", "도급", "하도급", "시공", "construction"):
+        reasons.append("construction")
+        return "construction", reasons
+
+    # ai_search_marketing: ONLY when AI/search-specific signals are present
+    if has_ai_search_specific:
+        reasons.append("ai_search_marketing_explicit")
+        return "ai_search_marketing", reasons
+    if has("마케팅", "광고", "검색", "노출", "seo") and not has_production_core:
+        reasons.append("ai_search_marketing_generic")
+        return "ai_search_marketing", reasons
+
+    # Weak app/dev (only when no dealer)
+    if not has_dealer and has("개발", "유지보수", "saas", "api 연동"):
+        reasons.append("software_weak")
+        return "software_app_development", reasons
+
+    # Generic dealer fallback
+    if has_dealer:
+        reasons.append("dealer_generic_fallback")
+        return "dealer_agency", reasons
+
+    reasons.append("no_strong_signal")
+    return "general", reasons
+
+
+def _detect_counterparty(text: str, our_party: str) -> str:
+    t = text or ""
+    our_lower = our_party.lower() if our_party else ""
+
+    # Pattern 0: "을(수탁자): 주식회사 XXX" format (content production contracts)
+    m = re.search(
+        r"을\s*\((?:수탁자|대리점|을)\)\s*[:：]\s*(?:주식회사|㈜|㈜?\s*)?\s*([가-힣a-zA-Z0-9\s]{2,30}?)\s*(?:\(|$)",
+        t
+    )
+    if m:
+        candidate = m.group(1).strip()
+        if candidate.lower() not in (our_lower, "갑", "을") and len(candidate) >= 2:
+            return candidate
+
+    # Pattern 1: 을(㈜XXX, 이하 "을") or 을(XXX, 이하) — handles ㈜ prefix
+    m = re.search(
+        r"을\s*\(\s*(?:㈜|주식회사|㈜\s*)?([가-힣a-zA-Z0-9\s]{2,30}?)\s*[,，]\s*이하",
+        t
+    )
+    if m:
+        candidate = m.group(1).strip()
+        # Exclude our party and generic labels
+        if (candidate.lower() not in (our_lower, "갑", "을", "발주자", "도급인", "구매자")
+                and len(candidate) >= 2):
+            return candidate
+
+    # Pattern 2: 갑과 을 구조에서 을 추출
+    m = re.search(
+        r"(?:갑|갑\().*?(?:과|와|이)\s*(?:㈜|주식회사|㈜\s*)?([가-힣a-zA-Z0-9\s]{2,30}?)\s*\(",
+        t
+    )
+    if m:
+        candidate = m.group(1).strip()
+        if candidate.lower() not in (our_lower, "을", "갑") and len(candidate) >= 2:
+            return candidate
+
+    # Pattern 3: explicit keyword patterns
+    m = re.search(r"을\s*\(\s*(?:주\.)?\s*([가-힣a-zA-Z0-9]{2,20})\s*[,，]\s*이하\s*['\"]?수탁자['\"]?", t)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"을\s*\(\s*(?:주\.)?\s*([가-힣a-zA-Z0-9]{2,20})\s*[,，]\s*이하\s*['\"]?대리점['\"]?", t)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"대리점\s*:\s*(?:주\.)?\s*([가-힣a-zA-Z0-9]{2,20})", t)
+    if m:
+        return m.group(1).strip()
+
+    # Pattern 4: specific company names known to be counterparties
+    _KNOWN_COMPANIES = [
+        ("스카이인텔리전스", r"스카이인텔리전스|스카이\s*인텔리전스|SKAI"),
+    ]
+    for name, pattern in _KNOWN_COMPANIES:
+        if re.search(pattern, t, re.IGNORECASE):
+            return name
+
+    if "대리점" in t:
+        return "대리점"
+    if "수탁자" in t or "수급인" in t:
+        return "수탁자"
+    if "구매자" in t or "발주자" in t:
+        return "구매자"
+    return "상대방"
+
+
+def _infer_legal_roles(
+    type_code: str, contract_type: str, text: str
+) -> tuple[str, str]:
+    if type_code in ("advertising_content_production", "content_production_service", "creative_agency_service"):
+        return "도급인/발주자/콘텐츠 사용권자", "콘텐츠 제작 수탁자"
+    if type_code == "consignment_sales_agency":
+        return "supplier", "consignment_dealer"
+    if type_code == "direct_customer_sales_support":
+        return "supplier", "sales_support_agent"
+    if type_code == "dealer_rental_service_contract":
+        return "supplier", "rental_service_dealer"
+    if type_code in ("dealer_agency", "distribution_resale"):
+        return "supplier", "dealer"
+    if type_code == "purchase_supply":
+        return "buyer", "seller_or_supplier"
+    if type_code == "equipment_purchase_installation":
+        return "buyer", "vendor_installer"
+    if type_code == "store_operation_outsourcing":
+        return "principal", "operator"
+    if type_code == "advisory_service":
+        return "client", "advisor"
+    if type_code in ("software_app_development", "ai_search_marketing"):
+        return "ordering_party", "developer"
+    if type_code == "rental":
+        return "renter", "rental_provider"
+    if type_code == "construction":
+        return "ordering_party", "contractor"
+    return "unknown", "unknown"
+
+
+def _infer_customer_contract_details(
+    text: str, our_party: str
+) -> dict[str, Any]:
+    t = text or ""
+    unresolved: list[str] = []
+
+    _direct_signals = [
+        "공급업자는 고객과 직접",
+        "공급업자가 고객과 직접",
+        "공급업자와 고객 간 계약",
+        "고객과 공급업자가 직접",
+        # Rental dealer direct-contract patterns
+        "공급업자와 고객이 직접",
+        "공급업자와 최종 소비자 간의",
+        "공급업자와 최종소비자 간의",
+        "임대인과 고객이 직접",
+        "임대인인 공급업자",
+        "고객과 직접 렌탈",
+        "공급업자와 고객 간 렌탈",
+    ]
+    _dealer_contracts_signals = [
+        "대리점은 고객과 계약",
+        "대리점은 고객에게 판매",
+        "대리점은 최종소비자에게",
+        "위탁받은 상품을 최종소비자에게 판매",
+    ]
+    _supplier_invoice_signals = [
+        "공급업자가 세금계산서",
+        "공급업자가 발행",
+        "공급자가 세금계산서",
+    ]
+    _dealer_invoice_signals = [
+        "대리점은 고객에게 세금계산서",
+        "각종 법률이 규정하고 있는 의무를 수행",
+        "세금계산서 발행 및 대금의 청구",
+    ]
+
+    has_direct = any(s in t for s in _direct_signals)
+    has_dealer_contracts = any(s in t for s in _dealer_contracts_signals)
+    has_supplier_invoice = any(s in t for s in _supplier_invoice_signals)
+    has_dealer_invoice = any(s in t for s in _dealer_invoice_signals)
+
+    # Customer contracting party
+    if has_direct and not has_dealer_contracts:
+        ccp = our_party if our_party and our_party != "미상" else "공급업자"
+    elif has_dealer_contracts:
+        ccp = "needs_clarification_with_high_risk"
+        unresolved.append("대리점이 고객과 직접 계약하는 것처럼 기술됨 — 거래구조 HIGH 리스크")
+    else:
+        ccp = "needs_clarification_with_high_risk"
+        unresolved.append("고객과의 계약 당사자가 명확히 특정되지 않음")
+
+    # Tax invoice issuer
+    if has_dealer_invoice and not has_supplier_invoice:
+        tii = "needs_clarification_with_high_risk"
+        unresolved.append("세금계산서 발행 주체가 대리점으로 기재되어 있어 구조 불일치 HIGH 리스크")
+    elif has_supplier_invoice:
+        tii = our_party if our_party and our_party != "미상" else "공급업자"
+    else:
+        tii = None
+
+    # Payment collection party
+    has_dealer_collects = any(s in t for s in [
+        "수금 업무를 성실히", "대금수금의 책임", "수요자의 대금지급이 이루어질 수 있도록",
+    ])
+    if has_dealer_collects:
+        pcp = "needs_clarification_with_high_risk"
+        unresolved.append("대금 수금 책임이 대리점에게 부과됨 — 대리점법 불이익 제공 리스크")
+    else:
+        pcp = our_party if our_party and our_party != "미상" else "공급업자"
+
+    # Agency authority
+    has_agency_denied = "공급업자를 대리하여" in t and "할 수 없다" in t
+    agency_authority: bool | None = False if has_agency_denied else None
+
+    return {
+        "customer_contracting_party": ccp,
+        "payment_collection_party": pcp,
+        "tax_invoice_issuer": tii,
+        "agency_authority": agency_authority,
+        "unresolved": unresolved,
+    }
+
+
+def _compute_confidence(type_code: str, reasons: list[str], text: str) -> float:
+    strong_types = {
+        "consignment_sales_agency",
+        "dealer_rental_service_contract",
+        "software_app_development",
+        "rental",
+        "construction",
+        "store_operation_outsourcing",
+    }
+    if "no_strong_signal" in reasons:
+        return 0.40
+    if type_code in strong_types and len(reasons) >= 1:
+        return 0.88
+    if type_code == "general":
+        return 0.40
+    return 0.75

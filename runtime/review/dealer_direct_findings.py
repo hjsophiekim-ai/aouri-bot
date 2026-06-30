@@ -198,7 +198,8 @@ def classify_clause_identity(*, title: str, text: str) -> str:
     def has(*needles: str) -> bool:
         return any(n.lower() in hay for n in needles)
 
-    # Order matters: more specific first
+    # Order matters: more specific first.
+    # ── High-specificity structural clauses ─────────────────────────────────
     if has("위탁판매", "거래형태", "거래 형태", "위탁받은 상품") and has("최종소비자", "판매하고", "판매위탁"):
         return CI_DEALER_STRUCTURE
     if has("기준단가", "계약가", "할인율", "최저가격", "제안 가능한 최저"):
@@ -211,10 +212,31 @@ def classify_clause_identity(*, title: str, text: str) -> str:
         return CI_COLLECTION
     if has("검수", "납품", "배송", "배달"):
         return CI_DELIVERY_INSPECTION
-    if has("반품", "취소", "교환") and not has("수금"):
+
+    # ── Cancellation/return/A/S — must NOT absorb termination/ownership clauses ──
+    # A clause about product ownership protection in a rental context is NOT cancellation.
+    # Terminate/confidentiality clauses take precedence when they appear in the title.
+    _title_lower = (title or "").lower()
+    if has("해지", "계약해지", "종료", "중도해지") and (
+        "해지" in _title_lower or "종료" in _title_lower or "계약 종료" in _title_lower
+    ):
+        return CI_TERMINATION
+    if (has("비밀유지", "기밀") or "비밀" in _title_lower or "confidential" in _title_lower) and not has(
+        "인력", "직원 채용", "고용 금지", "스카우트"
+    ):
+        return CI_CONFIDENTIALITY
+
+    if has("반품", "취소", "교환") and not has("수금") and not has("소유권", "채권추심"):
         return CI_CANCELLATION_RETURN
-    if has("a/s", "as", "하자보수", "애프터서비스") and not has("세금계산서"):
+    if has("a/s", "하자보수", "애프터서비스") and not has("세금계산서"):
         return CI_AFTER_SERVICE
+
+    # ── Ownership protection clause (rental contracts) ────────────────────────
+    # "소유권 표식", "소유권 행사 제한" etc. in a rental contract describes the
+    # lessor's property rights — it is NOT a cancellation clause.
+    if has("소유권", "소유권 표식", "소유권 행사") and has("임차", "렌탈", "반환", "회수"):
+        return CI_AFTER_SERVICE  # treat as AS/delivery scope, no rewrite template
+
     if has("외주매입", "외주 매입", "외부 매입"):
         return CI_OUTSOURCED_PURCHASE
     if has("용역수수료", "수수료 산정", "수수료 계산", "기본수수료", "추가수수료"):
@@ -223,18 +245,27 @@ def classify_clause_identity(*, title: str, text: str) -> str:
         return CI_INCENTIVE
     if has("상계", "차감", "거래보증금", "보증금"):
         return CI_SETOFF_DEPOSIT
-    if has("판매촉진", "광고", "홍보", "시설 개선", "판촉"):
+
+    # ── Promotion — must NOT be applied to assignment/transfer clauses ────────
+    # Assignment/transfer clauses have "양도", "양수", "계약자 변경" in title.
+    if has("판매촉진", "광고", "홍보", "시설 개선", "판촉") and not (
+        "양도" in _title_lower or "계약자 변경" in _title_lower or "이전" in _title_lower
+    ):
         return CI_PROMOTION
+
     if has("소프트웨어", "s/w", "sw 사용료", "프로그램 사용료", "별도 비용", "월별 용역수수료에서 차감"):
         return CI_SOFTWARE_FEE
     if has("상표", "지식재산", "저작물", "상호", "로고") and has("사용", "사용할 수 없", "승인"):
         return CI_TRADEMARK_IP
     if has("갱신거절", "갱신 거절", "갱신 거부"):
         return CI_RENEWAL_REFUSAL
-    if has("해지", "계약해지", "종료", "중도해지"):
+
+    # Remaining termination/confidentiality (title did not match above, check body)
+    if has("해지", "계약해지", "종료", "중도해지") and not has("소유권", "채권", "수금"):
         return CI_TERMINATION
-    if has("비밀유지", "비밀", "기밀", "confidential"):
+    if has("비밀유지", "비밀", "기밀", "confidential") and not has("인력", "직원", "고용"):
         return CI_CONFIDENTIALITY
+
     if has("관할", "준거법", "분쟁해결", "중재"):
         return CI_DISPUTE
     if has("준수", "법령", "공정거래", "금품", "향응", "동반성장"):

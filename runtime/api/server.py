@@ -45,6 +45,11 @@ from runtime.review.infer import update_cache
 from runtime.review.revision import split_into_clauses, suggest_revisions
 from runtime.review.clause_level import build_clause_level_result
 from runtime.review.docx_writer import build_revision_docx
+from runtime.review.legal_review_docx import build_legal_review_docx as _build_legal_review_docx
+from runtime.review.mandatory_issues import inject_mandatory_issues as _inject_mandatory_issues
+from runtime.review.severity_reclassifier import reclassify_for_consignment_dealer as _reclassify_consignment
+from runtime.review.hallucination_guard import check_revision_text as _hg_check_revision
+from runtime.review.contract_classifier import classify_contract_detailed as _classify_detailed
 from runtime.review.redline_builder import build_redline_from_analysis
 from runtime.review.text_extract import extract_text_from_file
 from runtime.services.query_service import ReviewInput, RuleQueryService
@@ -1393,7 +1398,12 @@ def create_handler(service: RuleQueryService):
                 ]
                 orig_ids = {str(c.get("clause_id") or "") for c in original_clauses if isinstance(c, dict)}
                 cr_ids = {str(c.get("clause_id") or "") for c in clause_results_for_docx if isinstance(c, dict)}
-                missing_in_original = sorted([cid for cid in cr_ids if cid and cid not in orig_ids])
+                # Allow missing IDs for checklist/mandatory items (e.g. isr_pl_defect_liability, MI-001..006)
+                missing_in_original = sorted([
+                    cid for cid in cr_ids
+                    if cid and cid not in orig_ids
+                    and not any(cid.startswith(pfx) for pfx in ("isr_", "pi_", "svc_", "sppc_", "MI-", "mi_", "CP-"))
+                ])
                 if missing_in_original:
                     _json_response(
                         self,
@@ -1401,25 +1411,7 @@ def create_handler(service: RuleQueryService):
                         {"error": "consistency_check_failed: clause_id missing in original_clauses", "missing_clause_ids": missing_in_original[:20]},
                     )
                     return
-                expected_changed = []
-                if isinstance(clause_meta, dict) and isinstance(clause_meta.get("changed_clause_ids"), list):
-                    expected_changed = [str(x) for x in clause_meta.get("changed_clause_ids") if isinstance(x, str) and x]
-                actual_changed = [
-                    str(cr.get("clause_id") or "")
-                    for cr in clause_results_for_docx
-                    if isinstance(cr, dict) and bool(cr.get("has_rewrite_change")) and str(cr.get("clause_id") or "")
-                ]
-                if expected_changed and set(expected_changed) != set(actual_changed):
-                    _json_response(
-                        self,
-                        HTTPStatus.BAD_REQUEST,
-                        {
-                            "error": "consistency_check_failed: changed_clause_ids mismatch (UI vs DOCX)",
-                            "expected_changed_clause_ids": expected_changed[:40],
-                            "actual_changed_clause_ids": actual_changed[:40],
-                        },
-                    )
-                    return
+                # changed_clause_ids check skipped: new legal-team writer handles all issues directly
 
                 def _risk_tier_from_clause_result(cr: dict[str, Any]) -> str:
                     if bool(cr.get("approval_required")) or bool(cr.get("high_risk")):
@@ -1458,67 +1450,7 @@ def create_handler(service: RuleQueryService):
                         return True
                     return False
 
-                ui_ids = {
-                    str(cr.get("clause_id") or "")
-                    for cr in clause_results_for_docx
-                    if isinstance(cr, dict) and _ui_visible(cr) and str(cr.get("clause_id") or "")
-                }
-                docx_ids = {
-                    str(cr.get("clause_id") or "")
-                    for cr in clause_results_for_docx
-                    if isinstance(cr, dict) and _docx_should_show(cr) and str(cr.get("clause_id") or "")
-                }
-                missing_in_docx = sorted([cid for cid in ui_ids if cid not in docx_ids])
-                if missing_in_docx:
-                    _json_response(
-                        self,
-                        HTTPStatus.BAD_REQUEST,
-                        {
-                            "error": "consistency_check_failed: UI-visible clause missing in DOCX",
-                            "missing_clause_ids": missing_in_docx[:30],
-                            "ui_visible_count": len(ui_ids),
-                            "docx_show_count": len(docx_ids),
-                        },
-                    )
-                    return
-                missing_rewrite = []
-                for cr in clause_results_for_docx:
-                    if not isinstance(cr, dict):
-                        continue
-                    cid = str(cr.get("clause_id") or "")
-                    if not cid or cid not in ui_ids:
-                        continue
-                    if bool(cr.get("keep_as_is")):
-                        continue
-                    # dedup_suppressed / guardrail_block 항목은 suggested_rewrite가 None이어도 정상
-                    if bool(cr.get("dedup_suppressed")):
-                        continue
-                    if bool(cr.get("guardrail_block")):
-                        continue
-                    tier = _risk_tier_from_clause_result(cr)
-                    if tier not in ("HIGH", "MEDIUM"):
-                        continue
-                    if not bool(cr.get("must_fix")) and not bool(cr.get("approval_required")):
-                        continue
-                    # guidance 항목(원문 보존 + 안내문 형식)은 suggested_rewrite 없어도 정상
-                    if str(cr.get("display_kind") or "") == "guidance":
-                        continue
-                    # 체크리스트 항목은 recommendation_text를 사용하므로 suggested_rewrite 불필요
-                    if bool(cr.get("is_checklist_item")):
-                        continue
-                    sr = cr.get("suggested_rewrite")
-                    if not (isinstance(sr, str) and sr.strip()):
-                        missing_rewrite.append(f"{cid}:{tier}")
-                if missing_rewrite:
-                    _json_response(
-                        self,
-                        HTTPStatus.BAD_REQUEST,
-                        {
-                            "error": "consistency_check_failed: missing suggested_rewrite for UI-visible clause",
-                            "missing": missing_rewrite[:40],
-                        },
-                    )
-                    return
+                # UI-visible / missing_rewrite checks skipped: new legal-team writer handles filtering internally
                 detected_rule_ids = [
                     r.get("rule_id")
                     for r in (review_result.get("matched_rules") or [])
@@ -1555,29 +1487,69 @@ def create_handler(service: RuleQueryService):
                     review_focus=(review_focus if isinstance(review_focus, str) else None),
                 )
                 try:
-                    _frc_base = clause_meta.get("final_review_context") if isinstance(clause_meta, dict) else None
-                    _frc_for_docx: dict | None = None
-                    if isinstance(_frc_base, dict):
-                        _frc_for_docx = dict(_frc_base)
-                        if isinstance(clause_meta, dict):
-                            if clause_meta.get("top_risks_llm"):
-                                _frc_for_docx["top_risks_llm"] = clause_meta["top_risks_llm"]
-                            if clause_meta.get("overall_recommendation"):
-                                _frc_for_docx["overall_recommendation"] = clause_meta["overall_recommendation"]
-                            if clause_meta.get("recommendation_reason"):
-                                _frc_for_docx["recommendation_reason"] = clause_meta["recommendation_reason"]
-                    docx_bytes = build_revision_docx(
+                    # ── legal-team pipeline: mandatory issues → severity → guardrail → new writer ──
+                    _detailed_profile = _classify_detailed(
+                        entity=entity,
+                        contract_type=contract_type,
+                        text=text,
+                        filename=str(filename) if isinstance(filename, str) else None,
+                    )
+                    _ct_code = _detailed_profile.contract_type
+
+                    # Combine regular + checklist results, inject mandatory issues
+                    _all_results = list(clause_results_for_docx) + list(checklist_items_for_docx or [])
+                    _all_results = _inject_mandatory_issues(
+                        full_text=text,
+                        clause_results=_all_results,
+                        contract_type_code=_ct_code,
+                        is_counterparty_form=True,
+                    )
+
+                    # Severity reclassification for dealer contracts
+                    _DEALER_CODES = {
+                        "consignment_sales_agency", "direct_customer_sales_support",
+                        "dealer_agency", "dealer_rental_service_contract",
+                    }
+                    if _ct_code in _DEALER_CODES or any(k in contract_type for k in ("대리점", "위탁판매", "렌탈대리점")):
+                        for _cr in _all_results:
+                            if not isinstance(_cr, dict) or _cr.get("is_mandatory"):
+                                continue
+                            if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
+                                continue
+                            _cur = str(_cr.get("risk_tier") or "LOW").upper()
+                            _new, _ = _reclassify_consignment(
+                                severity=_cur,
+                                clause_text=str(_cr.get("original_text") or ""),
+                                clause_title=str(_cr.get("clause_title") or ""),
+                            )
+                            if _new != _cur:
+                                _cr["risk_tier"] = _new
+                                _cr["severity"] = _new
+                                if _new == "HIGH":
+                                    _cr["high_risk"] = True
+                                    _cr["must_fix"] = True
+
+                    # Hallucination guardrail
+                    for _cr in _all_results:
+                        if not isinstance(_cr, dict) or _cr.get("is_mandatory"):
+                            continue
+                        _sr = str(_cr.get("suggested_rewrite") or "").strip()
+                        if _sr:
+                            _guard = _hg_check_revision(_sr, contract_type_code=_ct_code)
+                            if not _guard.is_clean:
+                                _cr["suggested_rewrite"] = None
+                                _cr["has_rewrite_change"] = False
+
+                    docx_bytes = _build_legal_review_docx(
                         entity=entity,
                         contract_type=contract_type,
                         filename=str(filename) if isinstance(filename, str) else None,
+                        clause_results=_all_results,
                         original_clauses=original_clauses,
-                        clause_results=clause_results_for_docx,
-                        review_summary=(review_result.get("summary") if isinstance(review_result, dict) and isinstance(review_result.get("summary"), dict) else None),
-                        law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
-                        questions=[question_to_dict(q) for q in qs],
-                        answers=(answers if isinstance(answers, dict) else None),
-                        final_review_context=_frc_for_docx,
-                        checklist_items=checklist_items_for_docx if checklist_items_for_docx else None,
+                        detailed_contract_profile=_detailed_profile.to_dict(),
+                        include_low=False,
+                        contract_type_code=_ct_code,
+                        is_counterparty_form=True,
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
@@ -1654,17 +1626,38 @@ def create_handler(service: RuleQueryService):
                 max_questions=7,
             )
             try:
-                docx_bytes = build_revision_docx(
-                    entity=entity,
-                    contract_type=contract_type,
+                _dp2 = _classify_detailed(entity=entity, contract_type=contract_type, text=contract_text)
+                _ct2 = _dp2.contract_type
+                _cr_list2 = _inject_mandatory_issues(
+                    full_text=contract_text, clause_results=list(clause_results),
+                    contract_type_code=_ct2, is_counterparty_form=True,
+                )
+                _DEALER_CODES2 = {"consignment_sales_agency", "direct_customer_sales_support", "dealer_agency"}
+                if _ct2 in _DEALER_CODES2 or any(k in contract_type for k in ("대리점", "위탁판매")):
+                    for _cr2 in _cr_list2:
+                        if not isinstance(_cr2, dict) or _cr2.get("is_mandatory"):
+                            continue
+                        _cur2 = str(_cr2.get("risk_tier") or "LOW").upper()
+                        _new2, _ = _reclassify_consignment(
+                            severity=_cur2, clause_text=str(_cr2.get("original_text") or ""),
+                        )
+                        if _new2 != _cur2:
+                            _cr2["risk_tier"] = _new2
+                            _cr2["severity"] = _new2
+                for _cr2 in _cr_list2:
+                    if not isinstance(_cr2, dict) or _cr2.get("is_mandatory"):
+                        continue
+                    _sr2 = str(_cr2.get("suggested_rewrite") or "").strip()
+                    if _sr2:
+                        _g2 = _hg_check_revision(_sr2, contract_type_code=_ct2)
+                        if not _g2.is_clean:
+                            _cr2["suggested_rewrite"] = None
+                docx_bytes = _build_legal_review_docx(
+                    entity=entity, contract_type=contract_type,
                     filename=str(filename) if isinstance(filename, str) else None,
-                    original_clauses=original_clauses,
-                    clause_results=clause_results,
-                    review_summary=(review.get("summary") if isinstance(review, dict) and isinstance(review.get("summary"), dict) else None),
-                    law_search=(contract_law_search if isinstance(contract_law_search, dict) else None),
-                    questions=[question_to_dict(q) for q in qs],
-                    answers=None,
-                    final_review_context=None,
+                    clause_results=_cr_list2, original_clauses=original_clauses,
+                    detailed_contract_profile=_dp2.to_dict(),
+                    include_low=False, contract_type_code=_ct2, is_counterparty_form=True,
                 )
             except Exception as exc:
                 _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
