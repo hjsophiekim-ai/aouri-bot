@@ -405,5 +405,171 @@ class TestFinalFindingsHasLawyerFields(unittest.TestCase):
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+class TestDealerRentalFinalGate(unittest.TestCase):
+    """Regression tests for apply_dealer_rental_final_gate — 6 failure conditions.
+
+    These tests verify the production clause_results gate:
+    1. isr_*/sppc_* removed from clause_results (UI text never shows them)
+    2. top_risks from final_findings has no isr_*/sppc_*
+    3. Termination clause proposed_clause has no 소유권/채권추심/신용정보
+    4. Assignment clause proposed_clause has no 판촉비/광고비/반품비/원상회복비
+    5. Confidentiality clause proposed_clause has no 인력/채용/배치/평가/징계
+    6. UI count == DOCX count (final_findings counts consistent with lists)
+    """
+
+    def _make_cr(self, clause_id: str, clause_title: str, suggested_rewrite: str,
+                 risk_tier: str = "HIGH", high_risk: bool = True) -> dict:
+        return {
+            "clause_id": clause_id,
+            "clause_title": clause_title,
+            "suggested_rewrite": suggested_rewrite,
+            "original_text": "원문",
+            "risk_tier": risk_tier,
+            "high_risk": high_risk,
+            "approval_required": high_risk,
+            "has_rewrite_change": bool(suggested_rewrite),
+            "display_kind": "redline" if high_risk else "guidance",
+        }
+
+    # ── Failure condition 1: UI 텍스트에 isr_ 또는 sppc_가 포함되면 실패 ──────
+    def test_blocked_isr_ids_removed_from_clause_results(self) -> None:
+        from runtime.review.clause_level import apply_dealer_rental_final_gate, _DEALER_RENTAL_HARD_BLOCKED_IDS
+        input_results = [
+            self._make_cr("isr_accident_reporting", "[제조물검토] 사고 보고", "즉시 보고하라"),
+            self._make_cr("isr_pl_defect_liability", "[제조물검토] 제조물 결함", "책임을 진다"),
+            self._make_cr("isr_installation_defect", "[제조물검토] 설치 하자", "설치자가 책임"),
+            self._make_cr("isr_user_safety", "[제조물검토] 사용자 안전", "안전보호"),
+            self._make_cr("isr_safety_certification", "[제조물검토] 안전인증", "KC인증"),
+            self._make_cr("isr_pl_insurance", "[제조물검토] PL보험", "보험가입"),
+            self._make_cr("isr_defect_sla", "[제조물검토] 하자 SLA", "24시간 응답"),
+            self._make_cr("sppc_inspection_standard", "[공급자보호] 검수기준", "검수 완료"),
+            self._make_cr("sppc_return_limit", "[공급자보호] 반품제한", "반품불가"),
+            self._make_cr("sppc_payment_retention", "[공급자보호] 대금미지급", "이행유보"),
+            self._make_cr("sppc_custom_cancel_limit", "[공급자보호] 취소제한", "취소불가"),
+            self._make_cr("DLR-001", "고객계약 구조", "고객계약은 공급업자가 체결한다."),
+        ]
+        result = apply_dealer_rental_final_gate(input_results, "dealer_rental_service_contract")
+        result_ids = {str(cr.get("clause_id") or "") for cr in result}
+        for blocked_id in _DEALER_RENTAL_HARD_BLOCKED_IDS:
+            self.assertNotIn(blocked_id, result_ids,
+                f"[실패조건1] UI에 {blocked_id}가 나오면 안 됩니다")
+        self.assertIn("DLR-001", result_ids, "DLR-001은 제거되면 안 됩니다")
+
+    def test_blocked_sppc_ids_removed_from_clause_results(self) -> None:
+        from runtime.review.clause_level import apply_dealer_rental_final_gate
+        input_results = [
+            self._make_cr("sppc_inspection_standard", "[공급자보호] 검수", "검수 기준"),
+            self._make_cr("DLR-004", "수수료 상계", "상계를 제한한다."),
+        ]
+        result = apply_dealer_rental_final_gate(input_results, "dealer_rental_service_contract")
+        result_ids = [str(cr.get("clause_id") or "") for cr in result]
+        self.assertNotIn("sppc_inspection_standard", result_ids,
+            "[실패조건1] sppc_inspection_standard가 UI에 나오면 안 됩니다")
+        self.assertIn("DLR-004", result_ids)
+
+    # ── Failure condition 2: final_findings top_risks에 isr_/sppc_가 있으면 실패 ──
+    def test_top_risks_has_no_isr_sppc(self) -> None:
+        from runtime.review.output_filter import ReviewIssue, filter_issues
+        # isr_* 항목은 original_text가 없어 _review_issues_raw에서 제외됨
+        # 그러나 ReviewIssue로 직접 만들어 filter_issues 통과 시도
+        fake_isr = ReviewIssue(
+            clause_id="isr_accident_reporting",
+            clause_title="[제조물검토] 사고보고",
+            severity="HIGH",
+            approval_required=True,
+            issue_title="사고보고 의무",
+            original_text="사고시 보고",
+            problem="미비",
+            legal_business_reason="제조물책임법",
+            proposed_revision="즉시 보고",
+            negotiation_position="",
+            confidence=0.9,
+        )
+        result = filter_issues([fake_isr], contract_type_code="dealer_rental_service_contract")
+        top_ids = [i.clause_id for i in result["top_risks"]]
+        self.assertNotIn("isr_accident_reporting", top_ids,
+            "[실패조건2] isr_* 가 final_findings top_risks에 있으면 안 됩니다")
+
+    # ── Failure condition 3: 계약해지 조항 proposed_clause에 소유권/채권추심/신용정보 금지 ──
+    def test_termination_clause_no_ownership_in_proposed(self) -> None:
+        from runtime.review.clause_level import apply_dealer_rental_final_gate, _DEALER_RENTAL_MISMATCH_MSG
+        forbidden_texts = [
+            "계약 해지 시 소유권 표식을 확인한다.",
+            "해지 후 채권추심 기관에 위탁한다.",
+            "해지 시 신용정보를 조회한다.",
+            "해지 후 개인정보를 활용해 회수한다.",
+        ]
+        for text in forbidden_texts:
+            cr = self._make_cr("DLR-005", "계약해지 조항", text)
+            result = apply_dealer_rental_final_gate([cr], "dealer_rental_service_contract")
+            sr = str(result[0].get("suggested_rewrite") or "")
+            self.assertEqual(sr, _DEALER_RENTAL_MISMATCH_MSG,
+                f"[실패조건3] 계약해지 조항에 금지 문구 차단 실패: '{text[:30]}'")
+            self.assertFalse(result[0].get("has_rewrite_change"),
+                "[실패조건3] has_rewrite_change는 False여야 합니다")
+
+    # ── Failure condition 4: 계약자 변경 조항 proposed_clause에 판촉비/반품비 등 금지 ──
+    def test_assignment_clause_no_promotion_cost_in_proposed(self) -> None:
+        from runtime.review.clause_level import apply_dealer_rental_final_gate, _DEALER_RENTAL_MISMATCH_MSG
+        forbidden_texts = [
+            "지위 이전 시 판촉비를 정산해야 한다.",
+            "양도 시 광고비 분담이 필요하다.",
+            "계약자 변경 시 반품비를 공제한다.",
+            "양도 전 원상회복비를 납부해야 한다.",
+            "지위 이전 시 비용분담이 선행되어야 한다.",
+        ]
+        for text in forbidden_texts:
+            cr = self._make_cr("DLR-007", "계약자 변경 조항", text)
+            result = apply_dealer_rental_final_gate([cr], "dealer_rental_service_contract")
+            sr = str(result[0].get("suggested_rewrite") or "")
+            self.assertEqual(sr, _DEALER_RENTAL_MISMATCH_MSG,
+                f"[실패조건4] 계약자 변경 조항 금지 문구 차단 실패: '{text[:30]}'")
+
+    # ── Failure condition 5: 비밀유지 조항 proposed_clause에 인력/채용/배치/평가/징계 금지 ──
+    def test_confidentiality_clause_no_hr_in_proposed(self) -> None:
+        from runtime.review.clause_level import apply_dealer_rental_final_gate, _DEALER_RENTAL_MISMATCH_MSG
+        forbidden_texts = [
+            "비밀유지를 위해 인력을 관리해야 한다.",
+            "비밀정보 보호를 위한 채용 기준을 정한다.",
+            "기밀 담당자 배치 방식을 명시한다.",
+            "기밀 접근자에 대한 평가를 정기 실시한다.",
+            "비밀 위반 시 징계 절차를 적용한다.",
+            "기밀 보호를 위해 경영간섭 조항을 추가한다.",
+        ]
+        for text in forbidden_texts:
+            cr = self._make_cr("DLR-008", "비밀유지 조항", text)
+            result = apply_dealer_rental_final_gate([cr], "dealer_rental_service_contract")
+            sr = str(result[0].get("suggested_rewrite") or "")
+            self.assertEqual(sr, _DEALER_RENTAL_MISMATCH_MSG,
+                f"[실패조건5] 비밀유지 조항 금지 문구 차단 실패: '{text[:30]}'")
+
+    # ── Failure condition 6: UI count와 docx report count가 다르면 실패 ──────────
+    def test_ui_count_equals_docx_count_via_final_findings(self) -> None:
+        from runtime.review.review_orchestrator import build_dealer_rental_review
+        text = DEALER_FIXTURE.read_text(encoding="utf-8")
+        result = build_dealer_rental_review(text=text, entity="퍼시스")
+        ff = result["final_findings"]
+        self.assertEqual(len(ff["high_issues"]), ff["high_count"],
+            "[실패조건6] high_issues 개수가 high_count와 다릅니다 (UI ≠ DOCX)")
+        self.assertEqual(len(ff["medium_issues"]), ff["medium_count"],
+            "[실패조건6] medium_issues 개수가 medium_count와 다릅니다 (UI ≠ DOCX)")
+        self.assertEqual(ff["display_buckets"]["필수수정"], ff["high_count"],
+            "[실패조건6] 필수수정 bucket 카운트가 high_count와 다릅니다")
+        self.assertEqual(ff["display_buckets"]["권장수정"], ff["medium_count"],
+            "[실패조건6] 권장수정 bucket 카운트가 medium_count와 다릅니다")
+
+    def test_gate_not_applied_for_other_contract_types(self) -> None:
+        from runtime.review.clause_level import apply_dealer_rental_final_gate
+        input_results = [
+            self._make_cr("isr_accident_reporting", "[제조물검토] 사고보고", "즉시 보고"),
+        ]
+        result = apply_dealer_rental_final_gate(input_results, "general_purchase")
+        self.assertEqual(len(result), 1,
+            "dealer_rental 이외 계약에서는 isr_*를 제거하면 안 됩니다")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     unittest.main()

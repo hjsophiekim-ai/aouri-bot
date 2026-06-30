@@ -2926,6 +2926,69 @@ def _apply_redline_safety_check(
 
 
 # =============================================================================
+# [Dealer Rental Final Gate] dealer_rental_service_contract 전용 최종 차단 필터
+# 11개 ID 완전 제거 + 조항-문안 hard gate (termination/assignment/confidentiality)
+# =============================================================================
+
+_DEALER_RENTAL_HARD_BLOCKED_IDS: frozenset = frozenset({
+    "isr_accident_reporting",
+    "isr_pl_defect_liability",
+    "isr_installation_defect",
+    "isr_user_safety",
+    "isr_safety_certification",
+    "isr_pl_insurance",
+    "isr_defect_sla",
+    "sppc_inspection_standard",
+    "sppc_return_limit",
+    "sppc_payment_retention",
+    "sppc_custom_cancel_limit",
+})
+
+# (clause_title 키워드 목록, forbidden 키워드 목록) 쌍
+_DEALER_RENTAL_CLAUSE_TOPIC_GATE: list[tuple[list[str], list[str]]] = [
+    (["해지", "종료", "해제"], ["소유권", "채권추심", "신용정보", "개인정보"]),
+    (["양도", "지위 이전", "계약자 변경"], ["판촉비", "광고비", "반품비", "원상회복비", "비용분담"]),
+    (["비밀", "기밀"], ["인력", "채용", "배치", "평가", "징계", "경영간섭"]),
+]
+
+_DEALER_RENTAL_MISMATCH_MSG = "자동수정 보류: 조항 주제와 수정문안 불일치"
+
+
+def apply_dealer_rental_final_gate(
+    clause_results: list[dict],
+    contract_type_code: str,
+) -> list[dict]:
+    """dealer_rental_service_contract 전용 최종 차단:
+    1) 11개 hard-blocked ID 완전 제거
+    2) 조항 주제와 수정문안 불일치 시 suggested_rewrite 삭제 및 메시지 표시
+    """
+    if contract_type_code != "dealer_rental_service_contract":
+        return clause_results
+
+    filtered: list[dict] = [
+        cr for cr in clause_results
+        if isinstance(cr, dict) and str(cr.get("clause_id") or "") not in _DEALER_RENTAL_HARD_BLOCKED_IDS
+    ]
+
+    for cr in filtered:
+        if not isinstance(cr, dict):
+            continue
+        _ct = str(cr.get("clause_title") or "").lower()
+        _sr = str(cr.get("suggested_rewrite") or "").strip()
+        if not _sr or _sr == _DEALER_RENTAL_MISMATCH_MSG:
+            continue
+        for _title_kws, _forbidden_kws in _DEALER_RENTAL_CLAUSE_TOPIC_GATE:
+            if any(k in _ct for k in _title_kws):
+                if any(f in _sr for f in _forbidden_kws):
+                    cr["suggested_rewrite"] = _DEALER_RENTAL_MISMATCH_MSG
+                    cr["has_rewrite_change"] = False
+                    cr["display_kind"] = "guidance"
+                break
+
+    return filtered
+
+
+# =============================================================================
 
 
 def build_clause_level_result(
@@ -4852,6 +4915,10 @@ def build_clause_level_result(
         user_focus=review_focus,
         our_role=party.our_role,
     )
+
+    # ── [Dealer Rental Final Gate] isr_*/sppc_* 제거 + 조항-문안 hard gate ───
+    _dlr_type = (getattr(_detailed_profile, "contract_type", None) or str(contract_type or ""))
+    clause_results = apply_dealer_rental_final_gate(clause_results, _dlr_type)
 
     # ── [Clause-Level Conflict Check] 조항 간 모순 감지 ─────────────────────
     clause_conflicts = detect_clause_conflicts(clause_results)

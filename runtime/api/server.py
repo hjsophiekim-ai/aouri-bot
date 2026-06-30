@@ -1510,51 +1510,69 @@ def create_handler(service: RuleQueryService):
                         "consignment_sales_agency", "direct_customer_sales_support",
                         "dealer_agency", "dealer_rental_service_contract",
                     }
-                    # isr_*/sppc_* 딜러 계약 hard gate: 재분류 전에 먼저 LOW로 강제
+                    # isr_*/sppc_* 딜러 계약 hard gate: dealer_rental은 완전 제거, 나머지는 LOW 강제
                     _SUPPRESS_PREFIXES = ("isr_", "sppc_", "pi_", "svc_")
                     if _ct_code in _DEALER_CODES or any(k in contract_type for k in ("대리점", "위탁판매", "렌탈대리점")):
-                        for _cr in _all_results:
-                            if not isinstance(_cr, dict):
-                                continue
-                            _cid = str(_cr.get("clause_id") or "")
-                            if any(_cid.startswith(p) for p in _SUPPRESS_PREFIXES):
-                                _cr["risk_tier"] = "LOW"
-                                _cr["severity"] = "LOW"
-                                _cr["approval_required"] = False
-                                _cr["high_risk"] = False
-                                _cr["must_fix"] = False
-                                continue  # 재분류 루프 건너뜀
-                            if _cr.get("is_mandatory"):
-                                continue
-                            if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
-                                continue
-                            _cur = str(_cr.get("risk_tier") or "LOW").upper()
-                            _new, _ = _reclassify_consignment(
-                                severity=_cur,
-                                clause_text=str(_cr.get("original_text") or ""),
-                                clause_title=str(_cr.get("clause_title") or ""),
-                            )
-                            if _new != _cur:
-                                _cr["risk_tier"] = _new
-                                _cr["severity"] = _new
-                                if _new == "HIGH":
-                                    _cr["high_risk"] = True
-                                    _cr["must_fix"] = True
+                        from runtime.review.clause_level import (
+                            apply_dealer_rental_final_gate as _dlr_gate,
+                            _DEALER_RENTAL_HARD_BLOCKED_IDS as _DLR_BLOCKED,
+                        )
+                        if _ct_code == "dealer_rental_service_contract":
+                            # dealer_rental: hard-blocked IDs 완전 제거 후 조항-문안 gate
+                            _all_results = _dlr_gate(_all_results, _ct_code)
+                        else:
+                            for _cr in _all_results:
+                                if not isinstance(_cr, dict):
+                                    continue
+                                _cid = str(_cr.get("clause_id") or "")
+                                if any(_cid.startswith(p) for p in _SUPPRESS_PREFIXES):
+                                    _cr["risk_tier"] = "LOW"
+                                    _cr["severity"] = "LOW"
+                                    _cr["approval_required"] = False
+                                    _cr["high_risk"] = False
+                                    _cr["must_fix"] = False
+                                    continue  # 재분류 루프 건너뜀
+                                if _cr.get("is_mandatory"):
+                                    continue
+                                if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
+                                    continue
+                                _cur = str(_cr.get("risk_tier") or "LOW").upper()
+                                _new, _ = _reclassify_consignment(
+                                    severity=_cur,
+                                    clause_text=str(_cr.get("original_text") or ""),
+                                    clause_title=str(_cr.get("clause_title") or ""),
+                                )
+                                if _new != _cur:
+                                    _cr["risk_tier"] = _new
+                                    _cr["severity"] = _new
+                                    if _new == "HIGH":
+                                        _cr["high_risk"] = True
+                                        _cr["must_fix"] = True
 
-                    # Hallucination guardrail — clause_identity 전달로 조항별 문안 차단
+                    # Hallucination guardrail — clause_title 기반 identity 추론 후 조항별 문안 차단
                     for _cr in _all_results:
                         if not isinstance(_cr, dict) or _cr.get("is_mandatory"):
                             continue
                         _sr = str(_cr.get("suggested_rewrite") or "").strip()
                         if _sr:
-                            _clause_id = str(_cr.get("clause_identity") or _cr.get("clause_id") or "")
+                            _clause_title_lo = str(_cr.get("clause_title") or "").lower()
+                            _clause_id = str(_cr.get("clause_identity") or "")
+                            if not _clause_id:
+                                if any(k in _clause_title_lo for k in ["해지", "종료", "해제"]):
+                                    _clause_id = "termination"
+                                elif any(k in _clause_title_lo for k in ["비밀", "기밀"]):
+                                    _clause_id = "confidentiality"
+                                elif any(k in _clause_title_lo for k in ["양도", "지위 이전", "계약자 변경"]):
+                                    _clause_id = "assignment_party_change"
+                                else:
+                                    _clause_id = str(_cr.get("clause_id") or "")
                             _guard = _hg_check_revision(
                                 _sr,
                                 contract_type_code=_ct_code,
                                 clause_identity=_clause_id,
                             )
                             if not _guard.is_clean:
-                                _cr["suggested_rewrite"] = "자동수정 보류: 조항 불일치"
+                                _cr["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
                                 _cr["has_rewrite_change"] = False
 
                     docx_bytes = _build_legal_review_docx(
@@ -1652,35 +1670,50 @@ def create_handler(service: RuleQueryService):
                 _DEALER_CODES2 = {"consignment_sales_agency", "direct_customer_sales_support", "dealer_agency", "dealer_rental_service_contract"}
                 _SUPPRESS2 = ("isr_", "sppc_", "pi_", "svc_")
                 if _ct2 in _DEALER_CODES2 or any(k in contract_type for k in ("대리점", "위탁판매")):
-                    for _cr2 in _cr_list2:
-                        if not isinstance(_cr2, dict):
-                            continue
-                        _cid2 = str(_cr2.get("clause_id") or "")
-                        if any(_cid2.startswith(p) for p in _SUPPRESS2):
-                            _cr2["risk_tier"] = "LOW"
-                            _cr2["severity"] = "LOW"
-                            _cr2["approval_required"] = False
-                            _cr2["high_risk"] = False
-                            _cr2["must_fix"] = False
-                            continue
-                        if _cr2.get("is_mandatory"):
-                            continue
-                        _cur2 = str(_cr2.get("risk_tier") or "LOW").upper()
-                        _new2, _ = _reclassify_consignment(
-                            severity=_cur2, clause_text=str(_cr2.get("original_text") or ""),
-                        )
-                        if _new2 != _cur2:
-                            _cr2["risk_tier"] = _new2
-                            _cr2["severity"] = _new2
+                    from runtime.review.clause_level import apply_dealer_rental_final_gate as _dlr_gate2
+                    if _ct2 == "dealer_rental_service_contract":
+                        _cr_list2 = _dlr_gate2(_cr_list2, _ct2)
+                    else:
+                        for _cr2 in _cr_list2:
+                            if not isinstance(_cr2, dict):
+                                continue
+                            _cid2 = str(_cr2.get("clause_id") or "")
+                            if any(_cid2.startswith(p) for p in _SUPPRESS2):
+                                _cr2["risk_tier"] = "LOW"
+                                _cr2["severity"] = "LOW"
+                                _cr2["approval_required"] = False
+                                _cr2["high_risk"] = False
+                                _cr2["must_fix"] = False
+                                continue
+                            if _cr2.get("is_mandatory"):
+                                continue
+                            _cur2 = str(_cr2.get("risk_tier") or "LOW").upper()
+                            _new2, _ = _reclassify_consignment(
+                                severity=_cur2, clause_text=str(_cr2.get("original_text") or ""),
+                            )
+                            if _new2 != _cur2:
+                                _cr2["risk_tier"] = _new2
+                                _cr2["severity"] = _new2
                 for _cr2 in _cr_list2:
                     if not isinstance(_cr2, dict) or _cr2.get("is_mandatory"):
                         continue
                     _sr2 = str(_cr2.get("suggested_rewrite") or "").strip()
                     if _sr2:
-                        _cid2 = str(_cr2.get("clause_identity") or _cr2.get("clause_id") or "")
+                        _title2_lo = str(_cr2.get("clause_title") or "").lower()
+                        _cid2 = str(_cr2.get("clause_identity") or "")
+                        if not _cid2:
+                            if any(k in _title2_lo for k in ["해지", "종료", "해제"]):
+                                _cid2 = "termination"
+                            elif any(k in _title2_lo for k in ["비밀", "기밀"]):
+                                _cid2 = "confidentiality"
+                            elif any(k in _title2_lo for k in ["양도", "지위 이전", "계약자 변경"]):
+                                _cid2 = "assignment_party_change"
+                            else:
+                                _cid2 = str(_cr2.get("clause_id") or "")
                         _g2 = _hg_check_revision(_sr2, contract_type_code=_ct2, clause_identity=_cid2)
                         if not _g2.is_clean:
-                            _cr2["suggested_rewrite"] = "자동수정 보류: 조항 불일치"
+                            _cr2["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
+                            _cr2["has_rewrite_change"] = False
                 docx_bytes = _build_legal_review_docx(
                     entity=entity, contract_type=contract_type,
                     filename=str(filename) if isinstance(filename, str) else None,
