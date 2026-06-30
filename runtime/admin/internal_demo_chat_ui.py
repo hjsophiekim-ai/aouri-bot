@@ -1478,6 +1478,52 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       }
 
       renderClauseList(itemsAll);
+      renderDealerRentalReflectedSection(itemsAll, ctx.contract_type);
+    }
+
+    function renderDealerRentalReflectedSection(items, contractType) {
+      const root = document.getElementById('clauseList');
+      if (!String(contractType || '').includes('dealer_rental')) return;
+      const reflected = (items || []).filter(it => it && String(it.display_bucket || '') === '이미반영');
+      const customerForm = (items || []).filter(it => it && String(it.display_bucket || '') === '별첨참고');
+      if (reflected.length === 0 && customerForm.length === 0) return;
+      if (reflected.length > 0) {
+        const sec = document.createElement('div');
+        sec.style.cssText = 'margin-top:24px;padding:16px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;';
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'font-weight:700;color:#166534;margin-bottom:12px;font-size:14px;';
+        hdr.innerText = '이미 반영된 핵심 안전장치 (' + reflected.length + '건)';
+        sec.appendChild(hdr);
+        for (const it of reflected) {
+          const card = document.createElement('div');
+          card.style.cssText = 'margin-bottom:10px;padding:10px 14px;background:#fff;border-radius:6px;border-left:3px solid #22c55e;';
+          const titleEl = document.createElement('div');
+          titleEl.style.cssText = 'font-weight:600;color:#166534;margin-bottom:4px;';
+          titleEl.innerText = '[반영됨] ' + (it.clause_title || it.rule_id || '');
+          const bodyEl = document.createElement('div');
+          bodyEl.style.cssText = 'color:#374151;font-size:13px;white-space:pre-wrap;';
+          bodyEl.innerText = (it.current_assessment_text || it.rewrite_reason || '');
+          card.appendChild(titleEl);
+          card.appendChild(bodyEl);
+          sec.appendChild(card);
+        }
+        root.appendChild(sec);
+      }
+      if (customerForm.length > 0) {
+        const sec2 = document.createElement('div');
+        sec2.style.cssText = 'margin-top:16px;padding:14px;background:#f8fafc;border-radius:8px;border:1px solid #cbd5e1;';
+        const hdr2 = document.createElement('div');
+        hdr2.style.cssText = 'font-weight:700;color:#475569;margin-bottom:8px;font-size:13px;';
+        hdr2.innerText = '별첨/고객계약 양식 참고';
+        sec2.appendChild(hdr2);
+        for (const it of customerForm) {
+          const noteEl = document.createElement('div');
+          noteEl.style.cssText = 'color:#64748b;font-size:13px;';
+          noteEl.innerText = it.current_assessment_text || '고객 렌탈계약서 양식 — 별도 법무 검토 권장';
+          sec2.appendChild(noteEl);
+        }
+        root.appendChild(sec2);
+      }
     }
 
     async function confirmRevision() {

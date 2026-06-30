@@ -797,7 +797,18 @@ def create_handler(service: RuleQueryService):
             from runtime.review.clause_level import apply_dealer_rental_final_gate as _deep_gate
             result = dict(bundle.review)
             result["mode"] = "deep"
-            result["clause_results"] = _deep_gate(bundle.clause_results, str(contract_type or ""))
+            _deep_cr = _deep_gate(bundle.clause_results, str(contract_type or ""))
+            if str(contract_type or "") == "dealer_rental_service_contract" and text:
+                try:
+                    from runtime.review.professional_assessment import run_professional_assessment as _prof_assess
+                    _prof = _prof_assess(text=str(text), entity=str(entity or "퍼시스"))
+                    _deep_cr = _prof["clause_results"]
+                    result["dealer_rental_role_matrix"] = _prof.get("role_matrix", {})
+                    result["dealer_rental_already_reflected"] = [f["rule_id"] for f in _prof.get("already_reflected", [])]
+                    result["dealer_rental_six_section"] = _prof.get("six_section", {})
+                except Exception:
+                    pass
+            result["clause_results"] = _deep_cr
             result["clause_meta"] = bundle.meta
             result["review_elapsed_sec"] = round(time.perf_counter() - _deep_t0, 2)
             if law_service is not None:
@@ -1297,6 +1308,16 @@ def create_handler(service: RuleQueryService):
             # dealer_rental: API 응답에도 최종 gate 적용 (UI가 raw clause_results를 직접 읽으므로)
             from runtime.review.clause_level import apply_dealer_rental_final_gate as _resp_gate
             _resp_cr = _resp_gate(bundle.clause_results, str(contract_type or ""))
+            _resp_extra: dict = {}
+            if str(contract_type or "") == "dealer_rental_service_contract" and text:
+                try:
+                    from runtime.review.professional_assessment import run_professional_assessment as _prof_assess2
+                    _prof2 = _prof_assess2(text=str(text), entity=str(entity or "퍼시스"))
+                    _resp_cr = _prof2["clause_results"]
+                    _resp_extra["dealer_rental_role_matrix"] = _prof2.get("role_matrix", {})
+                    _resp_extra["dealer_rental_already_reflected"] = [f["rule_id"] for f in _prof2.get("already_reflected", [])]
+                except Exception:
+                    pass
             _json_response(
                 self,
                 HTTPStatus.OK,
@@ -1306,6 +1327,7 @@ def create_handler(service: RuleQueryService):
                     "revision": bundle.revision,
                     "clause_results": _resp_cr,
                     "meta": bundle.meta,
+                    **_resp_extra,
                 },
             )
 
@@ -1523,8 +1545,14 @@ def create_handler(service: RuleQueryService):
                             _DEALER_RENTAL_HARD_BLOCKED_IDS as _DLR_BLOCKED,
                         )
                         if _ct_code == "dealer_rental_service_contract":
-                            # dealer_rental: hard-blocked IDs 완전 제거 후 조항-문안 gate
+                            # dealer_rental: professional assessment replaces generic findings
                             _all_results = _dlr_gate(_all_results, _ct_code)
+                            try:
+                                from runtime.review.professional_assessment import run_professional_assessment as _prof_assess3
+                                _prof3 = _prof_assess3(text=str(text or ""), entity=str(entity or "퍼시스"))
+                                _all_results = _prof3["clause_results"]
+                            except Exception:
+                                pass
                         else:
                             for _cr in _all_results:
                                 if not isinstance(_cr, dict):

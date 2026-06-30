@@ -1,0 +1,39 @@
+# Gold Standard: fursys_rental_dealer_khj (김현주 수정본 기준)
+# 파일: fursys_rental_dealer_contract.txt 기준
+# 기준일: 2026-07-01
+#
+# 형식: RULE_ID | ASSESSMENT | BRIEF_REASON
+# ASSESSMENT = 반영됨 / 보완 권장 / 필수 수정 / 해당없음
+#
+# ── 필수수정 (MUST_FIX) ────────────────────────────────────────────────────
+DLR-RS-004 | 필수 수정 | 제4조③ '수수료에서 차감할 수 있다' — 사전통지·이의절차 전무
+DLR-RS-006 | 필수 수정 | 제7조② '정당한 사유 없이 갱신을 거절할 수 있다' — 대리점거래법 §13 위반
+
+# ── 보완권장 (PARTIAL) ─────────────────────────────────────────────────────
+DLR-RS-003 | 보완 권장 | 제5조② 귀책 한정 있으나 '일정 범위' 불명확
+DLR-RS-007 | 보완 권장 | 제6조② 설치 하자 대리점 부담, 귀책 범위 미한정
+DLR-RS-008 | 보완 권장 | 제6조③ 개인정보 3자 제공 언급, 계약종료 후 파기·이관 절차 없음
+
+# ── 반영됨 (ALREADY_REFLECTED) ─────────────────────────────────────────────
+DLR-RS-001 | 반영됨 | 제2조 공급업자-고객 직접 체결, 대리점은 계약당사자 아님 명시
+DLR-RS-002 | 반영됨 | 제3조 공급업자 직접 세금계산서 발행, 대리점 청구·수령 불가 명시
+DLR-RS-009 | 반영됨 | 제11조 대리점거래법 준수, 보복금지, 서울중앙지법 관할 명시
+
+# ── 해당없음 (NOT_APPLICABLE) ──────────────────────────────────────────────
+DLR-RS-005 | 해당없음 | 계약서에 거래보증금 조항 없음
+
+# ── 실패 조건 (failure conditions — 이것이 나오면 테스트 실패) ───────────────
+MUST_NOT_APPEAR: 고객 계약 당사자 명시 필요
+MUST_NOT_APPEAR: 세금계산서 발행 주체 미확인
+MUST_NOT_APPEAR: isr_
+MUST_NOT_APPEAR: sppc_
+MUST_NOT_APPEAR: pi_safety
+MUST_NOT_APPEAR_AS_MUST_FIX: DLR-RS-001
+MUST_NOT_APPEAR_AS_MUST_FIX: DLR-RS-002
+MUST_NOT_APPEAR_AS_MUST_FIX: DLR-RS-009
+
+# ── 역할매트릭스 ────────────────────────────────────────────────────────────
+ROLE_MATRIX_CONFIRMED: true
+CUSTOMER_CONTRACT_PARTY: 공급업자
+INVOICE_ISSUER: 공급업자
+DEALER_IS_NOT_CONTRACT_PARTY: true

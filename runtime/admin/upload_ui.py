@@ -391,6 +391,10 @@ function renderResults(review, revision) {
       </table>`;
   }
 
+  // dealer_rental: 이미반영/별첨참고 섹션 추가
+  const _allCrs = review.clause_results || [];
+  _uplRenderReflectedSection(_allCrs, _contractType);
+
   // 다운로드 버튼 활성화
   document.getElementById('btnReport').disabled = false;
   if (isDocx) {
@@ -401,6 +405,35 @@ function renderResults(review, revision) {
     document.getElementById('docxWarning').textContent =
       '※ Redline DOCX는 원본 .docx 파일 업로드 시에만 생성됩니다.';
   }
+}
+
+function _uplRenderReflectedSection(items, contractType) {
+  const tableEl = document.getElementById('resultTable');
+  if (!tableEl || !String(contractType || '').includes('dealer_rental')) return;
+  const reflected = (items || []).filter(it => it && String(it.display_bucket || '') === '이미반영');
+  const custForm = (items || []).filter(it => it && String(it.display_bucket || '') === '별첨참고');
+  if (reflected.length === 0 && custForm.length === 0) return;
+  let html = '';
+  if (reflected.length > 0) {
+    html += '<div style="margin-top:20px;padding:14px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0;">';
+    html += '<div style="font-weight:700;color:#166534;margin-bottom:10px;">이미 반영된 핵심 안전장치 (' + reflected.length + '건)</div>';
+    for (const it of reflected) {
+      html += '<div style="margin-bottom:8px;padding:8px 12px;background:#fff;border-radius:4px;border-left:3px solid #22c55e;">';
+      html += '<div style="font-weight:600;color:#166534;">[반영됨] ' + escHtml(it.clause_title || it.rule_id || '') + '</div>';
+      html += '<div style="color:#374151;font-size:13px;">' + escHtml(it.current_assessment_text || it.rewrite_reason || '') + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  if (custForm.length > 0) {
+    html += '<div style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #cbd5e1;">';
+    html += '<div style="font-weight:600;color:#475569;margin-bottom:6px;">별첨/고객계약 양식 참고</div>';
+    for (const it of custForm) {
+      html += '<div style="color:#64748b;font-size:13px;">' + escHtml(it.current_assessment_text || '') + '</div>';
+    }
+    html += '</div>';
+  }
+  tableEl.insertAdjacentHTML('afterend', html);
 }
 
 function escHtml(s) {

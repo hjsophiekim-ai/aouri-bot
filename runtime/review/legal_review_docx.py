@@ -642,9 +642,35 @@ def build_legal_review_docx(
 
     _blank(body)
 
-    # dealer_rental은 TOP 5 섹션 생략 (필수수정/권장수정과 중복 제거)
+    # dealer_rental: 6-section professional report format
     _is_dealer_rental_docx = (contract_type_code == "dealer_rental_service_contract")
     _sec_offset = -1 if _is_dealer_rental_docx else 0  # dealer_rental: 번호 1씩 당김
+
+    if _is_dealer_rental_docx:
+        # ── dealer_rental 전용: 섹션 2 = 역할매트릭스 ──────────────────────────
+        _heading1(body, "2. 계약구조 및 역할매트릭스")
+        # collect already_reflected items from clause_results
+        _refl_items = [c for c in clause_results if
+                       (isinstance(c, dict) and c.get("display_bucket") == "이미반영")
+                       or (hasattr(c, "display_bucket") and getattr(c, "display_bucket", "") == "이미반영")]
+        _refl_ids = [
+            (c.get("rule_id") or c.get("clause_id") or "") if isinstance(c, dict)
+            else (getattr(c, "rule_id", "") or getattr(c, "clause_id", ""))
+            for c in _refl_items
+        ]
+        _role_confirmed = any(
+            rid in ("DLR-RS-001", "DLR-RS-002") for rid in _refl_ids
+        )
+        if _role_confirmed:
+            _para(body, "역할 분리 구조: 확인됨", bold=True, color=COLOR_LOW)
+            _para(body, "- 고객 렌탈계약 당사자: 공급업자 (대리점은 계약 당사자 아님)", indent=1)
+            _para(body, "- 세금계산서 발행 주체: 공급업자", indent=1)
+            _para(body, "- 렌탈료 청구·수금 주체: 공급업자", indent=1)
+        else:
+            _para(body, "역할 분리 구조: 명확화 필요", bold=True, color=COLOR_HIGH)
+            _para(body, "고객 계약 당사자 또는 세금계산서 발행 주체가 불명확합니다. DLR-RS-001/002 참조.", indent=1)
+        _blank(body)
+        _separator(body)
 
     if not _is_dealer_rental_docx:
         # ── Section 2: TOP 5 핵심 리스크 ──────────────────────────────────────
@@ -765,9 +791,59 @@ def build_legal_review_docx(
                 r_li = _r(p_li, color=COLOR_LOW)
                 _t(r_li, f"[LOW] {issue.clause_title}: {issue.issue_title}")
 
+    # ── dealer_rental 전용: 이미 반영된 핵심 안전장치 + 별첨참고 ────────────────
+    if _is_dealer_rental_docx:
+        _separator(body)
+        _sec_refl = str(4 + _sec_offset)
+        p_h_refl = _p(body)
+        r_h_refl = _r(p_h_refl, bold=True, color=COLOR_LOW)
+        _t(r_h_refl, f"{_sec_refl}. 이미 반영된 핵심 안전장치")
+        # collect 이미반영 findings from clause_results
+        _reflected_items = [
+            c for c in clause_results
+            if (isinstance(c, dict) and c.get("display_bucket") == "이미반영")
+            or (hasattr(c, "display_bucket") and getattr(c, "display_bucket", "") == "이미반영")
+        ]
+        _customer_form_items = [
+            c for c in clause_results
+            if (isinstance(c, dict) and c.get("display_bucket") == "별첨참고")
+            or (hasattr(c, "display_bucket") and getattr(c, "display_bucket", "") == "별첨참고")
+        ]
+        if not _reflected_items:
+            _para(body, "이미 반영된 안전장치가 확인되지 않았습니다.", italic=True, color=COLOR_LOW)
+        else:
+            for _ri in _reflected_items:
+                _ri_title = _ri.get("clause_title", "") if isinstance(_ri, dict) else getattr(_ri, "clause_title", "")
+                _ri_text = _ri.get("current_assessment_text", "") if isinstance(_ri, dict) else ""
+                p_ri = _p(body)
+                r_ri = _r(p_ri, bold=True, color=COLOR_LOW)
+                _t(r_ri, f"[반영됨] {_ri_title}")
+                if _ri_text:
+                    _para(body, _ri_text[:350], indent=1, color=COLOR_LOW)
+                _blank(body)
+
+        if _customer_form_items:
+            _separator(body)
+            _sec_cf = str(5 + _sec_offset)
+            p_h_cf = _p(body)
+            r_h_cf = _r(p_h_cf, bold=True)
+            _t(r_h_cf, f"{_sec_cf}. 별첨/고객계약 양식 정합성 참고")
+            for _cfi in _customer_form_items:
+                _cfi_text = _cfi.get("current_assessment_text", "") if isinstance(_cfi, dict) else ""
+                _para(body, _cfi_text[:400] if _cfi_text else "고객 렌탈계약서 양식 — 별도 법무 검토 권장", indent=1)
+            _blank(body)
+
     # ── Section (5 or 4 or 6): 제외된 항목 요약 ──────────────────────────────────────
     _separator(body)
-    _sec_excl = str((5 if not include_low else 6) + _sec_offset)
+    _sec_excl_base = 5 if not include_low else 6
+    if _is_dealer_rental_docx:
+        # After: 2=역할매트릭스, 3=필수수정, 4=이미반영, (+5=별첨참고 if exists), then 제외
+        _has_cform = any(
+            (isinstance(c, dict) and c.get("display_bucket") == "별첨참고")
+            for c in clause_results
+        )
+        _sec_excl_base = 6 if _has_cform else 5
+    _sec_excl = str(_sec_excl_base + _sec_offset)
     _heading1(body, f"{_sec_excl}. 제외된 항목 요약")
     if excluded_count > 0:
         _para(body, (
