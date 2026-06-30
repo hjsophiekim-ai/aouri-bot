@@ -62,7 +62,7 @@ _DEV_PHRASES: frozenset[str] = frozenset({
 
 _DEALER_TYPE_CODES: frozenset[str] = frozenset({
     "consignment_sales_agency", "direct_customer_sales_support",
-    "dealer_agency", "distribution_resale",
+    "dealer_agency", "distribution_resale", "dealer_rental_service_contract",
 })
 
 

@@ -1632,7 +1632,7 @@ def create_handler(service: RuleQueryService):
                     full_text=contract_text, clause_results=list(clause_results),
                     contract_type_code=_ct2, is_counterparty_form=True,
                 )
-                _DEALER_CODES2 = {"consignment_sales_agency", "direct_customer_sales_support", "dealer_agency"}
+                _DEALER_CODES2 = {"consignment_sales_agency", "direct_customer_sales_support", "dealer_agency", "dealer_rental_service_contract"}
                 if _ct2 in _DEALER_CODES2 or any(k in contract_type for k in ("대리점", "위탁판매")):
                     for _cr2 in _cr_list2:
                         if not isinstance(_cr2, dict) or _cr2.get("is_mandatory"):

@@ -712,9 +712,13 @@ def inject_mandatory_issues(
         # This ensures _filter_and_sort_issues can identify it as mandatory via clause_id.
         # The original matched clause_result is kept as-is but gets severity upgrade.
         if mandatory.issue_id not in injected_ids:
-            # Upgrade any matching existing clause result (severity, but NOT clause_id)
+            # Upgrade any matching existing clause result (severity, but NOT clause_id).
+            # Skip already-injected mandatory issues to prevent one mandatory issue
+            # from overwriting another's mandatory_issue_id tag.
             for cr in new_results:
                 if not isinstance(cr, dict):
+                    continue
+                if cr.get("is_mandatory"):
                     continue
                 cr_text = str(cr.get("original_text") or "")
                 if cr_text and _detect_issue_in_text(mandatory, cr_text):
