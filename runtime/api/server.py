@@ -1510,9 +1510,21 @@ def create_handler(service: RuleQueryService):
                         "consignment_sales_agency", "direct_customer_sales_support",
                         "dealer_agency", "dealer_rental_service_contract",
                     }
+                    # isr_*/sppc_* 딜러 계약 hard gate: 재분류 전에 먼저 LOW로 강제
+                    _SUPPRESS_PREFIXES = ("isr_", "sppc_", "pi_", "svc_")
                     if _ct_code in _DEALER_CODES or any(k in contract_type for k in ("대리점", "위탁판매", "렌탈대리점")):
                         for _cr in _all_results:
-                            if not isinstance(_cr, dict) or _cr.get("is_mandatory"):
+                            if not isinstance(_cr, dict):
+                                continue
+                            _cid = str(_cr.get("clause_id") or "")
+                            if any(_cid.startswith(p) for p in _SUPPRESS_PREFIXES):
+                                _cr["risk_tier"] = "LOW"
+                                _cr["severity"] = "LOW"
+                                _cr["approval_required"] = False
+                                _cr["high_risk"] = False
+                                _cr["must_fix"] = False
+                                continue  # 재분류 루프 건너뜀
+                            if _cr.get("is_mandatory"):
                                 continue
                             if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
                                 continue
@@ -1529,15 +1541,20 @@ def create_handler(service: RuleQueryService):
                                     _cr["high_risk"] = True
                                     _cr["must_fix"] = True
 
-                    # Hallucination guardrail
+                    # Hallucination guardrail — clause_identity 전달로 조항별 문안 차단
                     for _cr in _all_results:
                         if not isinstance(_cr, dict) or _cr.get("is_mandatory"):
                             continue
                         _sr = str(_cr.get("suggested_rewrite") or "").strip()
                         if _sr:
-                            _guard = _hg_check_revision(_sr, contract_type_code=_ct_code)
+                            _clause_id = str(_cr.get("clause_identity") or _cr.get("clause_id") or "")
+                            _guard = _hg_check_revision(
+                                _sr,
+                                contract_type_code=_ct_code,
+                                clause_identity=_clause_id,
+                            )
                             if not _guard.is_clean:
-                                _cr["suggested_rewrite"] = None
+                                _cr["suggested_rewrite"] = "자동수정 보류: 조항 불일치"
                                 _cr["has_rewrite_change"] = False
 
                     docx_bytes = _build_legal_review_docx(
@@ -1633,9 +1650,20 @@ def create_handler(service: RuleQueryService):
                     contract_type_code=_ct2, is_counterparty_form=True,
                 )
                 _DEALER_CODES2 = {"consignment_sales_agency", "direct_customer_sales_support", "dealer_agency", "dealer_rental_service_contract"}
+                _SUPPRESS2 = ("isr_", "sppc_", "pi_", "svc_")
                 if _ct2 in _DEALER_CODES2 or any(k in contract_type for k in ("대리점", "위탁판매")):
                     for _cr2 in _cr_list2:
-                        if not isinstance(_cr2, dict) or _cr2.get("is_mandatory"):
+                        if not isinstance(_cr2, dict):
+                            continue
+                        _cid2 = str(_cr2.get("clause_id") or "")
+                        if any(_cid2.startswith(p) for p in _SUPPRESS2):
+                            _cr2["risk_tier"] = "LOW"
+                            _cr2["severity"] = "LOW"
+                            _cr2["approval_required"] = False
+                            _cr2["high_risk"] = False
+                            _cr2["must_fix"] = False
+                            continue
+                        if _cr2.get("is_mandatory"):
                             continue
                         _cur2 = str(_cr2.get("risk_tier") or "LOW").upper()
                         _new2, _ = _reclassify_consignment(
@@ -1649,9 +1677,10 @@ def create_handler(service: RuleQueryService):
                         continue
                     _sr2 = str(_cr2.get("suggested_rewrite") or "").strip()
                     if _sr2:
-                        _g2 = _hg_check_revision(_sr2, contract_type_code=_ct2)
+                        _cid2 = str(_cr2.get("clause_identity") or _cr2.get("clause_id") or "")
+                        _g2 = _hg_check_revision(_sr2, contract_type_code=_ct2, clause_identity=_cid2)
                         if not _g2.is_clean:
-                            _cr2["suggested_rewrite"] = None
+                            _cr2["suggested_rewrite"] = "자동수정 보류: 조항 불일치"
                 docx_bytes = _build_legal_review_docx(
                     entity=entity, contract_type=contract_type,
                     filename=str(filename) if isinstance(filename, str) else None,

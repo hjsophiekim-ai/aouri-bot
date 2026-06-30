@@ -39,8 +39,10 @@ _BRAND_PRIORITY: list[tuple[str, list[str]]] = [
     ("시디즈", ["시디즈", "sidiz"]),
     ("일룸", ["일룸", "iloom"]),
     ("데스커", ["데스커", "desker"]),
-    ("바로스", ["바로스", "baros"]),
+    # 퍼시스가 바로스보다 앞: 바로스는 A/S 파트너로 자주 언급되므로
+    # 퍼시스 계약에서 바로스가 우선 감지되는 오인을 방지
     ("퍼시스", ["퍼시스", "fursys"]),
+    ("바로스", ["바로스", "baros"]),
 ]
 
 
@@ -186,6 +188,21 @@ def _classify_type_code(
 
     def has(*s: str) -> bool:
         return any(n.lower() in combined for n in s)
+
+    # ── Step -1: HARD FORCE — dealer_rental_service from body text ───────────
+    # 아래 3가지 문구가 모두 또는 2가지 이상 있으면 무조건 dealer_rental_service_contract
+    # 파일명/캐시/contract_type 파라미터보다 본문이 우선
+    _rental_dealer_body_signals = [
+        "공급업자는 고객과 직접 렌탈 계약",
+        "대리점은 위탁받은 범위 내에서",
+        "대리점은 계약 당사자가 아니며",
+        "대리점은 고객과의 렌탈계약의 당사자가 아니며",
+        "공급업자는 고객(임차인)과 직접",
+    ]
+    _rental_dealer_hit = sum(1 for s in _rental_dealer_body_signals if s.lower() in combined)
+    if _rental_dealer_hit >= 2:
+        reasons.append(f"dealer_rental_body_force_{_rental_dealer_hit}signals")
+        return "dealer_rental_service_contract", reasons
 
     # ── Step 0: Content production detection — HIGHEST priority for creative contracts ─
     # Must come before all other checks to prevent "광고" from matching ai_search_marketing.
@@ -445,7 +462,6 @@ def _infer_customer_contract_details(
         "공급업자가 고객과 직접",
         "공급업자와 고객 간 계약",
         "고객과 공급업자가 직접",
-        # Rental dealer direct-contract patterns
         "공급업자와 고객이 직접",
         "공급업자와 최종 소비자 간의",
         "공급업자와 최종소비자 간의",
@@ -453,17 +469,35 @@ def _infer_customer_contract_details(
         "임대인인 공급업자",
         "고객과 직접 렌탈",
         "공급업자와 고객 간 렌탈",
+        "공급업자는 고객(임차인)과 직접",
     ]
+    # 대리점이 계약 당사자인 것처럼 기술하는 신호 (HIGH 리스크)
     _dealer_contracts_signals = [
         "대리점은 고객과 계약",
         "대리점은 고객에게 판매",
         "대리점은 최종소비자에게",
         "위탁받은 상품을 최종소비자에게 판매",
     ]
+    # 대리점 "지원" 역할임을 명시 (고객계약서 작성 지원, 수금 지원)
+    _dealer_support_signals = [
+        "대리점은 위탁받은 범위 내에서",
+        "대리점은 계약 당사자가 아니며",
+        "공급업자의 사전 서면 동의 없이 공급업자를 대리",
+        "고객 발굴, 상담",
+    ]
     _supplier_invoice_signals = [
         "공급업자가 세금계산서",
         "공급업자가 발행",
         "공급자가 세금계산서",
+        # 퍼시스 이름 직접 언급 패턴
+        "세금계산서는 퍼시스가",
+        "세금계산서를 퍼시스가",
+        "퍼시스가 고객에게 세금계산서",
+        "세금계산서는 공급업자",
+        "세금계산서 발행일(익월",  # 표준 렌탈계약서 패턴
+        "세금계산서는 퍼시스",
+        "법적 주체는 공급업자",
+        "법적 주체는 공급업자",
     ]
     _dealer_invoice_signals = [
         "대리점은 고객에게 세금계산서",
@@ -472,12 +506,26 @@ def _infer_customer_contract_details(
     ]
 
     has_direct = any(s in t for s in _direct_signals)
-    has_dealer_contracts = any(s in t for s in _dealer_contracts_signals)
+    has_dealer_support = any(s in t for s in _dealer_support_signals)
+    has_dealer_contracts = any(s in t for s in _dealer_contracts_signals) and not has_dealer_support
     has_supplier_invoice = any(s in t for s in _supplier_invoice_signals)
     has_dealer_invoice = any(s in t for s in _dealer_invoice_signals)
 
+    # 공급업자 이름 포함 세금계산서 패턴 추가 검색
+    if our_party and our_party != "미상":
+        party_invoice_patterns = [
+            f"세금계산서는 {our_party}",
+            f"{our_party}가 세금계산서",
+            f"{our_party}가 고객에게 세금계산서",
+        ]
+        if any(p in t for p in party_invoice_patterns):
+            has_supplier_invoice = True
+
     # Customer contracting party
-    if has_direct and not has_dealer_contracts:
+    # dealer_rental_service 핵심 구조: 공급업자가 고객과 직접 계약
+    # 대리점이 "고객과 계약서 작성"이라고 기술되어 있어도 실제로는 지원 역할이므로
+    # has_direct 신호가 있으면 공급업자를 우선 적용
+    if has_direct or has_dealer_support:
         ccp = our_party if our_party and our_party != "미상" else "공급업자"
     elif has_dealer_contracts:
         ccp = "needs_clarification_with_high_risk"
@@ -487,19 +535,31 @@ def _infer_customer_contract_details(
         unresolved.append("고객과의 계약 당사자가 명확히 특정되지 않음")
 
     # Tax invoice issuer
-    if has_dealer_invoice and not has_supplier_invoice:
+    if has_supplier_invoice:
+        tii = our_party if our_party and our_party != "미상" else "공급업자"
+    elif has_dealer_invoice and not has_direct:
+        # 공급업자가 직접 계약 신호가 있으면 대리점 이슈도 지원 역할로 해석
         tii = "needs_clarification_with_high_risk"
         unresolved.append("세금계산서 발행 주체가 대리점으로 기재되어 있어 구조 불일치 HIGH 리스크")
-    elif has_supplier_invoice:
-        tii = our_party if our_party and our_party != "미상" else "공급업자"
     else:
         tii = None
 
-    # Payment collection party
-    has_dealer_collects = any(s in t for s in [
-        "수금 업무를 성실히", "대금수금의 책임", "수요자의 대금지급이 이루어질 수 있도록",
+    # Payment collection party — dealer_support 신호 있으면 대리점은 수금 지원자
+    has_dealer_collects_hard = any(s in t for s in [
+        "대금수금의 책임",
     ])
-    if has_dealer_collects:
+    has_dealer_collects_soft = any(s in t for s in [
+        "수금 업무를 성실히",
+        "수요자의 대금지급이 이루어질 수 있도록",
+        "대금의 청구 및 수금 업무를 수행",
+    ])
+    if has_dealer_collects_hard:
+        pcp = "needs_clarification_with_high_risk"
+        unresolved.append("대금 수금 책임이 대리점에게 부과됨 — 대리점법 불이익 제공 리스크")
+    elif has_dealer_collects_soft and (has_direct or has_dealer_support):
+        # 렌탈대리점: 대리점은 수금 "지원"이지 법적 주체가 아님
+        pcp = our_party if our_party and our_party != "미상" else "공급업자"
+    elif has_dealer_collects_soft:
         pcp = "needs_clarification_with_high_risk"
         unresolved.append("대금 수금 책임이 대리점에게 부과됨 — 대리점법 불이익 제공 리스크")
     else:

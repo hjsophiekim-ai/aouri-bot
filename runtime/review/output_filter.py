@@ -218,6 +218,22 @@ def filter_issues(
         max_medium: maximum MEDIUM issues to include
         max_top_risks: maximum top risk count
     """
+    # isr_*/sppc_* hard gate: 딜러 계약에서는 TOP 리스크/필수수정/승인필요 절대 금지
+    _DEALER_TYPE_CODES = frozenset({
+        "consignment_sales_agency", "direct_customer_sales_support",
+        "dealer_agency", "dealer_rental_service_contract",
+    })
+    _ADVISORY_PREFIXES_FOR_DEALER = ("isr_", "sppc_", "pi_", "svc_")
+    if contract_type_code in _DEALER_TYPE_CODES:
+        downgraded: list[ReviewIssue] = []
+        for i in issues:
+            if any(i.clause_id.startswith(p) for p in _ADVISORY_PREFIXES_FOR_DEALER):
+                # 딜러 계약에서 isr_/sppc_은 LOW 참고 처리, approval_required=False
+                from dataclasses import replace as _dc_replace
+                i = _dc_replace(i, severity="LOW", approval_required=False)
+            downgraded.append(i)
+        issues = downgraded
+
     # Step 1: quality gate
     valid = [i for i in issues if is_valid_issue(i, contract_type_code=contract_type_code)]
 

@@ -1347,9 +1347,10 @@ def _apply_service_contract_checklist(
     """requirement.md > Service Contract Mandatory Checklist.
     advisory 계약에서 원문에 없는 구조를 탐지하고 추가 권고를 생성한다.
     원문에 이미 존재하는 항목은 생성하지 않는다.
+    content_production 계약에서는 이 checklist를 실행하지 않는다.
     """
-    if contract_class != "advisory":
-        return
+    if contract_class not in ("advisory",):
+        return  # content_production, general 등은 이 체크리스트 실행 안 함
     text = str(full_text or "")
     existing_ids = {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}
 
@@ -1973,19 +1974,41 @@ def _classify_contract_nature(contract_type: str, text: str) -> str:
     return "도급"
 
 
+_CONTENT_PRODUCTION_KW = re.compile(
+    r"콘텐츠\s*제작|광고\s*콘텐츠|제품\s*광고|콘텐츠\s*제작\s*대행"
+    r"|콘텐츠의\s*제출\s*및\s*검수|소유권의\s*귀속"
+    r"|저작재산권|저작권.*이전|촬영|콘티|시안|제작\s*견적서"
+    r"|유상.*폰트|이미지.*비용|초상권|모델",
+    re.IGNORECASE,
+)
+_AI_SEARCH_SPECIFIC_KW = re.compile(
+    r"AI\s*검색|검색\s*노출|검색\s*최적화|\bSEO\b|\bGEO\b|\bAEO\b|생성형\s*AI\s*검색"
+    r"|검색\s*알고리즘|키워드\s*광고|LLM\s*기반\s*검색",
+    re.IGNORECASE,
+)
+
+
 def _classify_contract_type_by_substance(
     contract_type: str,
     text: str,
     filename: str | None,
 ) -> str:
     """[STEP 1 + EMERGENCY PATCH 2] 4단계 계약 유형 확정 엔진.
+    Stage 0: Content production detection (NEW — must run first)
     Stage 1: 계약 목적 (유형물/무형/인력/자문/시스템/설치공사/유지보수)
     Stage 2: 핵심 의무 (제조납품/설치/인력투입/자문제공/시스템개발)
     Stage 3: 대가 구조 (제품대금/운영비/인건비/프로젝트비/라이선스)
     Stage 4: 운영 개입 여부 (7개 조건 ALL 충족 시에만 ops_outsourcing)
-    Returns: "advisory" | "rental" | "construction" | "project_installation" | "general"
+    Returns: "content_production" | "advisory" | "rental" | "construction" | "project_installation" | "general"
     """
     haystack = (contract_type or "") + " " + (filename or "") + " " + (text or "")[:600]
+
+    # ── Stage 0: Content production detection — MUST run before advisory check ─
+    # Key: "광고" alone should NOT trigger ai_search_marketing; needs content production signals.
+    has_content_production = bool(_CONTENT_PRODUCTION_KW.search(haystack))
+    has_ai_search_specific = bool(_AI_SEARCH_SPECIFIC_KW.search(haystack))
+    if has_content_production and not has_ai_search_specific:
+        return "content_production"
 
     # ── Stage 1: 계약 목적 ───────────────────────────────────────────────────
     is_tangible = bool(_SUBSTANCE_TANGIBLE_KW.search(haystack))
@@ -4083,6 +4106,37 @@ def build_clause_level_result(
     # ── [Contextual Awareness] Contract Nature Lock ────────────────────────
     _apply_contract_nature_lock(clause_results, _contract_nature)
 
+    # ── [Severity Reclassifier] 위탁판매 대리점 계약 severity 재분류 ──────────
+    # 대리점/위탁판매 구조에서 구조 불일치(세금계산서 주체, 수금 책임, 모든 책임 등)를
+    # 자동으로 HIGH/MEDIUM으로 상향 조정한다.
+    _is_consignment_dealer = (
+        prof.profile == "dealer_consignment"
+        or any(k in str(contract_type or "") for k in ("위탁판매", "대리점"))
+        or _struct.contract_structure == "direct_customer_contract_with_dealer_service"
+    )
+    if _is_consignment_dealer:
+        from runtime.review.severity_reclassifier import reclassify_for_consignment_dealer
+        for _cr in clause_results:
+            if not isinstance(_cr, dict):
+                continue
+            if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")) or bool(_cr.get("is_checklist_item")):
+                continue
+            _cur_sev = str(_cr.get("risk_tier") or "LOW").upper()
+            _new_sev, _reasons = reclassify_for_consignment_dealer(
+                severity=_cur_sev,
+                clause_text=str(_cr.get("original_text") or ""),
+                clause_title=str(_cr.get("clause_title") or ""),
+            )
+            if _new_sev != _cur_sev:
+                _cr["risk_tier"] = _new_sev
+                _cr["auto_severity_upgrade"] = _reasons
+                if _new_sev == "HIGH":
+                    _cr["high_risk"] = True
+                    _cr["must_fix"] = True
+                    _cr["review_tier"] = "MUST"
+                elif _new_sev == "MEDIUM" and _cur_sev == "LOW":
+                    _cr["review_tier"] = "SUGGEST"
+
     _dedup_rewrite_suggestions(clause_results)
     for cr in clause_results:
         if isinstance(cr, dict):
@@ -4290,6 +4344,37 @@ def build_clause_level_result(
     _is_domestic = (jur_kind0 == "domestic_korea") if jur_kind0 is not None else _is_domestic_only(str(text or ""), answers)
     # 1순위: Zero-Hallucination Guardrail (제1·2·3조 보호 + Advisory 금지키워드)
     _apply_zero_hallucination_guardrail(clause_results, str(contract_type), str(text or ""))
+
+    # ── [Hallucination Guard] 계약유형별 금지문구 차단 ───────────────────────
+    # 대리점 계약에서 개발계약용 IP 문구(수탁자, 결과물, 오픈소스 등)를 차단한다.
+    try:
+        from runtime.review.contract_classifier import classify_contract_detailed as _cc_detailed
+        from runtime.review.hallucination_guard import check_revision_text as _hg_check
+        _detailed_profile = _cc_detailed(
+            entity=str(entity or ""),
+            contract_type=str(contract_type or ""),
+            text=str(text or ""),
+            filename=filename,
+        )
+        for _cr in clause_results:
+            if not isinstance(_cr, dict):
+                continue
+            if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
+                continue
+            _sr = _cr.get("suggested_rewrite")
+            if not (isinstance(_sr, str) and _sr.strip()):
+                continue
+            _guard = _hg_check(_sr, contract_type_code=_detailed_profile.contract_type)
+            if not _guard.is_clean:
+                _cr["suggested_rewrite"] = None
+                _cr["changed_segments"] = []
+                if not _cr.get("guardrail_block"):
+                    _cr["guardrail_block"] = {
+                        "filter": "hallucination_guard_contract_type",
+                        "violations": _guard.violations[:5],
+                    }
+    except Exception:
+        _detailed_profile = None
     # 2순위: Advisory IP & Copyright (자문/용역 → IP 귀속·보증 CRITICAL 점검)
     _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity))
     # 3순위: 기존 필터 체인
@@ -4305,8 +4390,34 @@ def build_clause_level_result(
     _apply_global_sentence_dedup(clause_results)
 
     # ── [NEW ENGINES] requirement.md > Review Priority Engine / Checklist / Output Policy ─
-    # 1. Service Contract 필수 체크리스트 (advisory 계약 전용 누락 항목 탐지)
+    # 1. Service Contract 필수 체크리스트 (advisory 계약 전용 — content_production에서는 실행 안 함)
     _apply_service_contract_checklist(clause_results, str(text or ""), _contract_class)
+
+    # 1-0. Content Production 전용 체크리스트 (제품 광고 콘텐츠 제작 계약)
+    if _contract_class == "content_production":
+        try:
+            from runtime.review.checklists.content_production import run_content_production_checklist
+            _cp_issues = run_content_production_checklist(
+                text=str(text or ""),
+                contract_type_code="advertising_content_production",
+                entity=str(entity or ""),
+                counterparty="",
+            )
+            # Remove svc_* items that might have slipped through
+            _SVC_IDS = {
+                "svc_prepayment_guarantee", "svc_inspection_before_payment",
+                "svc_deliverable_definition", "svc_refund_on_incomplete",
+                "svc_delay_response", "svc_post_use_scope",
+            }
+            clause_results[:] = [
+                cr for cr in clause_results
+                if not (isinstance(cr, dict) and str(cr.get("clause_id") or "") in _SVC_IDS)
+            ]
+            # Inject content production checklist items at the front
+            for _cp_issue in reversed(_cp_issues):
+                clause_results.insert(0, _cp_issue.to_issue_dict())
+        except Exception:
+            pass
     # 1-1. Project Installation 필수 안전·교육 체크리스트
     _apply_project_installation_checklist(clause_results, str(text or ""), _contract_class)
     # 1-2. [STEP 3] Supplier-Protective Product Contract 체크리스트
@@ -4629,6 +4740,44 @@ def build_clause_level_result(
             pass
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── [Output Filter] HIGH/MEDIUM 필터 + Top 5 핵심 리스크 ─────────────────
+    _filtered_output: dict = {}
+    try:
+        from runtime.review.output_filter import ReviewIssue as _RI, filter_issues as _fi, count_low_issues_in_output as _cli
+        _review_issues_raw: list[_RI] = []
+        for _cr in clause_results:
+            if not isinstance(_cr, dict):
+                continue
+            if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
+                continue
+            _sev = str(_cr.get("risk_tier") or "LOW").upper()
+            if _sev not in ("HIGH", "MEDIUM", "LOW"):
+                _sev = "LOW"
+            _ot = str(_cr.get("original_text") or "").strip()
+            _pr = str(_cr.get("suggested_rewrite") or "").strip()
+            _pb = str(_cr.get("rewrite_reason") or "").strip()
+            if not _ot or not _pb:
+                continue
+            _review_issues_raw.append(_RI(
+                clause_id=str(_cr.get("clause_id") or ""),
+                clause_title=str(_cr.get("clause_title") or ""),
+                severity=_sev,  # type: ignore[arg-type]
+                approval_required=bool(_cr.get("approval_required")),
+                issue_title=str((_cr.get("detected_issue_list") or [{}])[0].get("issue_title") or _pb)[:120] if isinstance(_cr.get("detected_issue_list"), list) and _cr.get("detected_issue_list") else _pb[:120],
+                original_text=_ot[:500],
+                problem=_pb[:400],
+                legal_business_reason=_pb[:400],
+                proposed_revision=_pr[:600],
+                negotiation_position=str(_cr.get("negotiation_strategy") or "").strip()[:300],
+                confidence=float(_cr.get("confidence") or 0.75),
+            ))
+        _type_code = (_detailed_profile.contract_type if _detailed_profile is not None else "general")
+        _filtered_output = _fi(_review_issues_raw, contract_type_code=_type_code, include_low=False)
+        _low_count_in_output = _cli({"clause_results": clause_results})
+    except Exception:
+        _filtered_output = {}
+        _low_count_in_output = 0
+
     meta = {
         "review_posture": review_posture,
         "party_role": party.to_dict(),
@@ -4643,7 +4792,17 @@ def build_clause_level_result(
         "text_sha256": sha256((text or "").encode("utf-8", errors="replace")).hexdigest() if text else None,
         "clause_count": clause_count,
         "issue_clause_count": len(clause_results),
-        "tier_counts": {"must": must_count, "medium": medium_count, "low": low_count},
+        # tier_counts: filtered output 기반 (UI·DOCX 동일 소스 보장)
+        # raw must_count/medium_count/low_count는 quality gate 없음 → DOCX와 불일치 원인
+        "tier_counts": {
+            "must": len(_filtered_output.get("high", [])) if _filtered_output else must_count,
+            "medium": len(_filtered_output.get("medium", [])) if _filtered_output else medium_count,
+            "low": _low_count_in_output if _filtered_output else low_count,
+            # 원본 raw 카운트 보존 (디버깅용)
+            "raw_must": must_count,
+            "raw_medium": medium_count,
+            "raw_low": low_count,
+        },
         "headings_found": headings_found,
         "fallback_only": fallback_only,
         "warnings": warnings[:10],
@@ -4660,6 +4819,26 @@ def build_clause_level_result(
         "structure_diagnosis": generate_structure_diagnosis_section(_struct),
         "contract_structure": _struct.contract_structure,
         "structure_confidence": _struct.structure_confidence,
+        "detailed_contract_profile": (_detailed_profile.to_dict() if _detailed_profile is not None else None),
+        "top_risks_filtered": [i.to_dict() for i in _filtered_output.get("top_risks", [])] if _filtered_output else [],
+        "high_issues_filtered": [i.to_dict() for i in _filtered_output.get("high", [])] if _filtered_output else [],
+        "medium_issues_filtered": [i.to_dict() for i in _filtered_output.get("medium", [])] if _filtered_output else [],
+        "low_count_in_output": _low_count_in_output,
+        # final_findings: UI·DOCX·다운로드가 공유하는 단일 원본
+        "final_findings": {
+            "high_count": len(_filtered_output.get("high", [])) if _filtered_output else 0,
+            "medium_count": len(_filtered_output.get("medium", [])) if _filtered_output else 0,
+            "low_count": _low_count_in_output,
+            "must_fix_count": sum(1 for i in (_filtered_output.get("high", []) if _filtered_output else []) if i.approval_required),
+            "display_buckets": {
+                "필수수정": len(_filtered_output.get("high", [])) if _filtered_output else 0,
+                "권장수정": len(_filtered_output.get("medium", [])) if _filtered_output else 0,
+                "참고": _low_count_in_output,
+            },
+            "top_risks": [i.to_dict() for i in _filtered_output.get("top_risks", [])] if _filtered_output else [],
+            "high_issues": [i.to_dict() for i in _filtered_output.get("high", [])] if _filtered_output else [],
+            "medium_issues": [i.to_dict() for i in _filtered_output.get("medium", [])] if _filtered_output else [],
+        },
     }
 
     # ── [Risk Scenario Modeling] 가상 사고 시나리오 기반 리스크 추출 ────────

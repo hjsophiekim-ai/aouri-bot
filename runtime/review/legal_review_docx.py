@@ -341,6 +341,7 @@ def _filter_and_sort_issues(
     *,
     max_medium: int = 10,
     max_top_risks: int = 5,
+    contract_type_code: str = "",
 ) -> dict[str, list[ReviewIssue]]:
     """Filter, deduplicate, and sort issues by severity.
 
@@ -350,6 +351,21 @@ def _filter_and_sort_issues(
     3. Other clause-grounded issues (have real clause_ids)
     4. Generic advisory issues (filtered OUT by default)
     """
+    # isr_*/sppc_* hard gate for dealer contracts
+    _DEALER_TYPES = frozenset({
+        "consignment_sales_agency", "direct_customer_sales_support",
+        "dealer_agency", "dealer_rental_service_contract",
+    })
+    _SUPPRESS = ("isr_", "sppc_", "pi_", "svc_")
+    if contract_type_code in _DEALER_TYPES:
+        from dataclasses import replace as _dc_replace
+        issues = [
+            _dc_replace(i, severity="LOW", approval_required=False)
+            if any(i.clause_id.startswith(p) for p in _SUPPRESS)
+            else i
+            for i in issues
+        ]
+
     # Clause_id prefixes that indicate generic advisory (non-clause-grounded) items
     _ADVISORY_ID_PREFIXES = ("svc_", "pi_", "sppc_", "isr_")
 
@@ -512,7 +528,7 @@ def build_legal_review_docx(
         medium_issues = [_from_dict(d) for d in (medium_issues_filtered or []) if isinstance(d, dict)]
         low_issues: list[ReviewIssue] = []
     else:
-        filtered = _filter_and_sort_issues(issues_raw, max_medium=10, max_top_risks=5)
+        filtered = _filter_and_sort_issues(issues_raw, max_medium=10, max_top_risks=5, contract_type_code=contract_type_code)
         top_issues = filtered["top_risks"]
         high_issues = filtered["high"]
         medium_issues = filtered["medium"]
