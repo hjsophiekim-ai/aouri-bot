@@ -88,12 +88,17 @@ def infer_contract_profile(*, contract_type: str, text: str) -> ContractProfile:
         return ContractProfile(profile="ops_outsourcing", evidence=ev)
 
     if has_ops_outsourcing() and not has_app_dev_strong():
-        ev.append("ops_outsourcing_token")
+        # Weak signal: matched only via generic full-text keywords (e.g. "보고",
+        # "검수", "근무"), not an explicit contract_type label -- these are common
+        # words that show up in many unrelated contract types too.
+        ev.append("ops_outsourcing_token_weak")
         return ContractProfile(profile="ops_outsourcing", evidence=ev)
 
     is_dealer = has_any(["대리점", "유통", "위탁판매", "위탁거래", "consignment", "dealer", "distributor"])
     if is_dealer:
-        ev.append("dealer_token")
+        # Weak signal: same caveat as above -- e.g. bare "유통" is common outside
+        # dealer contracts too (분석계약, 물류, 데이터 유통 등).
+        ev.append("dealer_token_weak")
         return ContractProfile(profile="dealer_consignment", evidence=ev)
 
     is_privacy_dpa = (("개인정보" in ct) and ("처리위탁" in ct or "DPA" in ct or "dpa" in ct.lower())) or (

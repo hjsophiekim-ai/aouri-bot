@@ -17,16 +17,20 @@ class UserFocusObjective:
 _OBJECTIVES: list[UserFocusObjective] = [
     UserFocusObjective(code="dealer_unfair_disadvantage", title="대리점법상 불이익 제공/거래상 지위 남용", keywords=["불이익", "불이익제공", "거래상", "지위", "남용", "대리점법", "공정거래"]),
     UserFocusObjective(code="dealer_management_interference", title="경영간섭/영업자율 침해", keywords=["경영간섭", "영업간섭", "인사", "가격", "판매가격", "가격통제", "영업정책", "강제", "지시"]),
-    UserFocusObjective(code="dealer_cost_shift", title="비용전가(판촉비/광고비/반품비/원상회복)", keywords=["비용전가", "비용 전가", "비용부담", "판촉", "판매장려금", "광고비", "반품", "원상회복"]),
-    UserFocusObjective(code="termination_abuse", title="계약해지/물량축소/불이익 조치 남용", keywords=["해지", "종료", "물량", "축소", "중단", "불이익", "일방", "임의"]),
+    UserFocusObjective(code="dealer_cost_shift", title="비용전가(판촉비/광고비/반품비/원상회복)", keywords=["비용전가", "비용 전가", "비용부담", "판촉비", "판매장려금", "광고비", "반품", "원상회복"]),
+    UserFocusObjective(code="termination_abuse", title="계약해지/물량축소/불이익 조치 남용", keywords=["해지", "종료", "물량", "축소", "중단", "불이익", "임의"]),
     UserFocusObjective(code="settlement_offset", title="정산/공제/상계/증빙(대금 리스크)", keywords=["정산", "상계", "공제", "차감", "증빙", "인보이스", "세금계산서"]),
     UserFocusObjective(code="delay_liquidated_damages", title="지체상금(지체상금율/공기지연 책임)", keywords=["지체상금", "공기", "공기지연", "지연", "지연손해금", "손해배상액의 예정", "지체"]),
     UserFocusObjective(code="penalty_clause", title="위약금/위약벌(과도한 페널티)", keywords=["위약금", "위약벌", "벌금", "패널티", "penalty"]),
-    UserFocusObjective(code="unilateral_setoff", title="일방적 상계권(이의제기권 부재)", keywords=["일방", "상계권", "상계", "공제", "차감", "이의", "이의제기", "이의 제기"]),
+    UserFocusObjective(code="unilateral_setoff", title="일방적 상계권(이의제기권 부재)", keywords=["일방적 상계", "상계권", "상계", "공제", "차감", "이의", "이의제기", "이의 제기"]),
     UserFocusObjective(code="unfair_unit_price_reduction", title="부당한 단가 인하(하도급/공사 단가 리스크)", keywords=["단가", "단가인하", "단가 인하", "감액", "대금감액", "부당", "하도급", "하도급법"]),
     UserFocusObjective(code="rpm_price_fixing", title="재판매가격 유지행위 강제(가격결정권 침해)", keywords=["재판매", "가격유지", "가격 유지", "판매가격", "가격결정", "가격 결정", "가격강제", "가격 강제", "가격 통제"]),
     UserFocusObjective(code="privacy", title="개인정보/처리위탁/재위탁/침해사고", keywords=["개인정보", "처리위탁", "수탁", "재위탁", "파기", "반환", "침해사고", "유출", "통지"]),
     UserFocusObjective(code="dispute", title="분쟁해결/재판관할/준거법", keywords=["분쟁", "관할", "전속관할", "합의관할", "준거법", "중재", "조정"]),
+    UserFocusObjective(code="exculpatory_clause", title="일방적 면책조항", keywords=["면책", "책임을 지지 아니한다", "책임을지지아니한다", "일체 책임", "일체의 책임", "귀책사유", "고의 또는 중과실", "면책 조항", "면책조항"]),
+    UserFocusObjective(code="indemnification_recourse", title="구상권/소송비용 전가", keywords=["구상", "구상권", "소송비용", "변호사 보수", "변호사보수", "전액 배상", "손해 전부"]),
+    UserFocusObjective(code="competition_restriction", title="경쟁/타 기관 거래 제한", keywords=["타 기관", "타기관", "유사한 계약", "유사 계약", "사전 통보", "사전통보", "겸업", "동종 업종", "독점적", "경쟁 관계"]),
+    UserFocusObjective(code="publicity_marketing_consent", title="광고·판촉 활용 동의 제약", keywords=["광고", "판촉", "홍보", "마케팅", "대외 홍보", "사전 서면 동의", "서면 동의", "성적서 사용", "성과물 사용", "성적서의 사용"]),
 ]
 
 def _objective_by_code(code: str) -> UserFocusObjective | None:
@@ -70,7 +74,26 @@ def parse_user_focus_issues(text: str | None) -> list[UserFocusObjective]:
     uniq: dict[str, UserFocusObjective] = {}
     for o in out:
         uniq[o.code] = o
-    return list(uniq.values())
+    result = list(uniq.values())
+
+    # Order by where each objective is first raised in the user's text (not by
+    # fixed catalog order). Otherwise, when a review_focus raises more concerns
+    # than fit under max_questions, whichever objective happens to sit earlier
+    # in _OBJECTIVES wins the slot regardless of what the user actually
+    # emphasized -- e.g. a concern mentioned first in review_focus could get
+    # silently dropped in favor of one the user mentioned last.
+    def _first_pos(o: UserFocusObjective) -> int:
+        best = len(low) + 1
+        for k in o.keywords:
+            if not k:
+                continue
+            idx = low.find(k.lower())
+            if idx != -1 and idx < best:
+                best = idx
+        return best
+
+    result.sort(key=_first_pos)
+    return result
 
 
 def objective_codes_to_clause_topics(codes: list[str]) -> set[str]:
@@ -94,6 +117,12 @@ def objective_codes_to_clause_topics(codes: list[str]) -> set[str]:
             out.add("personal_data")
         if c in ("dispute",):
             out.add("dispute")
+        # exculpatory_clause / indemnification_recourse / competition_restriction /
+        # publicity_marketing_consent intentionally have no clause_topic mapping:
+        # classify_clause_topic() has no matching bucket for them (they'd fall
+        # into the catch-all "other" topic, which most unrelated clauses also get,
+        # causing over-broad matches). Rely on the per-code keyword match in
+        # clause_level.py's focus_keywords_by_code_obj instead, which is precise.
     return out
 
 

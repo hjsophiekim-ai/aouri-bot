@@ -203,9 +203,51 @@ def create_text_session(
     return doc
 
 
+def _merge_review_focus_with_answers(doc: dict[str, Any], answers: dict[str, Any]) -> str | None:
+    """Append the user's question answers as readable Q&A text to review_focus.
+
+    review_focus is read directly by the AI deep-review prompt (see
+    clause_level.build_clause_level_result), so folding the answers in here
+    (rather than only passing the raw {question_id: value} answers dict) makes
+    sure the LLM actually sees what each answer means, not just an opaque id.
+    Idempotent: always rebuilds from the original (pre-answer) review_focus so
+    repeated calls don't duplicate the Q&A block.
+    """
+    inp = doc.get("input") if isinstance(doc.get("input"), dict) else {}
+    base = inp.get("review_focus_base")
+    if not isinstance(base, str):
+        base = inp.get("review_focus")
+        if isinstance(base, str):
+            inp["review_focus_base"] = base
+    base = base or ""
+
+    q_by_id = {
+        q.get("question_id"): q
+        for q in (doc.get("questions") or [])
+        if isinstance(q, dict) and isinstance(q.get("question_id"), str)
+    }
+    lines: list[str] = []
+    for qid, val in (answers or {}).items():
+        ans_str = str(val).strip() if val is not None else ""
+        if not ans_str:
+            continue
+        q = q_by_id.get(qid)
+        title = q.get("title") if isinstance(q, dict) and isinstance(q.get("title"), str) else qid
+        lines.append(f"- {title}: {ans_str}")
+
+    if not lines:
+        return base or None
+    qa_block = "[사용자 확인 답변]\n" + "\n".join(lines)
+    merged = f"{base}\n\n{qa_block}" if base else qa_block
+    inp["review_focus"] = merged
+    doc["input"] = inp
+    return merged
+
+
 def save_answers(session_id: str, answers: dict[str, Any]) -> dict[str, Any]:
     doc = load_session(session_id)
     doc["answers"] = dict(answers)
+    _merge_review_focus_with_answers(doc, answers)
     doc["updated_at"] = _utc_now_iso()
     save_session(doc)
     return doc

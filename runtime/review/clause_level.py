@@ -3992,6 +3992,9 @@ def build_clause_level_result(
                 "- 렌탈·물류시설법·부동산세법·방문판매법·B2C 약관 관련 문구\n"
                 "- 제1·2·3조(목적·원칙·정의) 등 선언적 조항에 실무 의무 삽입\n"
                 "- 입력에 없는 사실·상황·의무를 새로 만드는 것\n\n"
+                "review_focus에 사용자가 명시한 조항/쟁점이 있으면 해당 조항을 반드시 검토 대상에 포함하고, "
+                "rewrite_reason에서 그 요청에 구체적으로 대응하는 근거를 제시하라. "
+                "answers에 사용자가 제공한 사실관계(과거 사례, 계획, 빈도 등)가 있으면 이를 반영하여 리스크 평가와 수정안을 조정하라.\n"
                 "rewrite_reason: 법률 근거 + 실제 손실 시나리오 중심으로 220자 이내.\n"
                 "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체.\n"
                 "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
@@ -4025,6 +4028,9 @@ def build_clause_level_result(
                 "- 입력에 없는 사실·상황·의무를 새로 만드는 것\n"
                 "- party_role과 review_posture에 반하는 방향으로 수정\n\n"
                 "user_focus_issues가 있으면 해당 이슈 관련 조항을 최우선으로 검토하고, rewrite_reason에 연결을 명확히 표시하라.\n"
+                "review_focus에 사용자가 명시한 조항/쟁점이 있으면 해당 조항을 반드시 검토 대상에 포함하고, "
+                "rewrite_reason에서 그 요청에 구체적으로 대응하는 근거를 제시하라. "
+                "answers에 사용자가 제공한 사실관계(과거 사례, 계획, 빈도 등)가 있으면 이를 반영하여 리스크 평가와 수정안을 조정하라.\n"
                 "rewrite_reason: 실제 손실 시나리오 + 법률 근거 + 협상 논리, 220자 이내.\n"
                 "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체.\n"
                 "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
@@ -4056,6 +4062,7 @@ def build_clause_level_result(
                     "review_posture": review_posture,
                     "party_role": party.to_dict(),
                     "answers": answers if isinstance(answers, dict) else None,
+                    "review_focus": review_focus if isinstance(review_focus, str) and review_focus.strip() else None,
                     "items": [
                         {
                             "clause_id": cr.get("clause_id"),

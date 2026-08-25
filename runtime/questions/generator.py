@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from runtime.questions.model import Question, QuestionOption
 from runtime.review.jurisdiction import classify_jurisdiction_profile
@@ -107,6 +108,121 @@ def _topic_state(
     return "ambiguous"
 
 
+# Per-objective fact-finding question templates, used when the user provides an
+# explicit review_focus. These ask about real-world facts/history/plans a lawyer
+# would need (not generic yes/no compliance checkboxes), tied directly to the
+# concern the user raised -- rather than the contract-type profile templates
+# below, which are keyword-driven and can misfire on unrelated contract types.
+_FOCUS_QUESTION_TEMPLATES: dict[str, tuple[str, str]] = {
+    "dealer_unfair_disadvantage": (
+        "대리점법상 불이익 제공/거래상 지위 남용과 관련하여, 실제로 문제되거나 적용된 사례가 있나요?",
+        "불이익 제공 여부는 실제 적용 사례·빈도에 따라 리스크 수준과 협상 우선순위가 달라집니다. 있다면 구체적으로 알려주세요.",
+    ),
+    "dealer_management_interference": (
+        "가격/인사/영업정책 등에 대해 상대방이 실제로 지시하거나 개입한 사례가 있나요?",
+        "경영간섭 정황의 실제 발생 여부·빈도를 확인해야 조항의 위험도를 정확히 판단할 수 있습니다.",
+    ),
+    "dealer_cost_shift": (
+        "판촉비/광고비/반품비 등 비용을 실제로 부담한 적이 있거나 향후 부담이 예상되나요?",
+        "실제 규모나 빈도가 있다면 알려주세요. 금액 규모에 따라 조항의 시급성이 달라집니다.",
+    ),
+    "termination_abuse": (
+        "계약 해지/물량 축소가 실제로 발생했거나 예정된 사례가 있나요?",
+        "실제 이행 이력이 있다면 조항의 해석·수정 방향을 구체적으로 잡을 수 있습니다.",
+    ),
+    "settlement_offset": (
+        "정산/상계/공제와 관련하여 실제 분쟁이나 이견이 있었던 사례가 있나요?",
+        "정산 관련 과거 분쟁 이력은 조항 수정의 우선순위를 정하는 데 중요한 근거가 됩니다.",
+    ),
+    "delay_liquidated_damages": (
+        "지체상금이 실제로 부과되었거나 부과가 임박한 상황이 있나요?",
+        "실제 지연 상황·금액 규모를 알려주시면 지체상금 조항의 위험도를 구체적으로 평가할 수 있습니다.",
+    ),
+    "penalty_clause": (
+        "위약금/위약벌 조항이 실제로 적용되거나 청구된 사례가 있나요?",
+        "적용 이력이 있다면 금액 규모와 경위를 알려주세요.",
+    ),
+    "unilateral_setoff": (
+        "상대방이 사전 통지 없이 일방적으로 상계·공제를 실행한 사례가 있나요?",
+        "실행 이력이 있다면 조항 수정 시 반영할 이의제기 절차의 구체적 요건을 잡는 데 도움이 됩니다.",
+    ),
+    "unfair_unit_price_reduction": (
+        "단가 인하가 실제로 요구되거나 시행된 사례가 있나요?",
+        "인하 폭·경위를 알려주시면 조항의 위험도와 협상 방향을 구체화할 수 있습니다.",
+    ),
+    "rpm_price_fixing": (
+        "재판매가격을 상대방이 강제하거나 통제하려 한 사례가 있나요?",
+        "실제 사례가 있다면 재판매가격유지행위 리스크 수준을 구체적으로 평가할 수 있습니다.",
+    ),
+    "privacy": (
+        "개인정보를 실제로 제3자에게 제공하거나 재위탁하는 절차가 있나요?",
+        "있다면 어떤 정보를, 어떤 방식·범위로 처리하는지 알려주세요.",
+    ),
+    "dispute": (
+        "이 계약과 관련하여 실제 분쟁이 발생했거나 예상되는 상황이 있나요?",
+        "분쟁 정황이 있다면 관할·준거법 조항의 실무적 중요도가 높아집니다.",
+    ),
+    "exculpatory_clause": (
+        "상대방의 귀책사유(오류, 지연, 결함 등)로 실제 손해를 입은 사례가 있나요?",
+        "면책조항의 실제 효력·수정 필요성은 상대방 귀책으로 인한 과거 손해 발생 이력에 따라 달라집니다.",
+    ),
+    "indemnification_recourse": (
+        "구상권/소송비용 부담 조항과 관련하여, 실제로 소송이나 손해배상 청구를 받은 이력이 있나요?",
+        "있다면 경위와 금액 규모를 알려주세요. 소송비용 상한을 두고 싶은 수준이 있다면 함께 알려주세요.",
+    ),
+    "competition_restriction": (
+        "타 기관/경쟁사와 유사한 거래를 실제로 진행 중이거나 계획하고 있나요?",
+        "있다면 규모·빈도를 알려주세요. 사전 통보 의무가 실제 영업활동에 지장을 주는지 판단하는 데 필요합니다.",
+    ),
+    "publicity_marketing_consent": (
+        "이 계약의 결과물(성적서 등)을 광고·판촉에 실제로 활용할 계획이 있나요?",
+        "있다면 어떤 매체·방식으로 활용할 계획인지 알려주세요. 사전 서면동의 요건의 실무 부담을 판단하는 데 필요합니다.",
+    ),
+}
+
+
+def _build_focus_driven_questions(
+    focus: list[Any],
+    contract_text: str,
+    max_questions: int,
+) -> list[Question]:
+    """Build fact-finding questions directly from the user's review_focus text.
+
+    Unlike the contract-type-profile branches below (keyword-matched against the
+    contract text and prone to misclassifying unrelated contract types as
+    dealer/ops-outsourcing), this asks about exactly what the user raised.
+    """
+    out: list[Question] = []
+    for o in focus:
+        code = getattr(o, "code", None)
+        title_txt = getattr(o, "title", None)
+        if not isinstance(code, str) or not code:
+            continue
+        tmpl = _FOCUS_QUESTION_TEMPLATES.get(code)
+        if tmpl:
+            q_title, q_desc = tmpl
+        elif isinstance(title_txt, str) and title_txt.strip():
+            q_title = f"'{title_txt.strip()}'과 관련하여, 실제 계약 이행 상황이나 예정된 계획이 있나요?"
+            q_desc = "있다면 구체적으로 설명해 주세요. 실제 사실관계에 따라 리스크 평가와 수정 방향이 달라집니다."
+        else:
+            continue
+        out.append(
+            Question(
+                question_id=f"Q-FOCUS-{code}",
+                title=q_title,
+                description=q_desc,
+                answer_type="text",
+                required=False,
+                options=[],
+                tags=["topic:user_focus", f"reason_code:user_focus_{code}"],
+                related_rule_ids=[],
+            )
+        )
+        if len(out) >= max_questions:
+            break
+    return out
+
+
 def generate_questions(
     entity: str,
     contract_type: str,
@@ -127,6 +243,40 @@ def generate_questions(
     prof = infer_contract_profile(contract_type=ctype, text=text)
     focus = parse_user_focus_issues(review_focus)
     focus_codes = {x.code for x in focus if hasattr(x, "code")}
+
+    focus_text = (review_focus or "").strip()
+    focus_questions: list[Question] = []
+    if len(focus_text) >= 10:
+        # A substantial review_focus means the user already told us exactly what
+        # to check. Ask about that directly instead of relying solely on
+        # contract-type profile templates, which can be entirely unrelated when
+        # the profile classifier misfires (e.g. a testing/service agreement gets
+        # flagged as a dealer contract because it happens to contain a generic
+        # word like "유통").
+        focus_questions = _build_focus_driven_questions(focus, text, max_questions)
+        if len(focus_questions) < max_questions:
+            focus_questions.append(
+                Question(
+                    question_id="Q-FOCUS-other",
+                    title="말씀하신 검토 요청사항 외에 추가로 확인이 필요한 사실관계나 배경이 있나요?",
+                    description="자유롭게 적어주시면 검토 의견에 반영합니다.",
+                    answer_type="text",
+                    required=False,
+                    options=[],
+                    tags=["topic:user_focus", "reason_code:user_focus_catchall"],
+                    related_rule_ids=[],
+                )
+            )
+
+    # Only trust the contract-type profile enough to *also* fire its own
+    # templates when it was inferred from an explicit contract_type label
+    # (strong signal). When it was only inferred from generic full-text
+    # keywords (evidence tag ending in "_weak"), skip straight to the
+    # focus-driven questions -- mixing in a wrong-profile's templates is worse
+    # than showing only what the user actually asked about.
+    prof_confident = not any(str(e).endswith("_weak") for e in (prof.evidence or []))
+    if focus_questions and not (prof_confident and prof.profile in ("dealer_consignment", "ops_outsourcing")):
+        return focus_questions[:max_questions]
 
     questions: list[Question] = []
 
@@ -405,6 +555,8 @@ def generate_questions(
                 )
             )
 
+        for _i, _fq in enumerate(focus_questions):
+            candidates.append((99 - _i, _fq))
         candidates.sort(key=lambda x: int(x[0]), reverse=True)
         return [q for _, q in candidates[:max_questions]]
 
@@ -587,6 +739,8 @@ def generate_questions(
                 )
             )
 
+        for _i, _fq in enumerate(focus_questions):
+            candidates.append((99 - _i, _fq))
         candidates.sort(key=lambda x: int(x[0]), reverse=True)
         return [q for _, q in candidates[:max_questions]]
 
