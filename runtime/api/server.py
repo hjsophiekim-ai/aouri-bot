@@ -46,6 +46,7 @@ from runtime.review.revision import split_into_clauses, suggest_revisions
 from runtime.review.clause_level import build_clause_level_result
 from runtime.review.docx_writer import build_revision_docx
 from runtime.review.legal_review_docx import build_legal_review_docx as _build_legal_review_docx
+from runtime.review.legal_review_pdf import build_legal_review_pdf as _build_legal_review_pdf
 from runtime.review.mandatory_issues import inject_mandatory_issues as _inject_mandatory_issues
 from runtime.review.severity_reclassifier import reclassify_for_consignment_dealer as _reclassify_consignment
 from runtime.review.hallucination_guard import check_revision_text as _hg_check_revision
@@ -607,6 +608,9 @@ def create_handler(service: RuleQueryService):
                 return
             if parsed.path == "/api/revision/download_docx":
                 self._handle_revision_download_docx(service)
+                return
+            if parsed.path == "/api/revision/download_pdf":
+                self._handle_revision_download_docx(service, output_format="pdf")
                 return
             if parsed.path in ("/api/revision/download_redline", "/api/revision/download_clean"):
                 self._handle_revision_download_redline(service, parsed.path)
@@ -1331,7 +1335,15 @@ def create_handler(service: RuleQueryService):
                 },
             )
 
-        def _handle_revision_download_docx(self, service: RuleQueryService) -> None:
+        def _handle_revision_download_docx(self, service: RuleQueryService, output_format: str = "docx") -> None:
+            _is_pdf = output_format == "pdf"
+            _out_ext = "pdf" if _is_pdf else "docx"
+            _out_content_type = (
+                "application/pdf" if _is_pdf
+                else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            _out_filename = f"aouribot_revision.{_out_ext}"
+            _builder = _build_legal_review_pdf if _is_pdf else _build_legal_review_docx
             try:
                 content_len = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(content_len)
@@ -1608,7 +1620,7 @@ def create_handler(service: RuleQueryService):
                                 _cr["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
                                 _cr["has_rewrite_change"] = False
 
-                    docx_bytes = _build_legal_review_docx(
+                    doc_bytes = _builder(
                         entity=entity,
                         contract_type=contract_type,
                         filename=str(filename) if isinstance(filename, str) else None,
@@ -1620,14 +1632,14 @@ def create_handler(service: RuleQueryService):
                         is_counterparty_form=True,
                     )
                 except Exception as exc:
-                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
+                    _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})
                     return
                 _binary_response(
                     self,
                     HTTPStatus.OK,
-                    docx_bytes,
-                    filename="aouribot_revision.docx",
-                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    doc_bytes,
+                    filename=_out_filename,
+                    content_type=_out_content_type,
                 )
                 return
 
@@ -1747,7 +1759,7 @@ def create_handler(service: RuleQueryService):
                         if not _g2.is_clean:
                             _cr2["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
                             _cr2["has_rewrite_change"] = False
-                docx_bytes = _build_legal_review_docx(
+                doc_bytes = _builder(
                     entity=entity, contract_type=contract_type,
                     filename=str(filename) if isinstance(filename, str) else None,
                     clause_results=_cr_list2, original_clauses=original_clauses,
@@ -1755,14 +1767,14 @@ def create_handler(service: RuleQueryService):
                     include_low=False, contract_type_code=_ct2, is_counterparty_form=True,
                 )
             except Exception as exc:
-                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "docx generation failed", "detail": sanitize_error_message(str(exc))})
+                _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})
                 return
             _binary_response(
                 self,
                 HTTPStatus.OK,
-                docx_bytes,
-                filename="aouribot_revision.docx",
-                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                doc_bytes,
+                filename=_out_filename,
+                content_type=_out_content_type,
             )
 
         def _handle_revision_download_redline(self, service: RuleQueryService, path: str) -> None:

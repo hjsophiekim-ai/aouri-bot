@@ -87,6 +87,7 @@ CONTRACT_TYPE_RULES = [
         ],
     ),
     ("물품공급/구매/매매", [r"물품공급", r"구매", r"매매", r"\bsupply\b", r"\bpurchase\b", r"\bsales contract\b"]),
+    ("위탁판매 대리점", [r"위탁판매.*대리점|판매대리점.*위탁", r"위탁판매\s*약정", r"용역수수료.*대리점|대리점.*용역수수료", r"검수마스터", r"위탁커넥트플러스"]),
     ("대리점/위탁/유통", [r"대리점", r"위탁", r"위탁거래", r"\bdealer\b", r"\bdistributor\b", r"\bconsignment\b"]),
     ("용역/자문/SOW", [r"용역", r"자문", r"컨설팅", r"\bSOW\b", r"Statement of Work", r"\bengagement\b", r"\bservice agreement\b"]),
     ("광고/마케팅/협찬", [r"광고", r"마케팅", r"(광고|마케팅|홍보)\s*대행", r"협찬", r"sponsorship", r"advertising", r"marketing"]),
@@ -138,10 +139,11 @@ def _classify_contract_type(text: str, filename: str | None) -> str:
     scored: list[tuple[int, int, str]] = []
     priority = {
         "앱개발/소프트웨어개발/SI/유지보수/SaaS": 500,
+        "위탁판매 대리점": 470,
+        "운영대행/위탁운영/공간운영/서비스위탁": 460,
+        "대리점/위탁/유통": 450,
         "장비공급/설치/시운전": 420,
         "개인정보/처리위탁(DPA)": 410,
-        "대리점/위탁/유통": 450,
-        "운영대행/위탁운영/공간운영/서비스위탁": 460,
         "라이선스/로열티": 390,
         "용역/자문/SOW": 360,
         "NDA/비밀유지": 300,

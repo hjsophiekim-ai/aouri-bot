@@ -360,7 +360,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             </div>
 
             <div class="row" style="margin-top:12px; justify-content:flex-end;">
-              <button class="btn btnPrimary" id="btnConfirmRevision" onclick="confirmRevision()">최종 수정본 다운로드(.docx)</button>
+              <button class="btn btnPrimary" id="btnConfirmRevision" onclick="confirmRevision('docx')">최종 수정본 다운로드(.docx)</button>
+              <button class="btn btnPrimary" id="btnConfirmRevisionPdf" onclick="confirmRevision('pdf')">최종 수정본 다운로드(.pdf)</button>
               <button class="btn btnSecondary" id="btnConfirmDraft" onclick="confirmDraft()">초안 작성 확정</button>
             </div>
             <div class="meta" id="confirmNote"></div>
@@ -887,6 +888,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         document.getElementById('phaseNote').innerText = '먼저 핵심 결과를 보여드리고, 조항별 수정안은 이어서 정리할게요.';
         document.getElementById('docxStatus').innerText = '수정본: 정밀 검토 후 준비됩니다';
         document.getElementById('btnConfirmRevision').disabled = true;
+        document.getElementById('btnConfirmRevisionPdf').disabled = true;
 
         buildResult();
         renderSkeletonClauseList();
@@ -1446,6 +1448,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
       document.getElementById('confirmNote').innerText = '';
       const btnRev = document.getElementById('btnConfirmRevision');
+      const btnRevPdf = document.getElementById('btnConfirmRevisionPdf');
       const btnDraft = document.getElementById('btnConfirmDraft');
       const rec = document.getElementById('recommendedAction');
       const docxStatus = document.getElementById('docxStatus');
@@ -1453,14 +1456,17 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
       if (!analyzeState.deepDone) {
         btnRev.disabled = true;
+        btnRevPdf.disabled = true;
         if (meta && meta.docx_allowed === false) docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
         else docxStatus.innerText = '수정본: 정밀 검토 진행 중';
       } else {
         if (meta && meta.docx_allowed === false) {
           btnRev.disabled = true;
+          btnRevPdf.disabled = true;
           docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
         } else {
           btnRev.disabled = false;
+          btnRevPdf.disabled = false;
           docxStatus.innerText = '수정본: 다운로드 가능';
         }
       }
@@ -1526,8 +1532,10 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       }
     }
 
-    async function confirmRevision() {
-      document.getElementById('confirmNote').innerText = '수정본 파일(.docx)을 생성하는 중입니다...';
+    async function confirmRevision(format) {
+      const fmt = (format === 'pdf') ? 'pdf' : 'docx';
+      const endpoint = (fmt === 'pdf') ? '/api/revision/download_pdf' : '/api/revision/download_docx';
+      document.getElementById('confirmNote').innerText = '수정본 파일(.' + fmt + ')을 생성하는 중입니다...';
       try {
         let payload = null;
         if (ctx.session_id) {
@@ -1538,7 +1546,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           document.getElementById('confirmNote').innerText = '수정본 생성에 필요한 데이터가 없습니다.';
           return;
         }
-        const res = await fetch('/api/revision/download_docx', { method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
+        const res = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
         if (!res.ok) {
           let errMsg = '수정본 생성 실패 (status ' + res.status + ')';
           try { const ej = await res.json(); if (ej && ej.error) errMsg += ': ' + ej.error; } catch(_) {}
@@ -1549,10 +1557,10 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'aouribot_revision.docx';
+        a.download = 'aouribot_revision.' + fmt;
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 2000);
-        document.getElementById('confirmNote').innerText = '수정본 파일 다운로드를 시작했어요.';
+        document.getElementById('confirmNote').innerText = '수정본 파일(.' + fmt + ') 다운로드를 시작했어요.';
         document.getElementById('docxStatus').innerText = '수정본: 생성 완료';
       } catch (e) {
         document.getElementById('confirmNote').innerText = '수정본 생성 실패';

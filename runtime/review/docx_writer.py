@@ -339,10 +339,17 @@ def build_revision_docx(
         if isinstance(cr, dict) and isinstance(cr.get("clause_id"), str):
             cr_by_id[str(cr.get("clause_id"))] = cr
 
+    _unknown_clause_ids: list[str] = []
     for cid, cr in cr_by_id.items():
         oc = orig_by_id.get(cid)
         if oc is None:
-            raise ValueError(f"clause_id not found in original_clauses: {cid}")
+            # Checklist/synthesis items have no matching original clause — skip silently.
+            # HIGH items with missing clause_id are flagged but not fatal.
+            _tier_check = _risk_tier_from_clause_result(cr)
+            if _tier_check == "HIGH" and not bool(cr.get("is_checklist_item")):
+                _unknown_clause_ids.append(cid)
+            # Do not raise — use guidance fallback for unknown IDs
+            continue
         ot = str(oc.get("clause_title") or "").strip()
         rt = str(cr.get("clause_title") or "").strip()
         if ot and rt and ot != rt:
@@ -375,8 +382,13 @@ def build_revision_docx(
         cr = cr_by_id.get(cid)
         if isinstance(cr, dict) and should_show(cr):
             show_ids.append(cid)
+    # Also include checklist/synthesis items that have no original clause but should be shown
+    for cid, cr in cr_by_id.items():
+        if cid not in orig_by_id and cid not in show_ids and isinstance(cr, dict) and should_show(cr):
+            if bool(cr.get("is_checklist_item")) or str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM"):
+                show_ids.append(cid)
 
-    tier_by_id: dict[str, str] = {cid: _risk_tier_from_clause_result(cr_by_id.get(cid) or {}) for cid in show_ids}
+    tier_by_id: dict[str, str] = {cid: _risk_tier_from_clause_result(cr_by_id.get(cid) or {}) for cid in show_ids if cid in cr_by_id}
 
     for cid in show_ids:
         cr = cr_by_id.get(cid) or {}
@@ -971,16 +983,21 @@ def build_revision_docx(
     for cid in show_ids:
         oc = orig_by_id.get(cid) or {}
         cr = cr_by_id.get(cid) or {}
-        tier = tier_by_id.get(cid) or "MEDIUM"
-        left_lines = _clause_hierarchy_lines_from_original_clause(oc)
-        if left_lines:
-            left_lines[0] = (f"[{tier}] " + left_lines[0]).strip()
+        tier = tier_by_id.get(cid) or _risk_tier_from_clause_result(cr)
+        # For checklist/synthesis items not in original_clauses, build label from cr
+        if not oc and cr:
+            _fallback_title = str(cr.get("clause_title") or cid or "")
+            left_lines = [f"[{tier}] {_fallback_title}".strip()]
+        else:
+            left_lines = _clause_hierarchy_lines_from_original_clause(oc)
+            if left_lines:
+                left_lines[0] = (f"[{tier}] " + left_lines[0]).strip()
         left_paras = [(line if i == 0 else ("  " + line), {}) for i, line in enumerate(left_lines)] or [
-            (f"[{tier}] {str(oc.get('clause_id') or '')}".strip(), {})
+            (f"[{tier}] {cid}".strip(), {})
         ]
 
-        original_text = str(oc.get("text") or "")
-        revised_text = str(cr.get("suggested_rewrite") or "")
+        original_text = str(oc.get("text") or cr.get("original_text") or "")
+        revised_text = str(cr.get("suggested_rewrite") or cr.get("recommendation_text") or "")
         rr = str(cr.get("rewrite_reason") or "").strip() if isinstance(cr.get("rewrite_reason"), str) else ""
         laws = _extract_law_titles(cr, limit=3)
         before_k, _ = _key_phrases(original_text, revised_text, limit=2)
@@ -997,6 +1014,34 @@ def build_revision_docx(
                 [(" / ".join(laws), {})] if laws else [("-", {})],
             ]
         )
+
+    # "추가 확인 필요 질문" 섹션 — 답변이 없는 질문 목록 표시
+    unanswered_qs: list[str] = []
+    for q in questions or []:
+        if not isinstance(q, dict):
+            continue
+        qid = str(q.get("question_id") or "")
+        if qid and qid not in (answers or {}):
+            qtitle = str(q.get("title") or q.get("text") or qid).strip()
+            if qtitle:
+                unanswered_qs.append(qtitle)
+    if unanswered_qs:
+        sec_qa = _p(body)
+        _t(_r(sec_qa, bold=True), "추가 확인 필요 질문")
+        for qt in unanswered_qs[:10]:
+            pq = _p(body)
+            _t(_r(pq), f"- {qt}")
+        _p(body)
+
+    # "관련 법령" 전역 섹션 — law_search 결과 표시
+    law_titles_global = _extract_law_titles_from_search(law_search, limit=6)
+    if law_titles_global:
+        sec_law_g = _p(body)
+        _t(_r(sec_law_g, bold=True), "관련 법령")
+        for lt in law_titles_global:
+            pl = _p(body)
+            _t(_r(pl, color_hex="1F7AE0"), f"- {lt}")
+        _p(body)
 
     sec_hr = _p(body)
     _t(_r(sec_hr, bold=True), "8) High risk / Approval required 표")

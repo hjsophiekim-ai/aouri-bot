@@ -6,6 +6,10 @@ from typing import Any
 from runtime.review.jurisdiction import JurisdictionProfile, classify_jurisdiction_profile
 from runtime.review.priority_map import ContractProfile, infer_contract_profile
 from runtime.review.user_focus import UserFocusObjective, derive_focus_objectives_from_answers, parse_user_focus_issues
+from runtime.review.contract_classifier import (
+    ContractProfile as DetailedContractProfile,
+    classify_contract_detailed,
+)
 
 
 @dataclass(frozen=True)
@@ -19,9 +23,10 @@ class FinalReviewContext:
     is_counterparty_form: bool | None
     jurisdiction: JurisdictionProfile
     contract_profile: ContractProfile
+    detailed_contract_profile: DetailedContractProfile | None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        base = {
             "user_focus_issues": [x.to_dict() for x in self.user_focus_issues],
             "review_objectives": [x.to_dict() for x in self.review_objectives],
             "factual_answers": dict(self.factual_answers or {}),
@@ -32,6 +37,9 @@ class FinalReviewContext:
             "jurisdiction": self.jurisdiction.to_dict(),
             "contract_profile": self.contract_profile.to_dict(),
         }
+        if self.detailed_contract_profile is not None:
+            base["detailed_contract_profile"] = self.detailed_contract_profile.to_dict()
+        return base
 
 
 def build_final_review_context(
@@ -54,7 +62,8 @@ def build_final_review_context(
     jur = classify_jurisdiction_profile(text=text, entity=entity, contract_type=contract_type, filename=filename)
     prof = infer_contract_profile(contract_type=contract_type, text=text)
 
-    expert_mode = "퍼시스" in (entity or "")
+    from runtime.review.contract_classifier import is_fursys_group
+    expert_mode = is_fursys_group(entity or "")
     # [REMOVED] expert_strategy 포지션 자동 추론 비활성화 — requirement.md Section Removal Specs 참조
     expert_strategy: list[str] = []
 
@@ -66,6 +75,18 @@ def build_final_review_context(
                 is_form = True
             if v == "no":
                 is_form = False
+
+    detailed_prof: DetailedContractProfile | None = None
+    try:
+        detailed_prof = classify_contract_detailed(
+            entity=entity,
+            contract_type=contract_type,
+            text=text,
+            filename=filename,
+        )
+    except Exception:
+        pass
+
     return FinalReviewContext(
         user_focus_issues=focus,
         review_objectives=review_objectives,
@@ -76,4 +97,5 @@ def build_final_review_context(
         is_counterparty_form=is_form,
         jurisdiction=jur,
         contract_profile=prof,
+        detailed_contract_profile=detailed_prof,
     )

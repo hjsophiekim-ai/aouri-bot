@@ -83,6 +83,7 @@ class ReviewIssue:
     negotiation_position: str
     related_clauses: list[str] = field(default_factory=list)
     confidence: float = 0.75
+    is_checklist_item: bool = False
 
     @property
     def display_bucket(self) -> str:
@@ -111,6 +112,7 @@ class ReviewIssue:
             "negotiation_position": self.negotiation_position,
             "related_clauses": list(self.related_clauses),
             "confidence": self.confidence,
+            "is_checklist_item": self.is_checklist_item,
         }
 
 
@@ -330,6 +332,7 @@ def _build_review_issues(
             negotiation_position=neg[:300],
             related_clauses=[str(r) for r in related[:6]],
             confidence=float(cr.get("confidence") or 0.75),
+            is_checklist_item=bool(cr.get("is_checklist_item")),
         )
         issues.append(ri)
 
@@ -389,7 +392,18 @@ def _filter_and_sort_issues(
     _sev_rank = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
 
     def _is_advisory_item(i: ReviewIssue) -> bool:
-        """Return True if issue is a generic advisory (not clause-grounded)."""
+        """Return True if issue is a generic advisory (not clause-grounded).
+
+        Checklist items (is_checklist_item=True) are exempt: the UI always shows
+        them as "누락 구조 탐지" cards, so hiding them here silently made the DOCX
+        diverge from what the user already saw on screen (up to a completely
+        empty DOCX for advisory/service contracts whose only findings are
+        checklist items). For dealer/consignment contract types this exemption
+        is a no-op — those clause_ids are already forced to LOW severity above
+        and dropped via include_low=False.
+        """
+        if i.is_checklist_item:
+            return False
         if any(i.clause_id.startswith(p) for p in _ADVISORY_ID_PREFIXES):
             return True
         if i.clause_title in _SVC_DEV_EXCLUDED_TITLES:

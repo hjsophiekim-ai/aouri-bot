@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from runtime.review.contract_classifier import FURSYS_GROUP_NAMES, is_fursys_group
+
 
 @dataclass(frozen=True)
 class PartyRole:
@@ -27,6 +29,28 @@ class PartyRole:
 
 _LG_MARKERS = ["LG전자", "엘지", "LG ", "LG\n", "LG\t", "LG-"]
 
+# All Fursys group brand names that indicate 'supplier' role in dealer/distribution contracts
+_FURSYS_GROUP_TEXT_TOKENS: list[str] = [
+    "퍼시스홀딩스", "퍼시스", "fursys", "FURSYS",
+    "일룸", "iloom", "ILOOM",
+    "시디즈", "sidiz", "SIDIZ",
+    "데스커", "desker", "DESKER",
+    "바로스", "baros", "BAROS",
+]
+
+
+def _is_fursys_group_entity(entity: str) -> bool:
+    """Return True if entity belongs to any Fursys Group brand."""
+    return is_fursys_group(entity)
+
+
+def _entity_has_fursys_group(entity: str, text: str) -> bool:
+    """Return True if entity string OR contract text refers to any Fursys Group brand."""
+    if _is_fursys_group_entity(entity):
+        return True
+    # Also check text for cases where entity is generic but text reveals brand
+    return any(tok in (text or "") for tok in _FURSYS_GROUP_TEXT_TOKENS)
+
 
 def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dict[str, Any] | None) -> PartyRole:
     ent = (entity or "")
@@ -38,15 +62,17 @@ def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dic
     our_role = "unknown"
     counterparty_role = "unknown"
 
-    if "퍼시스" in ent:
-        if any(k in ct for k in ("대리점", "유통", "위탁운영", "위탁", "운영대행")) or _has_any(t, ["대리점", "대리점법", "재판매", "판매가격", "유통"]):
+    is_our_fursys_group = _entity_has_fursys_group(ent, t)
+
+    if is_our_fursys_group:
+        if any(k in ct for k in ("대리점", "유통", "위탁", "운영대행", "위탁판매")) or _has_any(t, ["대리점", "대리점법", "재판매", "판매가격", "유통", "위탁판매", "용역수수료"]):
             our_role = "supplier"
             counterparty_role = "dealer_or_distributor"
-            signals.append("entity_fursys_dealer_override")
+            signals.append("entity_fursys_group_dealer_override")
         if any(k in ct for k in ("인테리어", "공사", "시공", "리모델링")) or _has_any(t, ["수급인", "도급인", "공사", "시공", "인테리어"]):
             our_role = "contractor"
             counterparty_role = "ordering_party"
-            signals.append("entity_fursys_construction_override")
+            signals.append("entity_fursys_group_construction_override")
         if any(k in ct for k in ("렌탈", "렌트", "구독", "구독서비스")) or _has_any(
             t,
             [
@@ -63,7 +89,7 @@ def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dic
         ):
             our_role = "rental_provider"
             counterparty_role = "renter"
-            signals.append("entity_fursys_rental_override")
+            signals.append("entity_fursys_group_rental_override")
 
     if any(k in ct for k in ("구매", "매매", "물품공급/구매/매매", "장비공급", "물품구매")) or _has_any(t, ["구매자", "매수인", "발주자"]):
         our_role = "buyer"
@@ -99,19 +125,19 @@ def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dic
     counter_label = labels.get("counterparty_label")
     signals.extend(labels.get("signals", []))
 
-    if "퍼시스" in ent:
+    if is_our_fursys_group:
         if our_label is None and our_role == "supplier":
             our_label = "갑"
             counter_label = counter_label or "을"
-            signals.append("entity_fursys_label_supplier")
+            signals.append("entity_fursys_group_label_supplier")
         if our_label is None and our_role == "contractor":
             our_label = "을"
             counter_label = counter_label or "갑"
-            signals.append("entity_fursys_label_contractor")
+            signals.append("entity_fursys_group_label_contractor")
         if our_label is None and our_role == "rental_provider":
             our_label = "갑"
             counter_label = counter_label or "을"
-            signals.append("entity_fursys_label_rental_provider")
+            signals.append("entity_fursys_group_label_rental_provider")
 
     counterparty_is_large = any(m in t for m in _LG_MARKERS) or ("LG" in (ct or ""))
     if counterparty_is_large:
