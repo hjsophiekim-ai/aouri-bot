@@ -23,7 +23,7 @@ from runtime.review.korean_polish import polish_korean_legal_style
 from runtime.review.clause_topic import classify_clause_topic, infer_rewrite_topics, is_topic_compatible
 from runtime.review.priority_map import infer_contract_profile
 from runtime.review.final_review_context import build_final_review_context
-from runtime.review.user_focus import objective_codes_to_clause_topics
+from runtime.review.user_focus import objective_codes_to_clause_topics, get_objective_keywords
 from runtime.services.query_service import ReviewInput, RuleQueryService
 from runtime.review.risk_scenarios import detect_risk_scenarios
 from runtime.review.strategic_inquiry import generate_strategic_inquiry
@@ -1072,7 +1072,70 @@ def _apply_clause_integrity_filter(clause_results: list[dict[str, Any]]) -> None
                 cr["guardrail_block"] = {"filter": "clause_integrity", "blocked": blocked}
 
 
+_RX_FOREIGN_ARTICLE_HEADING = re.compile(r"제\s*(\d{1,3})\s*조")
+
+
+def _apply_original_text_integrity_guard(clause_results: list[dict[str, Any]]) -> None:
+    """[Original Text Integrity] 원문 인용이 다른 조항과 섞이지 않았는지 검증한다.
+
+    복잡한 레이아웃의 PDF/DOCX에서 텍스트 추출 순서가 뒤섞이면, 한 조항의
+    original_text 안에 다른 조번호의 "제N조" 표제가 그대로 섞여 들어올 수
+    있다(예: 제8조 본문 뒤에 제12조 표제가 이어 붙는 경우). 이런 조항은
+    "원문"으로 그대로 인용하면 실제로는 존재하지 않는 문장을 인용하는
+    결과가 되므로, 다른 조번호 표제가 등장하는 지점에서 잘라내고
+    extraction_integrity_risk 플래그를 남긴다. 잘라낸 결과 실질 내용이
+    남지 않으면 해당 조항에 대한 자동 생성 수정안은 신뢰할 수 없으므로
+    보류(guardrail_block) 처리한다.
+    """
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        ot = cr.get("original_text")
+        if not isinstance(ot, str) or not ot.strip():
+            continue
+        own_article = str(cr.get("article_number") or "").strip()
+        matches = list(_RX_FOREIGN_ARTICLE_HEADING.finditer(ot))
+        # Ignore a heading that appears only at the very start (that's this
+        # clause's own heading, e.g. "제8조(비밀유지의무) ...").
+        cut_at: int | None = None
+        for m in matches:
+            if m.start() <= 2:
+                continue
+            found_article = m.group(1)
+            if own_article and found_article == own_article:
+                continue
+            cut_at = m.start()
+            break
+        if cut_at is None:
+            continue
+        truncated = ot[:cut_at].rstrip()
+        cr["extraction_integrity_risk"] = True
+        if len(truncated) >= 15:
+            cr["original_text"] = truncated
+        else:
+            # Too little reliable text remains — do not present a quote or an
+            # auto-generated revision the reviewer cannot verify against the
+            # source document.
+            cr["original_text"] = truncated or "[원문 자동추출 불확실 — 원본 문서 직접 확인 필요]"
+            cr["suggested_rewrite"] = None
+            cr["changed_segments"] = []
+            cr["risk_tier"] = "LOW"
+            cr["must_fix"] = False
+            cr["approval_required"] = False
+            cr["high_risk"] = False
+            cr["review_tier"] = "NOTE"
+            if not cr.get("guardrail_block"):
+                cr["guardrail_block"] = {"filter": "original_text_integrity", "reason": "cross_article_contamination"}
+
+
 _SIDIZ_NAMES = frozenset({"시디즈", "SIDIZ", "Sidiz", "sidiz"})
+
+
+_CI_SI_CLASS_ALLOWLIST = frozenset({
+    "content_production", "advertising_content_production",
+    "content_production_service", "creative_agency_service",
+})
+_CI_SI_SIGNAL_KW = re.compile(r"CI|SI|브랜드|상표|디자인|외관|로고", re.IGNORECASE)
 
 
 def _apply_sidiz_position_strategy(
@@ -1080,6 +1143,7 @@ def _apply_sidiz_position_strategy(
     entity: str,
     party_role: dict[str, Any] | None,
     text: str,
+    contract_class: str = "",
 ) -> None:
     """[Sidiz Position Strategy] 시디즈가 위탁자(갑)인 경우 전략적 조항을 주입한다."""
     if not any(s in (entity or "") for s in _SIDIZ_NAMES):
@@ -1092,6 +1156,11 @@ def _apply_sidiz_position_strategy(
     )
     if not is_consignor:
         return
+    # HARD BLOCK: CI/SI 브랜드 위약벌 문구는 콘텐츠/광고/CI 제작 계약에서만 의미가
+    # 있다. 이전에는 clause_topic이 "termination"이기만 하면(=계약과 무관하게 어떤
+    # 해지 조항이든) 이 문구를 주입했는데, 이는 시험분석약정서 같은 계약에서
+    # 원본과 전혀 무관한 CI/SI·위약벌 문구를 억지로 끼워넣는 원인이었다.
+    _ci_si_class_ok = (not contract_class) or (contract_class in _CI_SI_CLASS_ALLOWLIST)
 
     for cr in clause_results:
         if not isinstance(cr, dict):
@@ -1105,7 +1174,10 @@ def _apply_sidiz_position_strategy(
         base = (sr or ot).rstrip()
 
         # ① CI/SI 위반 → 즉시 해지권 + 위약벌
-        if ct == "termination" or any(k in title for k in ("CI", "SI", "브랜드", "상표", "디자인", "외관")):
+        # 계약유형이 CI/콘텐츠/광고 제작류이면서(class allow-list) 실제로 해당
+        # 조항 자체가 CI/SI/브랜드/상표를 다루고 있을 때만(clause-level signal) 적용.
+        _clause_is_ci_si = bool(_CI_SI_SIGNAL_KW.search(title)) or bool(_CI_SI_SIGNAL_KW.search(ot))
+        if _ci_si_class_ok and _clause_is_ci_si:
             if "즉시 해지" not in base and "위약벌" not in base:
                 add = (
                     "\n\n[시디즈 위탁자 보호]\n"
@@ -2134,10 +2206,19 @@ def _apply_advisory_ip_review(
     contract_type: str,
     text: str,
     entity: str,
+    contract_class: str = "",
 ) -> None:
     """[Expert Advisory Review Logic — Phase 2: IP & Copyright Priority]
     자문/용역 계약에서 IP 귀속(CRITICAL)과 제3자 침해 보증을 점검한다.
     """
+    # HARD BLOCK: testing_service (시험·검사·인증 용역) contracts are not IP/
+    # development contracts, even though _is_service_advisory_contract's loose
+    # "용역" keyword regex would otherwise match them (a testing-service
+    # agreement is, technically, also a 용역 in the colloquial sense). This
+    # previously caused IP/저작권/제3자 침해보증 boilerplate to be injected
+    # into a testing-lab agreement that has no IP deliverable at all.
+    if contract_class == "testing_service":
+        return
     if not _is_service_advisory_contract(str(contract_type), str(text or "")):
         return
 
@@ -2701,10 +2782,24 @@ def _apply_supplier_product_checklist(
         return
     if review_posture != "seller_favorable":
         return
-    is_product_supply = contract_class in (
-        "general", "project_installation",
-        "물품공급", "제조물공급", "납품", "구매", "설치포함공급", "판매", "B2B공급",
-    ) or contract_class not in ("advisory", "ops_outsourcing")
+    # HARD BLOCK: this checklist assumes a tangible-goods supply/installation
+    # contract (검수/반품/A/S/위험이전/설치환경 등). It must NEVER fire for
+    # service/advisory/testing/content/IP-type contracts just because
+    # contract_class fell through to "general" — "general" means "unclear",
+    # not "assume goods supply". Require an explicit allow-listed contract_class
+    # AND an actual tangible-goods/installation signal in the contract text.
+    _EXCLUDED_FOR_PRODUCT_SUPPLY = (
+        "advisory", "ops_outsourcing", "content_production", "testing_service",
+    )
+    if contract_class in _EXCLUDED_FOR_PRODUCT_SUPPLY:
+        return
+    _ALLOWED_FOR_PRODUCT_SUPPLY = ("general", "project_installation")
+    if contract_class not in _ALLOWED_FOR_PRODUCT_SUPPLY:
+        return
+    _text_head = str(full_text or "")
+    is_product_supply = bool(
+        _SUBSTANCE_TANGIBLE_KW.search(_text_head) or _SUBSTANCE_INSTALL_KW.search(_text_head)
+    )
 
     if not is_product_supply:
         return
@@ -3061,7 +3156,22 @@ def build_clause_level_result(
 
     # ── [STEP 1 / Classification First] 계약 유형·실질 최우선 확정 ────────────
     # requirement.md > STEP 1 (경제적 실질 기반), Advanced Strategic Logic > Phase 1
-    _contract_class = _classify_contract_type(str(contract_type), str(text or ""), filename)
+    #
+    # 계약유형 판단은 runtime.review.contract_classifier(단일 정본 분류기)를 우선
+    # 참조한다. 특히 시험·검사·인증 용역처럼 이 파일의 로컬 6분류
+    # (_classify_contract_type_by_substance)가 커버하지 않는 유형은 정본 분류
+    # 결과를 그대로 신뢰하고, 그 외 유형은 기존 로컬 분류 결과를 유지해
+    # 기존 advisory/rental/construction/project_installation 테스트를 깨지 않는다.
+    # answers에 사용자가 직접 확인한 계약유형(Q-TYPE-001)이 있으면 그것을 최우선한다.
+    from runtime.review.contract_classifier import classify_contract_detailed as _cc_canonical
+    _canonical_profile = _cc_canonical(
+        entity=str(entity), contract_type=str(contract_type), text=str(text or ""),
+        filename=filename, answers=answers,
+    )
+    if _canonical_profile.contract_type == "testing_inspection_service":
+        _contract_class = "testing_service"
+    else:
+        _contract_class = _classify_contract_type(str(contract_type), str(text or ""), filename)
     _contract_nature = _classify_contract_nature(str(contract_type), str(text or ""))
     _is_advisory_class = (_contract_class == "advisory")
     _is_rental_class = (_contract_class == "rental")
@@ -3098,7 +3208,10 @@ def build_clause_level_result(
         _answers_aug["_llm_meta"] = _llm_meta
     answers = _answers_aug
 
-    party = infer_party_role(entity=str(entity), contract_type=str(contract_type), text=str(text), answers=answers)
+    party = infer_party_role(
+        entity=str(entity), contract_type=str(contract_type), text=str(text), answers=answers,
+        contract_type_code=_canonical_profile.contract_type,
+    )
     review_posture = infer_review_posture(party=party, contract_type=str(contract_type), text=str(text))
     review = service.analyze(
         ReviewInput(
@@ -3893,7 +4006,27 @@ def build_clause_level_result(
             titles = cr.get("user_focus_match_titles") if isinstance(cr.get("user_focus_match_titles"), list) else []
             titles = [str(x) for x in titles if isinstance(x, str) and x.strip()]
             if titles:
-                parts.append("사용자 중점 이슈: " + ", ".join(titles[:2]))
+                # A bare category label ("사용자 중점 이슈: 구상권/소송비용 전가")
+                # is not a reason — it doesn't say WHY this specific clause is
+                # a problem, and a lawyer reading the output cannot verify it
+                # against the quoted 원문. Anchor it to the actual matched
+                # keyword phrase found in this clause's own text so the label
+                # and the quoted 원문 refer to the same, verifiable issue.
+                _ot_for_match = str(cr.get("original_text") or "")
+                _matched_codes = cr.get("user_focus_matches") if isinstance(cr.get("user_focus_matches"), list) else []
+                _snippets: list[str] = []
+                for _code in _matched_codes[:2]:
+                    for _kw in get_objective_keywords(str(_code)):
+                        if _kw and _kw in _ot_for_match:
+                            _snippets.append(_kw)
+                            break
+                if _snippets:
+                    parts.append(
+                        "사용자 중점 이슈: " + ", ".join(titles[:2])
+                        + " — 본 조항에 '" + "', '".join(_snippets) + "' 관련 문구 포함"
+                    )
+                else:
+                    parts.append("사용자 중점 이슈: " + ", ".join(titles[:2]) + " (해당 조항 문언 재확인 필요)")
         if bool(cr.get("factual_hit")):
             titles = cr.get("factual_match_titles") if isinstance(cr.get("factual_match_titles"), list) else []
             titles = [str(x) for x in titles if isinstance(x, str) and x.strip()]
@@ -4446,14 +4579,13 @@ def build_clause_level_result(
     # ── [Hallucination Guard] 계약유형별 금지문구 차단 ───────────────────────
     # 대리점 계약에서 개발계약용 IP 문구(수탁자, 결과물, 오픈소스 등)를 차단한다.
     try:
-        from runtime.review.contract_classifier import classify_contract_detailed as _cc_detailed
         from runtime.review.hallucination_guard import check_revision_text as _hg_check
-        _detailed_profile = _cc_detailed(
-            entity=str(entity or ""),
-            contract_type=str(contract_type or ""),
-            text=str(text or ""),
-            filename=filename,
-        )
+        # Reuse the single canonical profile computed at the top of this
+        # function (_canonical_profile) instead of re-classifying — a second,
+        # independently-computed classification could disagree with the
+        # first and silently apply a different hallucination-guard allowlist
+        # than the one the rest of the pipeline used.
+        _detailed_profile = _canonical_profile
         for _cr in clause_results:
             if not isinstance(_cr, dict):
                 continue
@@ -4474,16 +4606,18 @@ def build_clause_level_result(
     except Exception:
         _detailed_profile = None
     # 2순위: Advisory IP & Copyright (자문/용역 → IP 귀속·보증 CRITICAL 점검)
-    _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity))
+    _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity), contract_class=_contract_class)
     # 3순위: 기존 필터 체인
     _apply_rental_filter(clause_results, _is_rental)
     _apply_domestic_filter(clause_results, _is_domestic, llm_meta=_llm_meta)
     _apply_clause_integrity_filter(clause_results)
+    _apply_original_text_integrity_guard(clause_results)
     _apply_sidiz_position_strategy(
         clause_results,
         str(entity),
         party.to_dict() if party is not None else None,
         str(text or ""),
+        contract_class=_contract_class,
     )
     _apply_global_sentence_dedup(clause_results)
 
@@ -4876,7 +5010,23 @@ def build_clause_level_result(
         _filtered_output = {}
         _low_count_in_output = 0
 
+    # ── [Final Self-Check] requirement.md > Self-Check gate ─────────────────
+    # 결과를 반환하기 전 마지막으로 재검증한다: 계약유형/역할이 이 리뷰 전체에서
+    # 일관되게 쓰였는지, 유형과 무관한 문구가 남아있지 않은지, 원문-문제점-수정안이
+    # 같은 조항을 가리키는지, 놓친 우선순위 리스크가 있는지. 이 패스는 상위
+    # 단계의 개별 게이트가 놓친 경우를 잡아내는 최종 안전망이다.
+    from runtime.review.self_check import run_self_check as _run_self_check
+    _self_check_report = _run_self_check(
+        clause_results=clause_results,
+        contract_type_code=_canonical_profile.contract_type,
+        contract_class=_contract_class,
+        our_role_bucket=_canonical_profile.our_role_bucket,
+        confidence=_canonical_profile.confidence,
+        full_text=str(text or ""),
+    )
+
     meta = {
+        "self_check": _self_check_report,
         "review_posture": review_posture,
         "party_role": party.to_dict(),
         "contract_profile": (contract_context.get("contract_profile") if isinstance(contract_context, dict) else None),

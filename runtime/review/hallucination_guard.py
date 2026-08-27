@@ -66,6 +66,25 @@ ADVISORY_DOMAIN_PHRASES: list[str] = [
     "대리점거래법",
 ]
 
+# These phrases belong to tangible-goods supply/installation contracts
+# (검수/반품/A/S/위험이전/설치환경 등). They must NOT appear in service,
+# advisory, testing/inspection, or content-production contracts — this is
+# what leaked "[공급자 보호] 검수 기준·반품 제한·A/S 제외" boilerplate into a
+# FITI testing-service agreement review.
+PRODUCT_SUPPLY_PHRASES: list[str] = [
+    "검수 완료 간주", "반품이 불가", "이행유보권", "주문제작", "설치가 완료된 물품",
+    "무상 A/S 대상", "위험은 공급자가", "설치 환경 요건", "납기는 그 지연 기간만큼",
+    "재료비·인건비", "구매자는 물품 수령",
+]
+
+# These phrases belong to development/design/content-production IP & brand
+# clauses. They must NOT appear in contracts that have no IP deliverable or
+# CI/brand element at all (e.g. a testing-lab service agreement).
+CI_BRAND_PHRASES: list[str] = [
+    "CI/SI 가이드라인", "브랜드를 훼손", "위약벌을 갑에게 지급",
+    "제3자의 저작권·특허권·상표권", "오픈소스, 무료 이미지",
+]
+
 # Contract types that are software/app development — allowed to use dev phrases
 _SOFTWARE_TYPE_CODES: frozenset[str] = frozenset({
     "software_app_development",
@@ -75,6 +94,19 @@ _SOFTWARE_TYPE_CODES: frozenset[str] = frozenset({
 # Contract types that are advisory — allowed to use advisory phrases
 _ADVISORY_TYPE_CODES: frozenset[str] = frozenset({
     "advisory_service",
+})
+
+# Contract types that legitimately involve tangible-goods supply/installation
+_PRODUCT_SUPPLY_TYPE_CODES: frozenset[str] = frozenset({
+    "purchase_supply", "equipment_purchase_installation", "rental",
+    "dealer_rental_service_contract", "dealer_agency", "distribution_resale",
+    "consignment_sales_agency", "direct_customer_sales_support",
+})
+
+# Contract types that legitimately involve an IP/creative deliverable or brand/CI
+_CI_BRAND_TYPE_CODES: frozenset[str] = frozenset({
+    "content_production_service", "advertising_content_production",
+    "creative_agency_service", "software_app_development", "advisory_service",
 })
 
 # ── Clause-identity-scoped forbidden phrases ──────────────────────────────────
@@ -181,6 +213,18 @@ def check_revision_text(
                 # Only flag if this is a non-dealer contract (dealer contracts legitimately use these)
                 if contract_type_code not in _DEALER_TYPE_CODES:
                     violations.append(f"advisory_phrase_wrong_context:'{phrase}'")
+
+    # Check product-supply phrases (검수/반품/A/S/위험이전 등) in non-product contracts
+    if contract_type_code not in _PRODUCT_SUPPLY_TYPE_CODES:
+        for phrase in PRODUCT_SUPPLY_PHRASES:
+            if phrase in text:
+                violations.append(f"product_supply_phrase_wrong_context:'{phrase}'")
+
+    # Check CI/SI brand & IP phrases in contracts with no IP/brand deliverable
+    if contract_type_code not in _CI_BRAND_TYPE_CODES:
+        for phrase in CI_BRAND_PHRASES:
+            if phrase in text:
+                violations.append(f"ci_brand_phrase_wrong_context:'{phrase}'")
 
     # Check clause-identity-scoped forbidden phrases
     if clause_identity:

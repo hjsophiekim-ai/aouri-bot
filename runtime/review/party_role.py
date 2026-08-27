@@ -52,7 +52,41 @@ def _entity_has_fursys_group(entity: str, text: str) -> bool:
     return any(tok in (text or "") for tok in _FURSYS_GROUP_TEXT_TOKENS)
 
 
-def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dict[str, Any] | None) -> PartyRole:
+_ANSWER_ROLE_TO_LOCAL: dict[str, tuple[str, str]] = {
+    "we_are_supplier": ("supplier", "dealer_or_distributor"),
+    "we_are_buyer": ("buyer", "seller_or_supplier"),
+    "we_are_service_recipient": ("client", "service_provider"),
+    "we_are_service_provider": ("service_provider", "client"),
+    "we_are_contractor": ("contractor", "ordering_party"),
+    "we_are_ordering_party": ("ordering_party", "contractor_or_supplier"),
+    "we_are_dealer": ("dealer", "supplier"),
+}
+
+_TESTING_SERVICE_KW = [
+    "시험연구원", "시험기관", "검사기관", "공인시험", "공인검사",
+    "인증기관", "교정기관", "시험성적서", "검사성적서",
+    "시험분석", "시험 분석", "시험의뢰", "시험 의뢰", "적합성평가",
+]
+
+
+def infer_party_role(
+    *,
+    entity: str,
+    contract_type: str,
+    text: str,
+    answers: dict[str, Any] | None,
+    contract_type_code: str | None = None,
+) -> PartyRole:
+    """Infer our/counterparty role.
+
+    contract_type_code: canonical type_code from
+        contract_classifier.classify_contract_detailed(), when the caller has
+        already computed it. When it identifies a testing/inspection service
+        (where we are the party requesting testing, not the lab performing
+        it), that takes priority over the local keyword heuristics below —
+        those heuristics have no notion of "시험기관/수탁자" at all and would
+        otherwise leave our_role stuck at a wrong or "unknown" default.
+    """
     ent = (entity or "")
     ct = (contract_type or "")
     t = (text or "")
@@ -61,6 +95,32 @@ def infer_party_role(*, entity: str, contract_type: str, text: str, answers: dic
 
     our_role = "unknown"
     counterparty_role = "unknown"
+
+    _answer_role = a.get("Q-ROLE-001-our-position")
+    if isinstance(_answer_role, str) and _answer_role in _ANSWER_ROLE_TO_LOCAL:
+        our_role, counterparty_role = _ANSWER_ROLE_TO_LOCAL[_answer_role]
+        signals.append("user_confirmed_our_role")
+        return PartyRole(
+            our_role=our_role,
+            counterparty_role=counterparty_role,
+            our_label=None,
+            counterparty_label=None,
+            counterparty_is_large_standard_provider=False,
+            signals=signals,
+        )
+
+    if contract_type_code == "testing_inspection_service" or _has_any(t, _TESTING_SERVICE_KW):
+        our_role = "client"
+        counterparty_role = "service_provider"
+        signals.append("testing_inspection_service_override")
+        return PartyRole(
+            our_role=our_role,
+            counterparty_role=counterparty_role,
+            our_label=None,
+            counterparty_label=None,
+            counterparty_is_large_standard_provider=False,
+            signals=signals,
+        )
 
     is_our_fursys_group = _entity_has_fursys_group(ent, t)
 

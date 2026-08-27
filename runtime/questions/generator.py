@@ -233,6 +233,91 @@ def generate_questions(
     max_questions: int = 7,
     review_focus: str | None = None,
 ) -> list[Question]:
+    """Public entry point. Always leads with the classification-confirmation
+    questions (Q-TYPE-001/Q-ROLE-001) when auto-classification confidence is
+    low, then fills the remaining slots with the type-specific question set
+    from _generate_questions_inner(). This guarantees the confirmation
+    questions are never crowded out or skipped by one of the many internal
+    early-return branches below.
+    """
+    lead = _build_type_confirmation_questions(entity=entity, contract_type=contract_type, text=contract_text or "")
+    remaining = max(0, max_questions - len(lead))
+    rest = _generate_questions_inner(
+        entity, contract_type, detected_rule_ids,
+        law_topics=law_topics, contract_text=contract_text,
+        clause_results=clause_results, max_questions=remaining,
+        review_focus=review_focus,
+    ) if remaining > 0 else []
+    lead_ids = {q.question_id for q in lead}
+    return lead + [q for q in rest if q.question_id not in lead_ids]
+
+
+def _build_type_confirmation_questions(*, entity: str, contract_type: str, text: str) -> list[Question]:
+    try:
+        from runtime.review.contract_classifier import classify_contract_detailed as _cc_for_q
+    except Exception:
+        return []
+    try:
+        _profile_for_q = _cc_for_q(entity=entity or "", contract_type=contract_type or "", text=text or "")
+    except Exception:
+        return []
+    if _profile_for_q.confidence >= 0.75:
+        return []
+    return [
+        Question(
+            question_id="Q-TYPE-001-contract-nature",
+            title="이 계약의 성격을 가장 잘 나타내는 유형은 무엇인가요? (자동 분류 신뢰도가 낮아 직접 확인이 필요합니다)",
+            description=f"자동 분류 결과(참고용, 신뢰도 {_profile_for_q.confidence:.0%}): {_profile_for_q.contract_type}",
+            answer_type="single_choice",
+            required=True,
+            options=[
+                QuestionOption("testing_inspection", "시험·검사·인증/분석 용역"),
+                QuestionOption("product_supply", "물품 구매/공급"),
+                QuestionOption("equipment_installation", "장비·설비 구매/설치"),
+                QuestionOption("advisory", "자문/컨설팅 용역"),
+                QuestionOption("dealer_consignment", "위탁판매 대리점"),
+                QuestionOption("dealer_agency", "일반 대리점/유통"),
+                QuestionOption("rental", "렌탈/임대"),
+                QuestionOption("construction", "공사/시공"),
+                QuestionOption("software_dev", "소프트웨어/시스템 개발"),
+                QuestionOption("content_production", "콘텐츠/광고 제작"),
+                QuestionOption("marketing_ai_search", "마케팅/AI 검색 서비스"),
+                QuestionOption("other_general", "기타/해당 없음"),
+            ],
+            tags=["topic:contract_type_confirmation", "reason_code:low_confidence_classification"],
+            related_rule_ids=[],
+        ),
+        Question(
+            question_id="Q-ROLE-001-our-position",
+            title="이 계약에서 우리 회사의 실제 지위는 무엇인가요? (단순 갑/을 표기가 아니라 실질 역할 기준)",
+            description="예: 물품/서비스를 제공하는 쪽인지, 제공받는 쪽인지에 따라 검토 방향이 달라집니다.",
+            answer_type="single_choice",
+            required=True,
+            options=[
+                QuestionOption("we_are_supplier", "우리가 물품/서비스를 공급하는 쪽"),
+                QuestionOption("we_are_buyer", "우리가 물품을 구매하는 쪽"),
+                QuestionOption("we_are_service_recipient", "우리가 서비스/용역을 의뢰받는 쪽(고객)"),
+                QuestionOption("we_are_service_provider", "우리가 서비스/용역을 제공하는 쪽"),
+                QuestionOption("we_are_contractor", "우리가 공사/설치를 수행하는 쪽(수급인)"),
+                QuestionOption("we_are_ordering_party", "우리가 공사/개발을 발주하는 쪽"),
+                QuestionOption("we_are_dealer", "우리가 대리점/유통업체"),
+            ],
+            tags=["topic:party_role_confirmation", "reason_code:low_confidence_classification"],
+            related_rule_ids=[],
+        ),
+    ]
+
+
+def _generate_questions_inner(
+    entity: str,
+    contract_type: str,
+    detected_rule_ids: list[str] | None,
+    law_topics: list[str] | None = None,
+    contract_text: str | None = None,
+    clause_results: list[dict] | None = None,
+    max_questions: int = 7,
+    review_focus: str | None = None,
+) -> list[Question]:
     detected = set(detected_rule_ids or [])
     ctype = contract_type or ""
     ent = entity or ""

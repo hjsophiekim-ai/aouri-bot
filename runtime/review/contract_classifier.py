@@ -10,8 +10,20 @@ Implements the full ContractProfile with legal-role metadata for:
   - distribution_resale  (유통/재판매)
   - purchase_supply, equipment_purchase_installation
   - store_operation_outsourcing, advisory_service
+  - testing_inspection_service  (시험·검사·인증/분석 용역 — 위탁자가 시험기관에 시험을 의뢰)
   - software_app_development, ai_search_marketing
   - rental, construction, general
+
+This module is the SINGLE canonical source of contract-type and legal-role
+classification. Other modules (clause_level.py's rule/checklist gates,
+party_role.py, hallucination_guard.py, output_filter.py) MUST resolve
+contract type/role via classify_contract_detailed()/ROLE_BUCKET rather than
+re-deriving their own independent keyword guesses — a contract must not be
+"AI 검색·마케팅" in one place and "advisory" in another for the same review.
+
+`answers` (structured Q&A collected before review) can be passed in as a
+high-confidence override: when the user has directly confirmed the contract
+type or their own role, that answer takes priority over keyword guessing.
 
 Recognised Fursys Group brands:
   퍼시스, 일룸, 시디즈, 데스커, 바로스, 퍼시스홀딩스
@@ -78,6 +90,43 @@ def detect_our_party_from_text(text: str, hint_entity: str = "") -> str | None:
     return None
 
 
+# ─── Canonical role buckets ────────────────────────────────────────────────────
+# English "bucket" codes consumed by rule-gating logic (clause_level.py,
+# party_role.py, hallucination_guard.py). Keep this list small and stable —
+# every gate that asks "are we the supplier?" must check membership in these
+# buckets rather than re-deriving its own guess from raw text.
+#   supplier               — we sell/supply goods or services to the counterparty
+#   buyer                  — we purchase/receive goods from the counterparty
+#   service_recipient      — we receive a professional/testing/advisory service
+#                             (client of an advisor, testing requester, etc.)
+#   service_provider       — we perform the professional/testing/advisory service
+#   contractor             — we are the construction/installation contractor
+#   ordering_party         — we order construction/installation/dev work
+#   dealer                 — we are a dealer/distributor of the counterparty's goods
+#   neutral                — role not meaningfully asymmetric for rule-gating
+#   unknown                — could not be determined; do not fire role-specific rules
+_TYPE_TO_ROLE_BUCKET: dict[str, tuple[str, str]] = {
+    "advertising_content_production": ("service_recipient", "service_provider"),
+    "content_production_service": ("service_recipient", "service_provider"),
+    "creative_agency_service": ("service_recipient", "service_provider"),
+    "consignment_sales_agency": ("supplier", "dealer"),
+    "direct_customer_sales_support": ("supplier", "dealer"),
+    "dealer_rental_service_contract": ("supplier", "dealer"),
+    "dealer_agency": ("supplier", "dealer"),
+    "distribution_resale": ("supplier", "dealer"),
+    "purchase_supply": ("buyer", "supplier"),
+    "equipment_purchase_installation": ("buyer", "contractor"),
+    "store_operation_outsourcing": ("service_recipient", "service_provider"),
+    "advisory_service": ("service_recipient", "service_provider"),
+    "testing_inspection_service": ("service_recipient", "service_provider"),
+    "software_app_development": ("service_recipient", "service_provider"),
+    "ai_search_marketing": ("service_recipient", "service_provider"),
+    "rental": ("buyer", "supplier"),
+    "construction": ("ordering_party", "contractor"),
+    "general": ("unknown", "unknown"),
+}
+
+
 # ─── ContractProfile dataclass ────────────────────────────────────────────────
 
 @dataclass
@@ -95,6 +144,8 @@ class ContractProfile:
     confidence: float
     reasons: list[str]
     unresolved_questions: list[str]
+    our_role_bucket: str = "unknown"
+    counterparty_role_bucket: str = "unknown"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +161,8 @@ class ContractProfile:
             "confidence": round(self.confidence, 3),
             "reasons": list(self.reasons),
             "unresolved_questions": list(self.unresolved_questions),
+            "our_role_bucket": self.our_role_bucket,
+            "counterparty_role_bucket": self.counterparty_role_bucket,
         }
 
 
@@ -121,21 +174,42 @@ def classify_contract_detailed(
     contract_type: str,
     text: str,
     filename: str | None = None,
+    answers: dict[str, Any] | None = None,
 ) -> ContractProfile:
-    """Return a fully populated ContractProfile for the given contract."""
+    """Return a fully populated ContractProfile for the given contract.
+
+    Args:
+        answers: structured Q&A answers collected before review (see
+            runtime.questions.generator). When the user has directly
+            confirmed the contract type via a Q-TYPE-* answer, that
+            confirmation overrides keyword-based type_code guessing —
+            a lawyer's own statement of fact beats a regex heuristic.
+    """
     t = text or ""
     ct = contract_type or ""
     ent = entity or ""
+    ans = answers or {}
     reasons: list[str] = []
     unresolved: list[str] = []
 
     our_party = detect_our_party_from_text(t, hint_entity=ent) or ent or "미상"
     counterparty = _detect_counterparty(t, our_party)
 
-    type_code, type_reasons = _classify_type_code(ct, t, filename or "")
+    override_type = _type_code_from_answers(ans)
+    if override_type:
+        type_code, type_reasons = override_type, ["user_confirmed_contract_type"]
+    else:
+        type_code, type_reasons = _classify_type_code(ct, t, filename or "")
     reasons.extend(type_reasons)
 
     our_legal_role, counterparty_legal_role = _infer_legal_roles(type_code, ct, t)
+    our_role_bucket, counterparty_role_bucket = _TYPE_TO_ROLE_BUCKET.get(type_code, ("unknown", "unknown"))
+
+    override_role_bucket = _role_bucket_from_answers(ans)
+    if override_role_bucket:
+        our_role_bucket = override_role_bucket
+        counterparty_role_bucket = _COUNTERPARTY_BUCKET_FOR.get(override_role_bucket, counterparty_role_bucket)
+        reasons.append("user_confirmed_our_role")
 
     customer_contracting_party: str | None = None
     payment_collection_party: str | None = None
@@ -155,7 +229,7 @@ def classify_contract_detailed(
         tax_invoice_issuer = counterparty
         agency_authority = False
 
-    confidence = _compute_confidence(type_code, reasons, t)
+    confidence = 0.98 if override_type else _compute_confidence(type_code, reasons, t)
 
     return ContractProfile(
         contract_type=type_code,
@@ -170,7 +244,64 @@ def classify_contract_detailed(
         confidence=confidence,
         reasons=reasons,
         unresolved_questions=unresolved,
+        our_role_bucket=our_role_bucket,
+        counterparty_role_bucket=counterparty_role_bucket,
     )
+
+
+# ─── Q&A answer overrides ──────────────────────────────────────────────────────
+# Maps a direct user answer (collected via runtime.questions.generator's
+# Q-TYPE-*/Q-ROLE-* confirmation questions) to a canonical type_code / role
+# bucket. A confirmed fact from the reviewer beats keyword guessing.
+
+_ANSWER_TYPE_CODE_MAP: dict[str, str] = {
+    "testing_inspection": "testing_inspection_service",
+    "product_supply": "purchase_supply",
+    "equipment_installation": "equipment_purchase_installation",
+    "advisory": "advisory_service",
+    "dealer_consignment": "consignment_sales_agency",
+    "dealer_agency": "dealer_agency",
+    "rental": "rental",
+    "construction": "construction",
+    "software_dev": "software_app_development",
+    "content_production": "content_production_service",
+    "marketing_ai_search": "ai_search_marketing",
+    "other_general": "general",
+}
+
+_ANSWER_ROLE_BUCKET_MAP: dict[str, str] = {
+    "we_are_supplier": "supplier",
+    "we_are_buyer": "buyer",
+    "we_are_service_recipient": "service_recipient",
+    "we_are_service_provider": "service_provider",
+    "we_are_contractor": "contractor",
+    "we_are_ordering_party": "ordering_party",
+    "we_are_dealer": "dealer",
+}
+
+_COUNTERPARTY_BUCKET_FOR: dict[str, str] = {
+    "supplier": "buyer",
+    "buyer": "supplier",
+    "service_recipient": "service_provider",
+    "service_provider": "service_recipient",
+    "contractor": "ordering_party",
+    "ordering_party": "contractor",
+    "dealer": "supplier",
+}
+
+
+def _type_code_from_answers(answers: dict[str, Any]) -> str | None:
+    val = answers.get("Q-TYPE-001-contract-nature")
+    if isinstance(val, str) and val in _ANSWER_TYPE_CODE_MAP:
+        return _ANSWER_TYPE_CODE_MAP[val]
+    return None
+
+
+def _role_bucket_from_answers(answers: dict[str, Any]) -> str | None:
+    val = answers.get("Q-ROLE-001-our-position")
+    if isinstance(val, str) and val in _ANSWER_ROLE_BUCKET_MAP:
+        return _ANSWER_ROLE_BUCKET_MAP[val]
+    return None
 
 
 # ─── Private helpers ──────────────────────────────────────────────────────────
@@ -241,6 +372,24 @@ def _classify_type_code(
         if has("광고", "제작", "콘텐츠"):
             reasons.append("content_production_from_ip_transfer")
             return "advertising_content_production", reasons
+
+    # ── Step 0.5: 시험·검사·인증/분석 용역 (testing/inspection/certification) ──
+    # Must run before Step 5's weak ai_search_marketing check — a testing
+    # agreement that merely restricts use of a test report "in advertising"
+    # (성적서를 광고에 사용하지 말라는 사용제한) must NOT be classified as a
+    # marketing contract just because the word "광고" appears once.
+    has_testing_strong = has(
+        "시험연구원", "시험기관", "검사기관", "공인시험", "공인검사",
+        "인증기관", "교정기관", "시험성적서", "검사성적서",
+    )
+    has_testing_generic = has(
+        "시험분석", "시험 분석", "시험의뢰", "시험 의뢰", "품질검사", "품질 검사",
+        "검사의뢰", "인증심사", "적합성평가",
+    )
+    has_dealer_signal_early = has("위탁판매", "대리점", "판매대리점")
+    if (has_testing_strong or has_testing_generic) and not has_dealer_signal_early:
+        reasons.append("testing_inspection_service")
+        return "testing_inspection_service", reasons
 
     # ── Step 1: Evaluate consignment/dealer signals first ──────────────────
     # These must take priority over incidental dev-language in Article 19 etc.
@@ -335,11 +484,20 @@ def _classify_type_code(
         reasons.append("construction")
         return "construction", reasons
 
-    # ai_search_marketing: ONLY when AI/search-specific signals are present
+    # ai_search_marketing: ONLY when AI/search-specific signals are present.
+    # A single incidental word ("광고", "검색", "노출") anywhere in the document
+    # (e.g. a usage-restriction clause like "성적서를 광고에 사용하지 말 것") is
+    # NOT sufficient — that previously misclassified unrelated contracts
+    # (e.g. a testing-service agreement) as marketing contracts. Require the
+    # marketing keyword to co-occur with a service/contract-purpose signal.
     if has_ai_search_specific:
         reasons.append("ai_search_marketing_explicit")
         return "ai_search_marketing", reasons
-    if has("마케팅", "광고", "검색", "노출", "seo") and not has_production_core:
+    _has_marketing_purpose_context = has(
+        "마케팅 대행", "마케팅 용역", "마케팅 서비스", "광고 대행", "광고 캠페인",
+        "광고 집행", "매체 광고", "온라인 광고", "디지털 마케팅", "퍼포먼스 마케팅",
+    )
+    if _has_marketing_purpose_context and not has_production_core:
         reasons.append("ai_search_marketing_generic")
         return "ai_search_marketing", reasons
 
@@ -442,6 +600,8 @@ def _infer_legal_roles(
         return "principal", "operator"
     if type_code == "advisory_service":
         return "client", "advisor"
+    if type_code == "testing_inspection_service":
+        return "시험의뢰인(위탁자)", "시험수행기관(수탁자)"
     if type_code in ("software_app_development", "ai_search_marketing"):
         return "ordering_party", "developer"
     if type_code == "rental":
@@ -586,6 +746,7 @@ def _compute_confidence(type_code: str, reasons: list[str], text: str) -> float:
         "rental",
         "construction",
         "store_operation_outsourcing",
+        "testing_inspection_service",
     }
     if "no_strong_signal" in reasons:
         return 0.40

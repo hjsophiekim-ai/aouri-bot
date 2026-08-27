@@ -31,7 +31,23 @@ _OBJECTIVES: list[UserFocusObjective] = [
     UserFocusObjective(code="indemnification_recourse", title="구상권/소송비용 전가", keywords=["구상", "구상권", "소송비용", "변호사 보수", "변호사보수", "전액 배상", "손해 전부"]),
     UserFocusObjective(code="competition_restriction", title="경쟁/타 기관 거래 제한", keywords=["타 기관", "타기관", "유사한 계약", "유사 계약", "사전 통보", "사전통보", "겸업", "동종 업종", "독점적", "경쟁 관계"]),
     UserFocusObjective(code="publicity_marketing_consent", title="광고·판촉 활용 동의 제약", keywords=["광고", "판촉", "홍보", "마케팅", "대외 홍보", "사전 서면 동의", "서면 동의", "성적서 사용", "성과물 사용", "성적서의 사용"]),
+    UserFocusObjective(code="external_terms_incorporation", title="외부 약관·내부규정 포괄편입", keywords=["약관", "내부규정", "운영규정", "업무규정", "시험검사업무규정", "준용한다", "따른다", "정하는 바에 따라", "별도로 정하는"]),
+    UserFocusObjective(code="ambiguous_guarantee_joint_liability", title="지급보증/연대책임 등 모호한 확대해석 문구", keywords=["지급보증", "연대보증", "연대책임", "연대하여", "보증인", "책임을 진다", "일체의 책임을 진다"]),
+    UserFocusObjective(code="termination_right_restricted", title="계약기간 대비 해지권 과도 제한", keywords=["해지할 수 없다", "중도해지", "해지 제한", "해지 불가", "갱신 거절", "자동 연장", "계약기간"]),
 ]
+
+_OBJECTIVE_BY_CODE: dict[str, UserFocusObjective] = {o.code: o for o in _OBJECTIVES}
+
+
+def get_objective_keywords(code: str) -> list[str]:
+    """Public accessor: keyword list for a UserFocusObjective code, or []."""
+    o = _OBJECTIVE_BY_CODE.get((code or "").strip())
+    return list(o.keywords) if o else []
+
+
+def list_objectives() -> list[UserFocusObjective]:
+    """Public accessor: the full catalog of priority risk objectives."""
+    return list(_OBJECTIVES)
 
 def _objective_by_code(code: str) -> UserFocusObjective | None:
     c = (code or "").strip()
