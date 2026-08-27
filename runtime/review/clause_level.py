@@ -1304,8 +1304,20 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
         level = _classify_financial_risk_level(cr)
         cr["_priority_level"] = level
         tier = str(cr.get("risk_tier") or "").upper()
+        # 실제로 매칭된 룰(detected_issue_list/related_rules)이 있는 조항은
+        # "선언/일반 조항"이 아니라 이미 확인된 리스크다 — clause_topic이 비어
+        # LEVEL 3으로 떨어지더라도(예: RuleQueryService의 KR-*/ACT-* 매칭 결과처럼
+        # clause_topic을 세팅하지 않는 경로) 강제로 LOW 강등하면 false negative가 된다.
+        _has_substantiated_match = bool(cr.get("detected_issue_list")) or bool(cr.get("related_rules"))
         # LEVEL 3 — 선언/일반 조항: 실질 리스크 없으면 NOTE로 강등
-        if level == 3 and tier != "HIGH" and not bool(cr.get("must_fix")) and not bool(cr.get("user_focus_hit")) and not bool(cr.get("approval_required")):
+        if (
+            level == 3
+            and tier != "HIGH"
+            and not _has_substantiated_match
+            and not bool(cr.get("must_fix"))
+            and not bool(cr.get("user_focus_hit"))
+            and not bool(cr.get("approval_required"))
+        ):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
             cr["review_tier"] = "NOTE"
@@ -4654,6 +4666,15 @@ def build_clause_level_result(
     _apply_project_installation_checklist(clause_results, str(text or ""), _contract_class)
     # 1-2. [STEP 3] Supplier-Protective Product Contract 체크리스트
     _apply_supplier_product_checklist(clause_results, str(text or ""), _contract_class, party.our_role, review_posture)
+    # 1-3. [Layer 1 — 공통 법률리스크] 계약유형과 무관하게 모든 계약에서 검토.
+    # HARD BLOCK(계약유형 게이트)은 아래 Layer 2(유형특화) 룰에만 적용하고,
+    # 이 Layer 1은 절대 게이트하지 않는다 — 그래야 무관 룰 차단이 실제 존재하는
+    # 공통 리스크(일방 면책·무제한 구상·외부약관 편입 등) 탐지까지 죽이지 않는다.
+    from runtime.review.common_legal_risk import _apply_common_legal_risk_rules
+    _apply_common_legal_risk_rules(clause_results, str(text or ""))
+    # 1-4. [Layer 2 — 시험·검사·인증 용역 특화] testing_service 계약에서만 실행.
+    from runtime.review.testing_service_rules import _apply_testing_service_checklist
+    _apply_testing_service_checklist(clause_results, str(text or ""), _contract_class)
     # 2. 리뷰 우선순위 엔진 (LEVEL 1~3 분류, HIGH 최대 5개 — 체크리스트 제외)
     _apply_review_priority_engine(clause_results, max_high=5)
     # 3. No Inline Rewrite 정책 (advisory: 원문 보존 + [추가 권고] 형태)

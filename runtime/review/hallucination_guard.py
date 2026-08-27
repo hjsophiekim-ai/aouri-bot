@@ -18,8 +18,6 @@ from dataclasses import dataclass, field
 # These phrases belong to software development / SaaS contracts.
 # They must NOT appear in dealer, consignment, purchase, rental, or construction contracts.
 DEV_CONTRACT_PHRASES: list[str] = [
-    "수탁자",
-    "위탁자",
     "결과물",
     "산출물",
     "오픈소스",
@@ -37,14 +35,22 @@ DEV_CONTRACT_PHRASES: list[str] = [
     "소프트웨어 라이선스",
     "오픈소스 라이선스",
     "소프트웨어 개발 계약",
-    "수탁업체",
-    "위탁업체",
     "개발 산출물",
     "SBOM",
     "소프트웨어 개발",
     "시스템 개발",
     "개발용역",
     "유지보수 계약",
+]
+
+# "수탁자"/"위탁자" etc. are generic Korean contract-role labels used across
+# MANY legitimate contract types (시험·검사 위탁, R&D 위탁, 대행 위탁 등) — NOT
+# dev-contract-specific. They are only a wrong-context signal for DEALER
+# contracts specifically, which use 공급업자/대리점 terminology instead.
+# Checked separately (dealer types only) so a testing-service or other
+# legitimate 위탁/수탁 contract is never falsely flagged.
+_DEALER_ONLY_WRONG_CONTEXT_PHRASES: list[str] = [
+    "수탁자", "위탁자", "수탁업체", "위탁업체",
 ]
 
 # These phrases belong to advisory/consulting service contracts.
@@ -203,6 +209,12 @@ def check_revision_text(
     # Check dev phrases in non-dev contracts
     if contract_type_code not in _SOFTWARE_TYPE_CODES:
         for phrase in DEV_CONTRACT_PHRASES:
+            if phrase in text:
+                violations.append(f"dev_phrase_in_non_dev_contract:'{phrase}'")
+
+    # 수탁자/위탁자 등은 대리점 계약에서만 wrong-context (공급업자/대리점 용어를 써야 함)
+    if contract_type_code in _DEALER_TYPE_CODES:
+        for phrase in _DEALER_ONLY_WRONG_CONTEXT_PHRASES:
             if phrase in text:
                 violations.append(f"dev_phrase_in_non_dev_contract:'{phrase}'")
 

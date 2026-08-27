@@ -31,9 +31,23 @@ from pathlib import Path
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "fiti_testing_service_agreement.txt"
 
 _FORBIDDEN_MARKERS = [
-    "검수 완료 간주", "반품이 불가", "이행유보권", "주문제작 공정",
-    "무상 A/S 대상", "위험은 공급자가", "설치 환경 요건",
-    "CI/SI 가이드라인", "브랜드를 훼손", "위약벌을", "제3자의 저작권",
+    # 반품
+    "반품이 불가", "반품 요청서",
+    # A/S
+    "무상 A/S 대상", "A/S 제외",
+    # 설치환경
+    "설치 환경 요건",
+    # 주문제작 취소
+    "주문제작 공정", "주문제작 또는 설치가 완료된",
+    # 물품 위험이전
+    "위험은 공급자가", "위험이전 시점",
+    # 오픈소스
+    "오픈소스", "오픈소스 라이선스",
+    # CI/SI 위약벌
+    "CI/SI 가이드라인", "브랜드를 훼손", "위약벌을",
+    # 콘텐츠/IP 결과물 보증
+    "제3자의 저작권", "결과물 소유권", "저작재산권",
+    "검수 완료 간주", "이행유보권",
     "sppc_", "MI-001", "MI-002", "MI-003", "MI-004", "MR-001", "MR-005",
 ]
 
@@ -140,11 +154,73 @@ class PipelineNoOutOfScopeInjectionTest(unittest.TestCase):
         self.assertEqual(report.get("scope_violations_stripped"), [])
         self.assertTrue(report.get("passed"))
 
-    def test_self_check_flags_real_exculpatory_clause_as_uncovered(self) -> None:
-        # 제6조/제11조의 포괄적 면책조항(귀책사유 불문 면책)은 이 계약서에 실제로
-        # 존재하는 진짜 리스크다. self-check의 우선순위 리스크 커버리지 스캔이
-        # 이를 "본문에 있으나 아직 findings로 안 잡힘" 목록에 표시해야 한다 —
-        # 최소한 완전히 조용히 누락되지는 않는다.
+    def test_no_false_negative_zero_findings(self) -> None:
+        # This was the actual regression: HARD BLOCK removed the noise but
+        # also (via an unrelated pre-existing bug in the priority engine)
+        # suppressed every real finding down to HIGH=0/MEDIUM=0. Common
+        # legal-risk rules (Layer 1) must now produce real findings.
+        tier_counts = self.bundle.meta.get("tier_counts") or {}
+        self.assertGreater(tier_counts.get("must", 0), 0, "expected at least one HIGH finding")
+        self.assertGreater(tier_counts.get("medium", 0), 0, "expected at least one MEDIUM finding")
+        report = self.bundle.meta.get("self_check")
+        self.assertFalse(report.get("zero_findings_but_risk_language_present"))
+        self.assertEqual(report.get("review_status"), "OK")
+
+    def _clause_ids(self) -> set[str]:
+        return {str(cr.get("clause_id") or "") for cr in self.bundle.clause_results if isinstance(cr, dict)}
+
+    def _cr_by_id(self, clause_id: str) -> dict:
+        for cr in self.bundle.clause_results:
+            if isinstance(cr, dict) and cr.get("clause_id") == clause_id:
+                return cr
+        raise AssertionError(f"clause_id {clause_id!r} not found among findings: {sorted(self._clause_ids())}")
+
+    def test_article6_4_and_11_1_fault_blind_exemption_is_high(self) -> None:
+        # 제6조④ / 제11조① — 수탁자 귀책 여부와 무관한 전면 면책 -> HIGH
+        cr = self._cr_by_id("clr_fault_blind_exemption")
+        self.assertEqual(cr.get("risk_tier"), "HIGH")
+
+    def test_article6_5_and_11_2_unlimited_recourse_is_high_or_medium(self) -> None:
+        # 제6조⑤ / 제11조② — 배상액·소송비용/변호사보수 구상 -> HIGH 또는 MEDIUM
+        cr = self._cr_by_id("clr_unlimited_recourse_with_legal_costs")
+        self.assertIn(cr.get("risk_tier"), ("HIGH", "MEDIUM"))
+
+    def test_article5_other_lab_notice_is_medium(self) -> None:
+        # 제5조 — 타 시험기관과 유사 약정 체결 시 사전통보 -> MEDIUM
+        cr = self._cr_by_id("clr_competitor_restriction_notice")
+        self.assertEqual(cr.get("risk_tier"), "MEDIUM")
+
+    def test_article6_2_advertising_consent_is_medium(self) -> None:
+        # 제6조② — 성적서 광고·판촉 사전서면동의 -> MEDIUM
+        cr = self._cr_by_id("tsr_certificate_usage_restriction")
+        self.assertEqual(cr.get("risk_tier"), "MEDIUM")
+
+    def test_article12_termination_right_vs_2yr_term_is_medium(self) -> None:
+        # 제12조 — 2년 계약인데 편의해지권 없음 -> MEDIUM
+        cr = self._cr_by_id("clr_termination_right_restricted")
+        self.assertEqual(cr.get("risk_tier"), "MEDIUM")
+
+    def test_article14_1_standard_terms_incorporation_is_high_or_medium(self) -> None:
+        # 제14조① — FITI 표준시험약관·규정 포괄 적용 -> HIGH 또는 MEDIUM
+        cr = self._cr_by_id("clr_external_terms_incorporation")
+        self.assertIn(cr.get("risk_tier"), ("HIGH", "MEDIUM"))
+
+    def test_article4_4_payment_guarantee_misreading_flagged(self) -> None:
+        # 제4조④ — 협력사 미수금 관련 "적극 협조" -> 지급보증 오인 가능성 검토
+        cr = self._cr_by_id("clr_payment_guarantee_ambiguous")
+        self.assertIn(cr.get("risk_tier"), ("HIGH", "MEDIUM"))
+
+    def test_article8_5_data_reuse_flagged(self) -> None:
+        # 제8조⑤ — FITI의 자료 연구·분석 활용 -> 데이터 활용 리스크 검토
+        cr = self._cr_by_id("tsr_data_reuse_by_lab")
+        self.assertIn(cr.get("risk_tier"), ("HIGH", "MEDIUM"))
+
+    def test_self_check_flags_real_exculpatory_clause_as_uncovered_by_catalog(self) -> None:
+        # The user_focus priority-risk catalog's "exculpatory_clause" category
+        # keyword-matches this contract's text but the actual finding lives
+        # under a differently-named clause_id (clr_fault_blind_exemption) —
+        # self-check's coverage scan should still list it so a reviewer can
+        # cross-check the catalog against the concrete findings.
         report = self.bundle.meta.get("self_check")
         self.assertIn("exculpatory_clause", report.get("priority_risk_present_but_unflagged", []))
 

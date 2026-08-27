@@ -26,6 +26,21 @@ from runtime.review.user_focus import list_objectives
 
 _TOKEN_RX = re.compile(r"[가-힣]{2,}|[A-Za-z]{3,}")
 
+# Broad (looser than the Layer-1 detection regexes) keyword groups used only
+# to catch a HIGH=0/MEDIUM=0 result that is implausible given the contract's
+# own text — a lawyer would never sign off on "0 findings" for a contract
+# that visibly contains exemption/indemnity/termination/confidentiality
+# language. This is intentionally coarse: it exists to force a "재검토
+# 필요" flag, not to auto-generate findings.
+_FALSE_NEGATIVE_RISK_GROUPS: dict[str, list[str]] = {
+    "면책": ["면책", "책임을 지지 아니한다", "책임을 부담하지 아니한다", "귀책사유"],
+    "손해배상/구상": ["손해배상", "구상", "배상책임", "배상액"],
+    "해지": ["해지", "계약기간", "약정기간"],
+    "비밀유지": ["비밀유지", "기밀", "영업비밀"],
+    "외부약관편입": ["약관", "규정을 적용", "규정을 준용"],
+    "경쟁제한": ["유사한 내용의", "사전에 통보", "타 기관", "타기관"],
+}
+
 
 def _tokens(text: str) -> set[str]:
     return set(_TOKEN_RX.findall(text or ""))
@@ -137,9 +152,33 @@ def run_self_check(
             incomplete_high.append(str(cr.get("clause_id") or ""))
     report["incomplete_high_findings"] = incomplete_high
 
+    # (6) false-negative check: HIGH=0 and MEDIUM=0 must not silently pass as
+    # "no risk" when the contract text visibly contains common-risk language.
+    # When Layer 1 (common_legal_risk) and Layer 2 (type-specific) checklists
+    # both found nothing, re-scan with the broader keyword groups below —
+    # if any group hits, this is very likely a false negative (a detection
+    # gap), not a genuinely clean contract, and must be reported as such
+    # rather than shown to the reviewer as "이상 없음".
+    high_count = sum(1 for cr in clause_results if isinstance(cr, dict) and str(cr.get("risk_tier") or "").upper() == "HIGH")
+    medium_count = sum(1 for cr in clause_results if isinstance(cr, dict) and str(cr.get("risk_tier") or "").upper() == "MEDIUM")
+    false_negative_suspected = False
+    triggered_risk_groups: list[str] = []
+    if high_count == 0 and medium_count == 0:
+        for group_name, keywords in _FALSE_NEGATIVE_RISK_GROUPS.items():
+            if any(kw in text for kw in keywords):
+                triggered_risk_groups.append(group_name)
+        false_negative_suspected = bool(triggered_risk_groups)
+    report["zero_findings_but_risk_language_present"] = false_negative_suspected
+    report["zero_findings_triggered_risk_groups"] = triggered_risk_groups
+    if false_negative_suspected:
+        report["review_status"] = "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE"
+    else:
+        report["review_status"] = "OK"
+
     report["passed"] = (
         not scope_violations
         and not report["type_confidence_low"]
         and not incomplete_high
+        and not false_negative_suspected
     )
     return report
