@@ -225,6 +225,59 @@ class PipelineNoOutOfScopeInjectionTest(unittest.TestCase):
         self.assertIn("exculpatory_clause", report.get("priority_risk_present_but_unflagged", []))
 
 
+class ReviewFocusSurfacesEvenWithoutRuleDbMatchTest(unittest.TestCase):
+    """Regression: a clause matching the user's stated review_focus keywords
+    must appear in the output even when no JSON rule in the rule DB happens
+    to trigger on it — a clause used to be silently dropped from
+    revision.py's per-clause loop entirely (`if not clause_issues: continue`)
+    whenever no rule matched, regardless of review_focus."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from runtime.rules.loader import RuleLoader
+        from runtime.services.query_service import RuleQueryService
+        from runtime.review.clause_level import build_clause_level_result
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        cls.bundle = build_clause_level_result(
+            service=service,
+            entity="시디즈",
+            contract_type="",
+            text=text,
+            filename="시디즈_FITI_시험분석약정서.pdf",
+            answers=None,
+            review_focus="면책 조항과 구상권 범위를 중점적으로 봐주세요",
+            law_service=None,
+            ai_provider=None,
+            ai_model=None,
+            ai_timeout_sec=None,
+            ai_max_tokens=None,
+            ai_temperature=None,
+        )
+
+    def test_focus_matched_clauses_are_surfaced(self) -> None:
+        hit_ids = {
+            str(cr.get("clause_id") or "")
+            for cr in self.bundle.clause_results
+            if isinstance(cr, dict) and cr.get("user_focus_hit")
+        }
+        self.assertTrue(hit_ids, "no clause was tagged user_focus_hit for a review_focus that clearly matches 제6조/제11조")
+
+    def test_focus_matched_clause_is_not_silently_low(self) -> None:
+        # At least one of the focus-matched clauses must be visible at
+        # MEDIUM+ — LOW-only findings are excluded from default output, which
+        # would mean the user's stated focus area is effectively invisible.
+        promoted = [
+            cr for cr in self.bundle.clause_results
+            if isinstance(cr, dict) and cr.get("user_focus_hit")
+            and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+        ]
+        self.assertTrue(promoted, "review_focus-matched clause(s) were left at LOW and effectively hidden")
+
+
 class HallucinationGuardBackstopTest(unittest.TestCase):
     """Direct unit tests on the new phrase lists — belt-and-suspenders even
     if a future injector function reintroduces the bug."""

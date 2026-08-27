@@ -76,6 +76,22 @@ def suggest_revisions(
         kws = _extract_trigger_keywords(r)
         rule_keywords[rid] = [k for k in kws if isinstance(k, str) and k.strip()]
 
+    # 사용자가 review_focus/사전질문 답변으로 직접 지정한 검토영역의 키워드.
+    # 이 키워드가 조항 본문에 있으면, 그 조항이 JSON 룰 DB의 어떤 트리거
+    # 키워드와도 매칭되지 않더라도(clause_issues가 비어도) 결과에서 완전히
+    # 누락되지 않도록 한다 — 그렇지 않으면 사용자가 "이 부분을 봐달라"고
+    # 명시한 조항이 룰 DB 공백 때문에 검토 결과에 아예 등장하지 않게 된다.
+    _focus_keywords_by_code: dict[str, list[str]] = {}
+    if isinstance(contract_context, dict):
+        _frc = contract_context.get("final_review_context")
+        if isinstance(_frc, dict):
+            for _fi in (_frc.get("user_focus_issues") or []):
+                if isinstance(_fi, dict) and isinstance(_fi.get("code"), str):
+                    _kws = [str(k) for k in (_fi.get("keywords") or []) if isinstance(k, str) and k.strip()]
+                    if _kws:
+                        _focus_keywords_by_code[str(_fi["code"])] = _kws
+    _all_focus_keywords = [k for kws in _focus_keywords_by_code.values() for k in kws]
+
     items: list[dict[str, Any]] = []
     for c in clauses:
         clause_topic = classify_clause_topic(title=str(c.title or ""), text=str(c.text or ""))
@@ -132,7 +148,8 @@ def suggest_revisions(
                 )
                 evidence.append({"rule_id": rid, "matched_keywords": matched_kws})
 
-        if not clause_issues:
+        _user_focus_text_hit = any(k.lower() in search_text.lower() for k in _all_focus_keywords if k)
+        if not clause_issues and not _user_focus_text_hit:
             continue
 
         suggestion_dirs = []
@@ -173,6 +190,12 @@ def suggest_revisions(
             reason_codes=reason_codes,
             text=str(c.text or ""),
         )
+        # 룰 DB 매칭 없이 사용자 지정 검토영역만으로 살아남은 조항은, 최소한
+        # LOW로 묻혀 기본 출력에서 사라지지 않도록 MEDIUM 이상을 보장한다 —
+        # 사용자가 "이 부분을 봐달라"고 명시했는데 결과에서 실질적으로 안 보이면
+        # 반영이 안 된 것과 같다.
+        if not clause_issues and _user_focus_text_hit and str(risk_tier or "LOW").upper() == "LOW":
+            risk_tier = "MEDIUM"
 
         unfavorable_to_us = _infer_unfavorable_to_us(
             clause_text=str(c.text or ""),

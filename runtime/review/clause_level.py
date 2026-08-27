@@ -4565,7 +4565,14 @@ def build_clause_level_result(
                     cr["must_fix"] = False
                     cr["review_tier"] = "SUGGEST"
                 continue
-        if tier0 == "MEDIUM" and not (bool(cr.get("approval_required")) or bool(cr.get("high_risk"))):
+        if tier0 == "MEDIUM" and not (
+            bool(cr.get("approval_required"))
+            or bool(cr.get("high_risk"))
+            or bool(cr.get("user_focus_hit"))
+            or bool(cr.get("is_common_legal_risk"))
+            or bool(cr.get("is_checklist_item"))
+            or bool(cr.get("is_mandatory"))
+        ):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
             cr["review_tier"] = "NOTE"
