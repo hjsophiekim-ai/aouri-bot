@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from runtime.ai.config import load_ai_config
 from runtime.ai.enhance import polish_draft_text, polish_questions, polish_revision, prioritize_questions
-from runtime.ai.factory import create_ai_provider
+from runtime.ai.factory import create_ai_provider, is_ai_enabled
 from runtime.ai.provider import AIMessage, AIRequest
 from runtime.ai.safe import sanitize_error_message
 from runtime.admin.ui import ADMIN_HTML
@@ -355,7 +355,7 @@ def create_handler(service: RuleQueryService):
 
             if path == "/api/ai/health":
                 cfg = load_ai_config()
-                enabled = bool(cfg.api_key) and cfg.provider == "openai"
+                enabled = is_ai_enabled(cfg)
                 if not enabled:
                     _json_response(
                         self,
@@ -364,7 +364,7 @@ def create_handler(service: RuleQueryService):
                             "enabled": False,
                             "provider": "mock",
                             "model": cfg.model,
-                            "note": "OPENAI_API_KEY not set; using mock provider",
+                            "note": "OPENAI_API_KEY/ANTHROPIC_API_KEY not set; using mock provider",
                         },
                     )
                     return
@@ -770,7 +770,7 @@ def create_handler(service: RuleQueryService):
                 _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "law_mode=on but LAW_API is not configured"})
                 return
             cfg = load_ai_config()
-            ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+            ai_provider = create_ai_provider(cfg) if is_ai_enabled(cfg) else None
             if ai_mode == "off":
                 ai_provider = None
             elif ai_mode == "on" and ai_provider is None:
@@ -791,7 +791,7 @@ def create_handler(service: RuleQueryService):
                     ai_provider=ai_provider,
                     ai_model=cfg.model if ai_provider else None,
                     ai_timeout_sec=min(cfg.timeout_sec, 45.0) if ai_provider else None,
-                    ai_max_tokens=min(max(cfg.max_tokens, 1200), 2000) if ai_provider else None,
+                    ai_max_tokens=min(max(cfg.max_tokens, 2000), 3200) if ai_provider else None,
                     ai_temperature=cfg.temperature if ai_provider else None,
                     max_clause_law_items=1,
                 )
@@ -844,7 +844,7 @@ def create_handler(service: RuleQueryService):
                     "results": {"laws": [], "precedents": [], "interpretations": [], "admin_rules": [], "local_ordinances": []},
                     "errors": [],
                 }
-            ai_enabled = bool(ai_provider) and cfg.provider == "openai"
+            ai_enabled = bool(ai_provider) and is_ai_enabled(cfg)
             meta_ai = (bundle.meta.get("ai") if isinstance(bundle.meta, dict) else None) if isinstance(bundle.meta, dict) else None
             ai_used = bool(isinstance(meta_ai, dict) and meta_ai.get("used"))
             result["ai"] = {
@@ -1287,7 +1287,7 @@ def create_handler(service: RuleQueryService):
                 _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "law_mode=on but LAW_API is not configured"})
                 return
             cfg = load_ai_config()
-            ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+            ai_provider = create_ai_provider(cfg) if is_ai_enabled(cfg) else None
             if ai_mode == "off":
                 ai_provider = None
             elif ai_mode == "on" and ai_provider is None:
@@ -1305,7 +1305,7 @@ def create_handler(service: RuleQueryService):
                 ai_provider=ai_provider,
                 ai_model=cfg.model if ai_provider else None,
                 ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-                ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
+                ai_max_tokens=min(max(cfg.max_tokens, 4000), 8000) if ai_provider else None,
                 ai_temperature=cfg.temperature if ai_provider else None,
                 max_clause_law_items=2,
             )
@@ -1376,7 +1376,7 @@ def create_handler(service: RuleQueryService):
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": "law_mode=on but LAW_API is not configured"})
                     return
                 cfg = load_ai_config()
-                ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+                ai_provider = create_ai_provider(cfg) if is_ai_enabled(cfg) else None
                 if ai_mode == "off":
                     ai_provider = None
                 elif ai_mode == "on" and ai_provider is None:
@@ -1958,7 +1958,7 @@ def create_handler(service: RuleQueryService):
             q_items = [question_to_dict(q) for q in questions]
             ai_meta: dict[str, Any] | None = None
             cfg = load_ai_config()
-            if cfg.provider == "openai" and cfg.api_key and q_items:
+            if is_ai_enabled(cfg) and q_items:
                 try:
                     provider = create_ai_provider(cfg)
                     app_dev_hint = any(
@@ -2062,7 +2062,7 @@ def create_handler(service: RuleQueryService):
                 return
             cfg = load_ai_config()
             ai_meta = None
-            if cfg.provider == "openai" and cfg.api_key and isinstance(result.get("draft_text"), str):
+            if is_ai_enabled(cfg) and isinstance(result.get("draft_text"), str):
                 provider = create_ai_provider(cfg)
                 new_text, meta = polish_draft_text(
                     provider=provider,

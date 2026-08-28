@@ -133,6 +133,7 @@ class LawSearchService:
                     query_reasons=fb,
                     start_ts=start_ts,
                     time_budget_sec=float(time_budget_sec),
+                    profile=profile,
                 )
                 out["results"]["precedents"] = self._search_target(
                     "prec",
@@ -143,6 +144,7 @@ class LawSearchService:
                     query_reasons=fb,
                     start_ts=start_ts,
                     time_budget_sec=float(time_budget_sec),
+                    profile=profile,
                 )
                 out["results"]["interpretations"] = self._search_target(
                     "expc",
@@ -153,6 +155,7 @@ class LawSearchService:
                     query_reasons=fb,
                     start_ts=start_ts,
                     time_budget_sec=float(time_budget_sec),
+                    profile=profile,
                 )
         if (
             scope == "contract"

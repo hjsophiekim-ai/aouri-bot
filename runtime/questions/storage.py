@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from runtime.ai.config import load_ai_config
-from runtime.ai.factory import create_ai_provider
+from runtime.ai.factory import create_ai_provider, is_ai_enabled
 from runtime.law.cache import JsonFileCache
 from runtime.law.config import load_law_api_config
 from runtime.law.search_service import LawSearchService
@@ -282,7 +282,7 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
     law_cache = JsonFileCache(path=DATA_DIR / "law_cache.json")
     law_service = LawSearchService(cfg=law_cfg, cache=law_cache) if law_cfg.enabled and law_cfg.api_key else None
     cfg = load_ai_config()
-    ai_provider = create_ai_provider(cfg) if cfg.provider == "openai" and cfg.api_key else None
+    ai_provider = create_ai_provider(cfg) if is_ai_enabled(cfg) else None
     bundle = build_clause_level_result(
         service=service,
         entity=str(entity),
@@ -295,7 +295,10 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
         ai_provider=ai_provider,
         ai_model=cfg.model if ai_provider else None,
         ai_timeout_sec=cfg.timeout_sec if ai_provider else None,
-        ai_max_tokens=min(max(cfg.max_tokens, 2400), 3600) if ai_provider else None,
+        # Hybrid AI review schema (5-step reasoning + original_text_quote/
+        # party_obligations/our_company_risk per item) needs more output
+        # budget per chunk than the older rewrite-only schema did.
+        ai_max_tokens=min(max(cfg.max_tokens, 4000), 8000) if ai_provider else None,
         ai_temperature=cfg.temperature if ai_provider else None,
         max_clause_law_items=2,
     )
@@ -322,7 +325,7 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
         doc["original_clauses"] = original_clauses
     result["original_clauses"] = original_clauses
     meta_ai = (bundle.meta.get("ai") if isinstance(bundle.meta, dict) else None) if isinstance(bundle.meta, dict) else None
-    ai_enabled = bool(ai_provider) and cfg.provider == "openai"
+    ai_enabled = bool(ai_provider) and is_ai_enabled(cfg)
     ai_used = bool(isinstance(meta_ai, dict) and meta_ai.get("used"))
     result["ai"] = {
         "enabled": ai_enabled,

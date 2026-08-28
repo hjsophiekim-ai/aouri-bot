@@ -48,7 +48,7 @@ def _coerce_bool(v: Any, default: bool) -> bool:
 
 
 def load_law_api_config() -> LawApiConfig:
-    existing = os.getenv("LAW_API_KEY")
+    existing = os.getenv("LAW_API_KEY") or os.getenv("LAW_API_ID")
     if existing is None or str(existing).strip() == "":
         load_dotenv(
             resolve_dotenv_paths(cwd=Path.cwd(), repo_root=REPO_ROOT),
@@ -57,7 +57,9 @@ def load_law_api_config() -> LawApiConfig:
 
     enabled = _coerce_bool(os.getenv("LAW_API_ENABLED", "false"), False)
 
-    api_key_raw = os.getenv("LAW_API_KEY")
+    # 국가법령정보 Open API 가이드는 이 인증값을 'OC'(API ID)라고 부른다 —
+    # LAW_API_ID는 그 명칭을 그대로 쓴 사용자를 위한 별칭이다.
+    api_key_raw = os.getenv("LAW_API_KEY") or os.getenv("LAW_API_ID")
     api_key = api_key_raw.strip() if isinstance(api_key_raw, str) and api_key_raw.strip() else None
 
     base_url_raw = os.getenv("LAW_API_BASE_URL") or "https://www.law.go.kr/DRF"

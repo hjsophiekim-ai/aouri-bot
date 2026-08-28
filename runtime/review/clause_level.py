@@ -888,6 +888,37 @@ def _score_for_ai_deep_review(
     return score
 
 
+_AI_SEVERITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+
+
+def _ai_quote_is_grounded(quote: Any, original_text: str) -> bool:
+    """[Hybrid AI Review guardrail] The AI must ground any severity call in an
+    actual excerpt of the clause it is reasoning about. Reject ungrounded
+    severity changes rather than trust a bare label — this is what stops the
+    AI from re-creating the exact "사용자 중점 이슈: X" bare-label problem,
+    just via a different code path.
+    """
+    if not isinstance(quote, str):
+        return False
+    q = quote.strip()
+    if len(q) < 8:
+        return False
+    hay = (original_text or "")
+    if q in hay:
+        return True
+    # Loose fallback: require a meaningful contiguous run (first 12 chars) to
+    # tolerate the AI lightly normalising whitespace/punctuation in the quote.
+    probe = q[:12]
+    return len(probe) >= 8 and probe in hay
+
+
+def _sanitize_ai_severity(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    v = value.strip().upper()
+    return v if v in _AI_SEVERITY_RANK else None
+
+
 def _compute_ai_deep_review_target_count(*, clause_count: int, must_count: int, medium_count: int) -> int:
     base = 8 + max(0, (int(clause_count) - 12) // 8)
     target = max(base, int(must_count))
@@ -901,7 +932,9 @@ def _compute_ai_deep_review_target_count(*, clause_count: int, must_count: int, 
 # =============================================================================
 
 _RENTAL_KW = re.compile(r"렌탈|구독|임대차|Lease", re.IGNORECASE)
-_RENTAL_COMMENT_KW = re.compile(r"소유권|위약금|렌탈|임대|리스|반납|반환.*계약|구독.*해지")
+# "리스" 뒤에 부정형 lookahead를 두어 "리스크"(risk)/"리스트"(list)와 혼동되지
+# 않게 한다 — "리스료"/"리스 계약" 등 실제 렌탈/리스(lease) 관련 표현은 계속 매칭.
+_RENTAL_COMMENT_KW = re.compile(r"소유권|위약금|렌탈|임대|리스(?!크|트)|반납|반환.*계약|구독.*해지")
 
 _EN_NDA_TRIGGER_PATTERNS = [
     re.compile(r"\bStuttgart\b|\bMunich\b|\bFrankfurt\b|\bHamburg\b|\bBerlin\b", re.IGNORECASE),
@@ -1072,7 +1105,10 @@ def _apply_clause_integrity_filter(clause_results: list[dict[str, Any]]) -> None
                 cr["guardrail_block"] = {"filter": "clause_integrity", "blocked": blocked}
 
 
-_RX_FOREIGN_ARTICLE_HEADING = re.compile(r"제\s*(\d{1,3})\s*조")
+# 진짜 조항 표제("제12조(약정의 종료 및 해지)")만 매칭하고, 본문 중 정상적인
+# 상호참조("제3조 제3항 또는 제4항을 위반하여")는 매칭하지 않도록 뒤에 "("가
+# 오는 경우로 제한한다 — 상호참조는 계약서 어디서나 흔하고 정상적이다.
+_RX_FOREIGN_ARTICLE_HEADING = re.compile(r"제\s*(\d{1,3})\s*조\s*\(")
 
 
 def _apply_original_text_integrity_guard(clause_results: list[dict[str, Any]]) -> None:
@@ -3956,7 +3992,48 @@ def build_clause_level_result(
     selected = deep_review_shortlist[: max(0, desired)]
     # dedup_suppressed 항목은 AI 처리 대상에서 제외
     selected = [cr for cr in selected if not bool(cr.get("dedup_suppressed"))]
-    selected_ids = [str(cr.get("clause_id") or "") for cr in selected if str(cr.get("clause_id") or "")]
+
+    # ── [Hybrid AI Review] 룰 DB/키워드가 전혀 건드리지 않은 조항도 AI에게 보여준다.
+    # 지금까지는 clause_results(이미 룰 매칭되었거나 review_focus에 걸린 조항)만
+    # AI에게 보내, AI는 "이미 알려진 문제의 표현을 다듬는" 역할만 할 수 있었다.
+    # 룰 DB에 없는 리스크를 AI가 스스로 발견하게 하려면, 문서 전체 조항 중
+    # 아직 결과에 없는 조항도 최소한 한 번은 AI 검토 대상에 포함해야 한다.
+    _EXPLORATION_CAP = 40
+    exploration_items: list[dict[str, Any]] = []
+    if ai_enabled:
+        _existing_ids = {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}
+        _room = max(0, _EXPLORATION_CAP - len(selected))
+        for c in clauses:
+            if _room <= 0:
+                break
+            cid = str(c.clause_id or "")
+            if not cid or cid in _existing_ids:
+                continue
+            txt = str(c.text or "").strip()
+            if len(txt) < 15:
+                continue
+            exploration_items.append({
+                "clause_id": cid,
+                "article_number": c.article_number,
+                "display_path": c.display_path,
+                "clause_title": str(c.title or ""),
+                "clause_topic": None,
+                "risk_tier": "LOW",
+                "must_fix": False,
+                "user_focus_hit": False,
+                "original_text": txt,
+                "context_text": c.context_text,
+                "detected_issue_list": [],
+                "related_rules": [],
+                "related_laws": None,
+                "suggested_rewrite": None,
+                "is_exploration_only": True,
+            })
+            _existing_ids.add(cid)
+            _room -= 1
+    ai_review_items = list(selected) + exploration_items
+
+    selected_ids = [str(cr.get("clause_id") or "") for cr in ai_review_items if str(cr.get("clause_id") or "")]
     selected_id_set = set(selected_ids)
     for cr in clause_results:
         cr["ai_deep_reviewed"] = str(cr.get("clause_id") or "") in selected_id_set
@@ -4065,6 +4142,8 @@ def build_clause_level_result(
         parts = [p for p in parts if p][:2]
         cr["rewrite_reason"] = " / ".join(parts) if parts else None
 
+    # [Hybrid AI Review] 결과 상단에 표시할 검토 방식 배너 — API 키가 없어서
+    # rule-based fallback으로 돌아간 경우를 "정상 AI 검토"처럼 보이게 하지 않는다.
     ai_state: dict[str, Any] = {
         "enabled": bool(ai_enabled),
         "used": False,
@@ -4074,6 +4153,13 @@ def build_clause_level_result(
         "ok": None,
         "error": None,
         "usage": None,
+        "mode": "ai_legal_review" if ai_enabled else "rule_based_fallback",
+        "banner": (
+            f"AI 법률검토 활성화 (모델: {ai_model})"
+            if ai_enabled
+            else "AI 법률검토 비활성화 — Rule-based fallback (키워드/패턴 기반 룰 엔진 결과입니다. "
+                 "OPENAI_API_KEY 또는 ANTHROPIC_API_KEY를 설정하면 AI 기반 조항별 법률검토가 활성화됩니다.)"
+        ),
     }
     # [STEP 1 + STEP 4] 공급자 방어 원칙 — seller_favorable 시 AI 프롬프트에 추가
     _supplier_guardrail_addendum = ""
@@ -4113,7 +4199,51 @@ def build_clause_level_result(
             "5. 실제 협상에서 우리 법무팀이 거부할 가능성이 높은가?\n"
         )
 
-    if ai_enabled and selected:
+    # ── [Hybrid AI Review] 계약유형별 "이 계약에서는 제안 금지" 카테고리 ─────
+    # AI가 스스로 판단하기 전에, 룰 엔진이 이미 확정한 계약유형/스코프 정보를
+    # 알려줘서 애초에 무관한 제안을 만들지 않게 한다. 그래도 만들어지면
+    # hallucination_guard/self_check가 최종적으로 걸러낸다(2중 방어).
+    _OUT_OF_SCOPE_BY_CLASS: dict[str, str] = {
+        "testing_service": "물품공급/검수/반품/A/S/위험이전/설치환경/주문제작취소/이행유보권, CI/SI·브랜드 위약벌, 콘텐츠·IP 결과물 귀속/보증",
+        "advisory": "물품공급/검수/반품/A/S/위험이전/설치환경, CI/SI·브랜드 위약벌, 대리점/유통 관련 조항",
+        "content_production": "물품공급/검수/반품/A/S/위험이전/설치환경, 대리점/유통 관련 조항",
+        "rental": "IP/저작권 귀속, 소프트웨어 개발 관련 조항, 대리점/유통 관련 조항",
+        "construction": "IP/저작권 귀속, 소프트웨어 개발 관련 조항",
+        "project_installation": "IP/저작권 귀속, 대리점/유통 관련 조항",
+    }
+    _out_of_scope_notice = _OUT_OF_SCOPE_BY_CLASS.get(_contract_class, "")
+    _canonical_type_code = _canonical_profile.contract_type
+    _our_role_bucket = _canonical_profile.our_role_bucket
+
+    _HYBRID_SCHEMA_AND_SEVERITY_INSTRUCTIONS = (
+        "\n\n## [핵심] 이 조항에 룰 엔진이 부여한 risk_tier/must_fix는 참고용 초기값일 뿐이다 — "
+        "그대로 베끼지 말고, 아래 5단계에 따라 직접 재평가하라:\n"
+        "1) 원문 의미: 이 조항이 실제로 규정하는 권리·의무가 무엇인가\n"
+        "2) 당사자 권리·의무: 이 조항으로 각 당사자가 구체적으로 무엇을 하거나 하지 않아야 하는가\n"
+        "3) 우리 회사 리스크: 이로 인해 우리 회사(제공된 party_role/our_role_bucket 기준)가 실제로 손해를 보거나 "
+        "의무를 부담하게 되는 지점이 있는가\n"
+        "4) 법적/실무적 이유: 왜 그것이 문제인가(법적 근거 또는 실무 리스크)\n"
+        "5) 최소 수정안: 계약 구조·거래 취지를 최대한 유지하면서 그 리스크만 제거하는 최소한의 수정 문구\n\n"
+        "이 5단계를 거친 뒤, 실제로 우리 회사에 불리한 리스크가 있다고 판단되면 룰 엔진의 초기값과 무관하게 "
+        "risk_tier를 HIGH/MEDIUM/LOW 중 하나로 직접 산정하라(초기값이 LOW/무시상태였던 조항이라도, 실제로 "
+        "중대한 리스크를 발견하면 HIGH로 상향하라 — 이것이 이 검토의 핵심 목적이다). "
+        "반대로 초기값이 HIGH/MEDIUM인 조항을 낮추려면 rewrite_reason에 왜 실제로는 문제가 아닌지 반드시 명시하라. "
+        f"is_exploration_only=true인 항목은 룰 엔진이 전혀 검토하지 않은 조항이다 — 실제 리스크가 없다고 "
+        "판단되면 결과에서 제외해도 되고(items 배열에서 생략), 리스크가 있으면 반드시 포함하라.\n\n"
+        + (f"## 이 계약유형({_contract_class})에서는 다음 카테고리의 제안을 절대 하지 말 것: {_out_of_scope_notice}\n\n" if _out_of_scope_notice else "")
+        + "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
+        "각 원소 형식은 clause_id/original_text_quote/party_obligations/our_company_risk/rewrite_reason/"
+        "suggested_rewrite/changed_segments/risk_tier/must_fix 로 통일하라. "
+        "original_text_quote: 판단의 근거가 된 원문 조항에서 그대로(변형 없이) 발췌한 10자 이상의 문구 — "
+        "원문에 실제로 없는 문구를 지어내지 마라. "
+        "party_obligations: 이 조항이 규정하는 각 당사자의 권리·의무를 80자 이내 1문장으로. "
+        "our_company_risk: 우리 회사가 부담하게 되는 구체적 리스크를 80자 이내 1문장으로(리스크가 없으면 빈 문자열). "
+        "위 모든 필드를 합쳐도 조항당 출력이 지나치게 길어지지 않도록 간결하게 작성하라 — "
+        "한 응답에 여러 조항을 함께 출력해야 하므로 장황한 설명은 금지한다."
+        "changed_segments는 변경된 핵심 구간 최대 3개를 {before, after} 형태로 요약하라."
+    )
+
+    if ai_enabled and ai_review_items:
         if _is_advisory_class:
             # Advisory/자문/용역 계약 전용 AI 프롬프트 — Logic Isolation (Phase 2)
             # [FOUNDATIONAL SYSTEM CHANGE] Legal Scenario Reasoning Engine 적용
@@ -4141,12 +4271,8 @@ def build_clause_level_result(
                 "rewrite_reason에서 그 요청에 구체적으로 대응하는 근거를 제시하라. "
                 "answers에 사용자가 제공한 사실관계(과거 사례, 계획, 빈도 등)가 있으면 이를 반영하여 리스크 평가와 수정안을 조정하라.\n"
                 "rewrite_reason: 법률 근거 + 실제 손실 시나리오 중심으로 220자 이내.\n"
-                "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체.\n"
-                "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
-                "각 원소 형식은 clause_id/rewrite_reason/suggested_rewrite/changed_segments/risk_tier/must_fix 로 통일하라. "
-                "risk_tier와 must_fix는 입력값을 그대로 유지해 출력하라. "
-                "changed_segments는 변경된 핵심 구간 최대 3개를 {before, after} 형태로 요약하라."
-            ) + _supplier_guardrail_addendum
+                "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체."
+            ) + _HYBRID_SCHEMA_AND_SEVERITY_INSTRUCTIONS + _supplier_guardrail_addendum
         elif cross_border0 and str(jur_kind0 or "") != "domestic_korea":
             # Cross-border / English NDA 전용 프롬프트 — 국제 법무 특화
             system = EN_NDA_CLAUSE_REVIEW_SYSTEM + _supplier_guardrail_addendum
@@ -4177,12 +4303,8 @@ def build_clause_level_result(
                 "rewrite_reason에서 그 요청에 구체적으로 대응하는 근거를 제시하라. "
                 "answers에 사용자가 제공한 사실관계(과거 사례, 계획, 빈도 등)가 있으면 이를 반영하여 리스크 평가와 수정안을 조정하라.\n"
                 "rewrite_reason: 실제 손실 시나리오 + 법률 근거 + 협상 논리, 220자 이내.\n"
-                "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체.\n"
-                "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
-                "각 원소 형식은 clause_id/rewrite_reason/suggested_rewrite/changed_segments/risk_tier/must_fix 로 통일하라. "
-                "risk_tier와 must_fix는 입력값을 그대로 유지해 출력하라. "
-                "changed_segments는 변경된 핵심 구간 최대 3개를 {before, after} 형태로 요약하라."
-            ) + _supplier_guardrail_addendum
+                "suggested_rewrite: 협상 테이블에 바로 올릴 수 있는 계약 문구, 900자 이내, 법무 문체."
+            ) + _HYBRID_SCHEMA_AND_SEVERITY_INSTRUCTIONS + _supplier_guardrail_addendum
 
         def chunked(xs: list[dict[str, Any]], n: int) -> list[list[dict[str, Any]]]:
             if n <= 0:
@@ -4192,17 +4314,28 @@ def build_clause_level_result(
                 out.append(xs[i : i + n])
             return out
 
-        chunk_size = 7
-        chunks = chunked(selected, chunk_size)
+        # 5-step reasoning + original_text_quote/party_obligations/our_company_risk를
+        # 추가하면서 항목당 출력 분량이 늘었다 — 청크당 항목 수를 줄여 max_tokens
+        # 초과로 인한 JSON 잘림(파싱 실패)을 방지한다.
+        chunk_size = 5
+        chunks = chunked(ai_review_items, chunk_size)
         errors: list[str] = []
         usages: list[dict[str, Any]] = []
         ok_all = True
         any_used = False
+        exploration_by_id: dict[str, dict[str, Any]] = {
+            str(it.get("clause_id")): it for it in exploration_items if it.get("clause_id")
+        }
+        ai_discovered_count = 0
+        ai_grounding_rejected: list[str] = []
         for ch in chunks:
             user = json.dumps(
                 {
                     "entity": entity,
                     "contract_type": contract_type,
+                    "contract_type_code": _canonical_type_code,
+                    "our_role_bucket": _our_role_bucket,
+                    "out_of_scope_categories": _out_of_scope_notice or None,
                     "final_review_context": (contract_context.get("final_review_context") if isinstance(contract_context, dict) else None),
                     "review_posture": review_posture,
                     "party_role": party.to_dict(),
@@ -4223,6 +4356,7 @@ def build_clause_level_result(
                             "related_rules": cr.get("related_rules"),
                             "related_laws": cr.get("related_laws"),
                             "fallback_rewrite": cr.get("suggested_rewrite"),
+                            "is_exploration_only": bool(cr.get("is_exploration_only")),
                         }
                         for cr in ch
                     ],
@@ -4255,29 +4389,34 @@ def build_clause_level_result(
                     cid = it.get("clause_id")
                     if isinstance(cid, str) and cid:
                         by_id[cid] = it
-                for cr in clause_results:
-                    cid = cr.get("clause_id")
-                    upd = by_id.get(cid) if isinstance(cid, str) else None
-                    if not upd:
-                        continue
-                    # dedup_suppressed 항목은 AI 수정안을 적용하지 않는다
-                    if bool(cr.get("dedup_suppressed")):
-                        continue
+
+                _FLOOR_PROTECTED_KEYS = ("is_common_legal_risk", "is_checklist_item", "is_mandatory")
+
+                def _apply_ai_update(cr: dict[str, Any], upd: dict[str, Any], *, is_new: bool) -> None:
                     rr = upd.get("rewrite_reason")
                     sr = upd.get("suggested_rewrite")
                     cs = upd.get("changed_segments")
                     wcs = upd.get("worst_case_scenario")
                     neg = upd.get("negotiation_strategy")
+                    quote = upd.get("original_text_quote")
+                    ai_sev = _sanitize_ai_severity(upd.get("risk_tier"))
+                    original_text = str(cr.get("original_text") or "")
+                    grounded = _ai_quote_is_grounded(quote, original_text)
+
                     if isinstance(rr, str) and rr.strip():
                         cr["rewrite_reason"] = polish_korean_legal_style(rr.strip())
                     if isinstance(sr, str) and sr.strip():
                         cr["suggested_rewrite"] = polish_korean_legal_style(sr.strip())
-                    # worst_case_scenario: AI 생성값이 있으면 우선, 없으면 기존 룰셋값 유지
                     if isinstance(wcs, str) and wcs.strip():
                         cr["worst_case_scenario"] = wcs.strip()
-                    # negotiation_strategy: AI 생성값이 있으면 우선, 없으면 기존 룰셋값 유지
                     if isinstance(neg, str) and neg.strip():
                         cr["negotiation_strategy"] = neg.strip()
+                    po = upd.get("party_obligations")
+                    if isinstance(po, str) and po.strip():
+                        cr["party_obligations"] = po.strip()
+                    ocr = upd.get("our_company_risk")
+                    if isinstance(ocr, str) and ocr.strip():
+                        cr["our_company_risk"] = ocr.strip()
                     if isinstance(cs, list):
                         cleaned: list[dict[str, str]] = []
                         for seg in cs[:3]:
@@ -4289,6 +4428,83 @@ def build_clause_level_result(
                                 cleaned.append({"before": b.strip()[:120], "after": a.strip()[:120]})
                         if cleaned:
                             cr["changed_segments"] = cleaned
+
+                    # [Hybrid AI Review] severity: AI's own 5-step assessment,
+                    # but only if grounded in an actual quote from the clause —
+                    # an ungrounded severity call is exactly the kind of
+                    # hallucinated-but-plausible finding the guardrails exist
+                    # to catch, so it is rejected here rather than displayed.
+                    if ai_sev is None:
+                        return
+                    if not grounded:
+                        ai_grounding_rejected.append(str(cr.get("clause_id") or ""))
+                        return
+                    cur_sev = str(cr.get("risk_tier") or "LOW").upper()
+                    # 룰 엔진(Layer1/Layer2/mandatory)이 부여한 등급은 "최소 보장" —
+                    # AI가 근거 없이 그 아래로 낮추지 못한다. 위로 올리는 것은 허용.
+                    if any(bool(cr.get(k)) for k in _FLOOR_PROTECTED_KEYS):
+                        if _AI_SEVERITY_RANK.get(ai_sev, 0) < _AI_SEVERITY_RANK.get(cur_sev, 0):
+                            return
+                    cr["risk_tier"] = ai_sev
+                    cr["severity"] = ai_sev
+                    cr["must_fix"] = bool(upd.get("must_fix")) or ai_sev == "HIGH"
+                    cr["approval_required"] = cr["must_fix"] or bool(cr.get("approval_required"))
+                    cr["high_risk"] = ai_sev == "HIGH"
+                    cr["review_tier"] = "MUST" if cr["must_fix"] else ("SUGGEST" if ai_sev == "MEDIUM" else "NOTE")
+                    cr["ai_severity_grounded"] = True
+                    if is_new:
+                        cr["is_ai_discovered"] = True
+
+                for cr in clause_results:
+                    cid = cr.get("clause_id")
+                    upd = by_id.get(cid) if isinstance(cid, str) else None
+                    if not upd:
+                        continue
+                    # dedup_suppressed 항목은 AI 수정안을 적용하지 않는다
+                    if bool(cr.get("dedup_suppressed")):
+                        continue
+                    _apply_ai_update(cr, upd, is_new=False)
+                    by_id.pop(cid, None)
+
+                # 룰 엔진이 전혀 만들지 못했던 조항(exploration-only)에 대해 AI가
+                # 실제로 뭔가를 발견해 반환한 경우, 새 clause_result로 추가한다.
+                # 이것이 "룰 DB에 없는 리스크라도 AI가 발견하면 포함" 요구사항의
+                # 실제 동작 경로다.
+                for cid, upd in by_id.items():
+                    src = exploration_by_id.get(cid)
+                    if not src:
+                        continue
+                    new_cr: dict[str, Any] = {
+                        "clause_id": cid,
+                        "article_number": src.get("article_number"),
+                        "clause_title": src.get("clause_title"),
+                        "display_path": src.get("display_path"),
+                        "clause_topic": src.get("clause_topic"),
+                        "original_text": src.get("original_text"),
+                        "context_text": src.get("context_text"),
+                        "detected_issue_list": [],
+                        "related_rules": [],
+                        "related_laws": None,
+                        "risk_tier": "LOW",
+                        "severity": "LOW",
+                        "must_fix": False,
+                        "approval_required": False,
+                        "high_risk": False,
+                        "review_tier": "NOTE",
+                        "suggested_rewrite": None,
+                        "rewrite_reason": None,
+                        "user_focus_hit": False,
+                        "factual_hit": False,
+                        "keep_as_is": False,
+                        "dedup_suppressed": False,
+                        "has_rewrite_change": False,
+                        "ai_deep_reviewed": True,
+                        "ai_discovered_from_exploration": True,
+                    }
+                    _apply_ai_update(new_cr, upd, is_new=True)
+                    if new_cr.get("ai_severity_grounded"):
+                        clause_results.append(new_cr)
+                        ai_discovered_count += 1
             except Exception as exc:
                 any_used = True
                 ok_all = False
@@ -4297,8 +4513,18 @@ def build_clause_level_result(
         ai_state["used"] = bool(any_used)
         ai_state["ok"] = bool(ok_all) if any_used else None
         ai_state["usage"] = usages[:8] if usages else None
+        ai_state["exploration_candidate_count"] = len(exploration_items)
+        ai_state["ai_discovered_count"] = ai_discovered_count
+        ai_state["ai_grounding_rejected_count"] = len(ai_grounding_rejected)
         if errors:
             ai_state["error"] = errors[0]
+        if any_used and not ok_all:
+            # AI가 설정되어 호출을 시도했지만 전부/일부 실패했다 — 룰 엔진 결과가
+            # 그대로 남아있다는 것을 배너에 명확히 반영한다(성공한 것처럼 보이지 않게).
+            ai_state["mode"] = "ai_call_failed_rule_based_fallback"
+            ai_state["banner"] = (
+                f"AI 법률검토 호출 실패 — Rule-based fallback으로 표시됨 (오류: {errors[0] if errors else '알 수 없음'})"
+            )
 
     jur_kind = None
     try:

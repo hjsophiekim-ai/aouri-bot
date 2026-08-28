@@ -64,7 +64,12 @@ def load_dotenv(paths: list[Path], *, override: bool = False) -> list[Path]:
                 val = val.split("#", 1)[0].strip()
             if len(val) >= 2 and ((val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'"))):
                 val = val[1:-1]
-            if not override and key in os.environ:
+            # An earlier .env file (app_root/.env) may declare the key with an
+            # empty placeholder value (e.g. "OPENAI_API_KEY="). Treating that
+            # as "already set" would permanently block a real value from a
+            # later file (repo_root/.env) in the same load_dotenv() call —
+            # only skip when the existing value is actually non-empty.
+            if not override and os.environ.get(key, "").strip():
                 continue
             os.environ[key] = val
         loaded.append(p)
