@@ -60,6 +60,20 @@ _COLLOQUIAL_TO_FORMAL: list[tuple[str, str]] = [
     ("의 지시를 따라야", "이 제시한 품질 가이드라인을 준수하여야"),
 ]
 
+# 외부 법령의 구체적 조문 번호(제N조) 제거 — 국가법령정보 API/검증된 DB로 확인
+# 되지 않은 조문 번호는 절대 출력하지 않는다(requirement.md 2026-08-28 지시).
+# "본 계약 제N조"처럼 검토대상 계약서 자신의 조항 번호는 앞에 법령명(~법/~법률)이
+# 오지 않으므로 이 패턴에 매치되지 않는다 — 법령명 뒤에 붙은 조문 번호만 제거한다.
+_LAW_ARTICLE_NUMBER_RX = re.compile(
+    r"([가-힣A-Za-z]{1,15}(?:법률|법))\s*제\d+조(?:의\d+)?(?:\s*\([^)]{0,60}\))?"
+)
+
+
+def _strip_unverified_law_article_numbers(text: str) -> str:
+    """Drop unverified external-law article numbers, keeping only the law name."""
+    return _LAW_ARTICLE_NUMBER_RX.sub(r"\1", text)
+
+
 # 법률 문어체 접속사/어미 정규화
 _REGEX_FORMAL: list[tuple[str, str]] = [
     (r"하고\s*있다\b", "하고 있다"),
@@ -98,6 +112,9 @@ def polish_korean_legal_style(text: str) -> str:
     s = re.sub(r"(구매자 보호 방향\([^)]*\)\s*기준으로\s*보완:\s*)", "", s)
     s = re.sub(r"(buyer_favorable\s*기준으로\s*보완[:：]?\s*)", "", s, flags=re.IGNORECASE)
     s = re.sub(r"(구매자 보호\s*중심으로\s*보완[:：]?\s*)", "", s)
+
+    # 3.5. 검증되지 않은 외부 법령 조문 번호 제거 (법령명은 유지, 조문 번호만 삭제)
+    s = _strip_unverified_law_article_numbers(s)
 
     # 4. 구어체 → 법률 문어체 치환 (테이블 순서 보장)
     for colloquial, formal in _COLLOQUIAL_TO_FORMAL:

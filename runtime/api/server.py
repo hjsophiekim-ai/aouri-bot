@@ -53,6 +53,7 @@ from runtime.review.hallucination_guard import check_revision_text as _hg_check_
 from runtime.review.contract_classifier import classify_contract_detailed as _classify_detailed
 from runtime.review.redline_builder import build_redline_from_analysis
 from runtime.review.text_extract import extract_text_from_file
+from runtime.review.clause_extraction import extract_clauses, is_real_segment_clause_id
 from runtime.services.query_service import ReviewInput, RuleQueryService
 from runtime.law.cache import JsonFileCache
 from runtime.law.config import load_law_api_config
@@ -458,7 +459,12 @@ def create_handler(service: RuleQueryService):
                 _json_response(
                     self,
                     HTTPStatus.OK,
-                    {"contract_type": contract_type, "suggested_template_ids": suggested, "items": all_items},
+                    {
+                        "contract_type": contract_type,
+                        "suggested_template_ids": suggested,
+                        "items": all_items,
+                        "no_match_message": ("적합한 표준 템플릿 없음" if not suggested else None),
+                    },
                 )
                 return
 
@@ -1437,11 +1443,16 @@ def create_handler(service: RuleQueryService):
                 ]
                 orig_ids = {str(c.get("clause_id") or "") for c in original_clauses if isinstance(c, dict)}
                 cr_ids = {str(c.get("clause_id") or "") for c in clause_results_for_docx if isinstance(c, dict)}
-                # Allow missing IDs for checklist/mandatory items (e.g. isr_pl_defect_liability, MI-001..006)
+                # Only a genuine segmented-clause id (KR-/EN-/P-, see
+                # clause_extraction.is_real_segment_clause_id) that vanished between
+                # extraction and review is an actual bug. Every other clause_id is a
+                # rule-engine-synthesized finding id (clr_*, tsr_*, MI-/MR-, DLR-*,
+                # isr_/pi_/svc_/sppc_/mi_/CP-, ...) that was never meant to appear in
+                # original_clauses, so it can never legitimately be "missing" from it.
                 missing_in_original = sorted([
                     cid for cid in cr_ids
                     if cid and cid not in orig_ids
-                    and not any(cid.startswith(pfx) for pfx in ("isr_", "pi_", "svc_", "sppc_", "MI-", "mi_", "CP-"))
+                    and is_real_segment_clause_id(cid)
                 ])
                 if missing_in_original:
                     _json_response(

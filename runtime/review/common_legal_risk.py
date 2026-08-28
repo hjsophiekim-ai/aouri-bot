@@ -19,6 +19,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from runtime.review.clause_extraction import ClauseChunk
+
 _CLR_ITEMS: list[dict[str, Any]] = [
     {
         "id": "clr_fault_blind_exemption",
@@ -145,9 +147,75 @@ _RX_CONVENIENCE_TERMINATION = re.compile(
 _RX_CAUSE_ONLY_TERMINATION = re.compile(r"중대한\s*(?:약정|계약)\s*위반", re.IGNORECASE)
 
 
+def _group_clause_text_by_article(clauses: list[ClauseChunk] | None) -> list[tuple[str, str]]:
+    """Concatenate each already-segmented clause's own text by article_number,
+    in first-appearance order. Used to scope a regex search to a single
+    article's real text so a match can never be windowed into an adjacent
+    article's heading/body — the bug this module used to have by searching
+    over the raw whole-document string with a fixed character offset."""
+    order: list[str] = []
+    parts: dict[str, list[str]] = {}
+    for c in (clauses or []):
+        art = str(getattr(c, "article_number", None) or "").strip()
+        if not art:
+            continue
+        if art not in parts:
+            parts[art] = []
+            order.append(art)
+        t = str(getattr(c, "text", None) or "").strip()
+        if t:
+            parts[art].append(t)
+    return [(art, "\n".join(parts[art])) for art in order]
+
+
+def _find_clause_scoped_excerpt(
+    clauses: list[ClauseChunk] | None,
+    pattern: re.Pattern,
+    *,
+    before: int = 40,
+    after: int = 120,
+) -> tuple[str, str | None] | None:
+    """Search `pattern` against already-segmented clause text and return
+    (excerpt, article_number) for the first match, or None if nothing
+    matches. Two passes, in order of preference:
+
+    1. Per-leaf-clause: search each clause's own `.text` in isolation. This
+       is the common case (e.g. a whole finding sits inside one 항/호) and
+       guarantees the excerpt can never spill into a sibling paragraph —
+       joining a whole article's text and windowing across it would let a
+       match near the end of one 항 pull in the start of the next 항, which
+       is a different clause the finding isn't about.
+    2. Per-article fallback: only reached when no single leaf clause
+       contains the full match (e.g. the source text ran a paragraph intro
+       and its enumerated items onto one physical line, so segmentation
+       could not split them into separate leaves) — grouped by
+       article_number so the window still never crosses into a *different*
+       article.
+    """
+    for c in (clauses or []):
+        leaf_text = str(getattr(c, "text", None) or "")
+        m = pattern.search(leaf_text)
+        if not m:
+            continue
+        start = max(0, m.start() - before)
+        end = min(len(leaf_text), m.end() + after)
+        art = str(getattr(c, "article_number", None) or "").strip() or None
+        return leaf_text[start:end].strip(), art
+
+    for art, art_text in _group_clause_text_by_article(clauses):
+        m = pattern.search(art_text)
+        if not m:
+            continue
+        start = max(0, m.start() - before)
+        end = min(len(art_text), m.end() + after)
+        return art_text[start:end].strip(), art
+    return None
+
+
 def _apply_common_legal_risk_rules(
     clause_results: list[dict[str, Any]],
     full_text: str,
+    clauses: list[ClauseChunk] | None = None,
 ) -> None:
     """[Layer 1] Common legal risk checklist — runs for EVERY contract type.
 
@@ -155,6 +223,13 @@ def _apply_common_legal_risk_rules(
     inject if the clause doesn't already exist) but carries no contract_class
     gate, so it must never be touched by the HARD BLOCK logic that scopes
     Layer 2 rules.
+
+    The "원문" quote is scoped to a single article via `clauses` (the
+    already-confirmed segmentation) whenever it's available — searching the
+    raw whole-document string with a fixed character window used to let the
+    quote bleed into the next article's heading/body once a match happened
+    to sit near the end of its own article. `full_text` is kept only as a
+    fallback for the rare caller that has no segmented clauses at all.
     """
     text = str(full_text or "")
     existing_ids = {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}
@@ -166,17 +241,27 @@ def _apply_common_legal_risk_rules(
             continue
         if item["id"] in existing_ids:
             continue
-        m = item["present"].search(text)
-        if not m:
-            continue
+        scoped = _find_clause_scoped_excerpt(clauses, item["present"])
+        if scoped is not None:
+            excerpt, article_number = scoped
+        else:
+            if clauses:
+                # Segmented clauses exist but none of them matched — trust
+                # the segmentation over a raw full-text scan rather than
+                # risk a cross-article quote.
+                continue
+            m = item["present"].search(text)
+            if not m:
+                continue
+            start = max(0, m.start() - 40)
+            end = min(len(text), m.end() + 120)
+            excerpt = text[start:end].strip()
+            article_number = None
         matched_ids.add(item["id"])
-        start = max(0, m.start() - 40)
-        end = min(len(text), m.end() + 120)
-        excerpt = text[start:end].strip()
         risk = item["risk"]
         clause_results.append({
             "clause_id": item["id"],
-            "article_number": None,
+            "article_number": article_number,
             "clause_title": f"[공통 법률리스크] {item['name']}",
             "clause_topic": item.get("clause_topic", "other"),
             "original_text": excerpt,
@@ -201,10 +286,14 @@ def _apply_common_legal_risk_rules(
             "ai_deep_reviewed": False,
         })
 
-    _apply_termination_vs_term_check(clause_results, text)
+    _apply_termination_vs_term_check(clause_results, text, clauses)
 
 
-def _apply_termination_vs_term_check(clause_results: list[dict[str, Any]], text: str) -> None:
+def _apply_termination_vs_term_check(
+    clause_results: list[dict[str, Any]],
+    text: str,
+    clauses: list[ClauseChunk] | None = None,
+) -> None:
     """계약기간 대비 해지권 과도 제한: 1년 이상 계약인데 임의(편의)해지권 없이
     '중대한 위반' 사유로만 해지가 가능한 경우를 탐지한다."""
     if "clr_termination_right_restricted" in {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}:
@@ -216,14 +305,23 @@ def _apply_termination_vs_term_check(clause_results: list[dict[str, Any]], text:
     if not (has_long_term and has_cause_only and not has_convenience):
         return
     years = term_match.group(1) if term_match else "장기"
+    scoped = _find_clause_scoped_excerpt(clauses, _RX_CAUSE_ONLY_TERMINATION, after=100)
+    if scoped is not None:
+        cause_excerpt, cause_article = scoped
+    elif not clauses:
+        m = _RX_CAUSE_ONLY_TERMINATION.search(text)
+        cause_excerpt = text[max(0, m.start() - 40): m.end() + 100].strip() if m else ""
+        cause_article = None
+    else:
+        # Segmented clauses exist but none contain the cause-only-termination
+        # match — do not fall back to a raw cross-article window.
+        return
     clause_results.append({
         "clause_id": "clr_termination_right_restricted",
-        "article_number": None,
+        "article_number": cause_article,
         "clause_title": "[공통 법률리스크] 계약기간 대비 해지권 과도 제한",
         "clause_topic": "termination",
-        "original_text": (text[max(0, (_RX_CAUSE_ONLY_TERMINATION.search(text).start() - 40)):
-                                 _RX_CAUSE_ONLY_TERMINATION.search(text).end() + 100].strip()
-                           if _RX_CAUSE_ONLY_TERMINATION.search(text) else ""),
+        "original_text": cause_excerpt,
         "risk_tier": "MEDIUM",
         "severity": "MEDIUM",
         "high_risk": False,

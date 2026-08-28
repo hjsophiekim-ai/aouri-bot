@@ -147,6 +147,21 @@ class PipelineNoOutOfScopeInjectionTest(unittest.TestCase):
             self.assertFalse(cid.startswith("MI-"), f"dealer mandatory issue fired: {cid}")
             self.assertFalse(cid.startswith("MR-"), f"dealer rental mandatory issue fired: {cid}")
 
+    def test_no_safety_or_subcontract_rules_leak_via_text_expansion(self) -> None:
+        # Regression: the fixture's 제3조④ ("시료를 ... 안전한 상태로 제공")
+        # contains the bare keyword "안전", which query_service.py's
+        # whole-document TRIGGER_MAP expansion (additional_contract_types_by_text)
+        # used to pull in ACT-010/RISK-003 (안전/산업안전/중대재해) and the
+        # sibling 하도급/기술자료 rules (ACT-007/008, RISK-004/005) — none of
+        # which have anything to do with a testing/inspection service
+        # agreement. These must be HARD BLOCKed for contract_class ==
+        # "testing_service" regardless of how they entered the rule set.
+        _OUT_OF_SCOPE_IDS = {"ACT-007", "ACT-008", "ACT-010", "RISK-003", "RISK-004", "RISK-005"}
+        matched_ids = {r.get("rule_id") for r in self.bundle.review.get("matched_rules", []) if isinstance(r, dict)}
+        checklist_ids = {r.get("rule_id") for r in self.bundle.review.get("checklist_rules", []) if isinstance(r, dict)}
+        self.assertFalse(matched_ids & _OUT_OF_SCOPE_IDS, f"out-of-scope rule leaked into matched_rules: {matched_ids & _OUT_OF_SCOPE_IDS}")
+        self.assertFalse(checklist_ids & _OUT_OF_SCOPE_IDS, f"out-of-scope rule leaked into checklist_rules: {checklist_ids & _OUT_OF_SCOPE_IDS}")
+
     def test_self_check_report_present_and_clean(self) -> None:
         report = self.bundle.meta.get("self_check")
         self.assertIsInstance(report, dict)
@@ -304,6 +319,200 @@ class HallucinationGuardBackstopTest(unittest.TestCase):
         text = "구매자는 물품 수령 후 검수 완료 간주 규정에 동의한다."
         result = check_revision_text(text, contract_type_code="purchase_supply")
         self.assertTrue(result.is_clean)
+
+
+class LawCitationBackstopCoversAllFieldsTest(unittest.TestCase):
+    """Regression: mandatory_issues.py / dealer_rental_service_rules.py write
+    hardcoded statute article numbers (e.g. "대리점법 제6조 불이익 제공 금지")
+    into `legal_business_reason`/`problem`/`proposed_revision`/`issue_title` —
+    not just `rewrite_reason`/`suggested_rewrite`. self_check's backstop guard
+    must scrub the article number regardless of which field it landed in,
+    since we have no live 국가법령정보 API/DB to confirm any specific number."""
+
+    def test_legal_business_reason_field_is_scrubbed(self) -> None:
+        from runtime.review.self_check import run_self_check
+
+        clause_results = [
+            {
+                "clause_id": "MI-001",
+                "risk_tier": "HIGH",
+                "legal_business_reason": "대리점법 제6조 불이익 제공 금지 위반 소지가 있음.",
+                "problem": "대리점법 제10조 위반 소지",
+                "proposed_revision": "하도급법 제12조의3에 따라 수정 필요",
+                "issue_title": "대리점법 제18조 위반 이슈",
+                "why_matters": "대리점법 제6조 불이익 제공 금지 위반 가능성이 있습니다.",
+                "worst_case_scenario": "대리점법 제6조 불이익 제공 금지 위반 가능성.",
+                "negotiation_strategy": "민법 제397조의2 및 약관규제법상 무효 소지",
+                # A field name the scrub cannot know about ahead of time —
+                # exclusion-based scrubbing must still catch it.
+                "some_future_field_no_one_added_to_a_list": "하도급법 제11조 위반 소지",
+            }
+        ]
+        run_self_check(
+            clause_results=clause_results,
+            contract_type_code="consignment_dealer",
+            contract_class="dealer",
+            our_role_bucket="supplier",
+            confidence=0.9,
+            full_text="",
+        )
+        cr = clause_results[0]
+        for field in (
+            "legal_business_reason", "problem", "proposed_revision", "issue_title",
+            "why_matters", "worst_case_scenario", "negotiation_strategy",
+            "some_future_field_no_one_added_to_a_list",
+        ):
+            self.assertNotRegex(
+                cr[field], r"제\d+조", f"unverified law article number survived in {field!r}: {cr[field]!r}"
+            )
+            self.assertIn("법", cr[field], f"law name itself should be preserved in {field!r}")
+
+    def test_original_text_is_never_rewritten_even_if_it_quotes_a_statute(self) -> None:
+        # original_text/context_text/clause_title must reproduce the source
+        # document verbatim — even if the contract itself quotes an external
+        # statute with an article number, that is real original_text content,
+        # not a system-generated (and therefore unverifiable) citation.
+        from runtime.review.self_check import run_self_check
+
+        verbatim = "본 계약은 개인정보보호법 제17조에 따라 개인정보를 제3자에게 제공한다."
+        clause_results = [
+            {
+                "clause_id": "KR-9",
+                "risk_tier": "LOW",
+                "original_text": verbatim,
+                "context_text": verbatim,
+                "clause_title": "제9조(개인정보보호법 제17조 근거 제공)",
+            }
+        ]
+        run_self_check(
+            clause_results=clause_results,
+            contract_type_code="testing_inspection_service",
+            contract_class="testing_service",
+            our_role_bucket="service_recipient",
+            confidence=0.9,
+            full_text=verbatim,
+        )
+        cr = clause_results[0]
+        self.assertEqual(cr["original_text"], verbatim)
+        self.assertEqual(cr["context_text"], verbatim)
+        self.assertIn("제17조", cr["clause_title"])
+
+
+class PageMarkerSegmentationTest(unittest.TestCase):
+    """text_extract.extract_text_from_pdf() prefixes every page with a
+    "[페이지 N]" marker line so page boundaries survive into the joined
+    document text. A real multi-page FITI-style PDF puts a page break in the
+    middle of an article (e.g. 제6조 spans pages 3-4) — the marker line must
+    never end up quoted inside a clause's original_text (it was never part of
+    the actual contract), and it must never be mistaken for clause content
+    that shifts a boundary."""
+
+    def test_page_marker_stripped_from_clause_text(self) -> None:
+        from runtime.review.clause_extraction import extract_clauses
+
+        text = (
+            "제1조(목적) 이 계약은 시험분석 업무를 목적으로 한다.\n"
+            "[페이지 1]\n\n"
+            "제2조(비밀유지) 양 당사자는 상대방으로부터 제공받은 자료를\n"
+            "[페이지 2]\n\n"
+            "제3자에게 제공하여서는 아니 된다.\n"
+            "제3조(계약기간) 본 계약의 유효기간은 2년으로 한다.\n"
+        )
+        clauses, _report = extract_clauses(text)
+        for c in clauses:
+            self.assertNotIn("[페이지", c.text, f"page marker leaked into clause {c.clause_id} text")
+
+    def test_page_break_mid_article_does_not_merge_into_next_article(self) -> None:
+        from runtime.review.clause_extraction import extract_clauses
+
+        text = (
+            "제5조(상호협력) 위탁자는 다음 각 호의 사항을 수탁자에게 협조한다.\n"
+            "[페이지 3]\n\n"
+            "1. 수탁자 이외의 자와 유사한 약정을 체결하고자 할 경우 사전 통보한다.\n"
+            "제6조(시험성적서) 위탁자는 사전 서면동의 없이 시험성적서를 광고에 사용하여서는 아니 된다.\n"
+        )
+        clauses, _report = extract_clauses(text)
+        by_article = {c.article_number: c for c in clauses if c.article_number}
+        self.assertIn("5", by_article)
+        self.assertIn("6", by_article)
+        self.assertNotIn("시험성적서", by_article["5"].text, "제6조 content bled into 제5조")
+        self.assertNotIn("상호협력", by_article["6"].text.replace(by_article["6"].title, ""))
+
+
+class InlineParagraphOnArticleHeadingLineTest(unittest.TestCase):
+    """Regression: when a 조문 heading and its first paragraph sit on the SAME
+    physical line — "제14조(기타사항) ① 본 약정에 달리 정함이 없는 ..." (exactly
+    how the FITI fixture's 제14조 is written) — the heading regex's trailing
+    catch-all group used to swallow the whole "① ..." paragraph into the
+    article's `title`, so it silently never became its own clause at all
+    (not merged into a different article — just dropped from segmentation).
+    """
+
+    def test_paragraph_on_same_line_as_heading_is_still_segmented(self) -> None:
+        from runtime.review.clause_extraction import extract_clauses
+
+        text = (
+            "제14조(기타사항) ① 본 약정에 달리 정함이 없는 사항에 대하여는 수탁자의 표준시험약관 및 규정을 적용한다.\n"
+            "② 본 약정과 관련된 분쟁은 서울중앙지방법원을 전속관할로 한다.\n"
+        )
+        clauses, _report = extract_clauses(text)
+        by_id = {c.clause_id: c for c in clauses}
+        self.assertIn("KR-14-p1", by_id, f"paragraph ① was dropped; got only {sorted(by_id)}")
+        self.assertIn("표준시험약관", by_id["KR-14-p1"].text)
+        self.assertIn("KR-14-p2", by_id)
+        self.assertIn("전속관할", by_id["KR-14-p2"].text)
+        # ① text must not still be glued into the article's own title.
+        for c in clauses:
+            if c.article_number == "14":
+                self.assertNotIn("표준시험약관", c.title)
+
+
+class CommonLegalRiskQuoteNeverCrossesClauseBoundaryTest(unittest.TestCase):
+    """Regression: common_legal_risk.py used to build its "원문" quote by
+    windowing +/-N raw characters around a regex match over the WHOLE
+    document string, with no awareness of clause/article boundaries. On the
+    FITI fixture this produced quotes that mixed in a completely different
+    clause's text: 제6조④'s "귀책사유 불문 면책" finding pulled in the start of
+    제6조⑤'s "구상" text, and 제6조⑤'s own finding pulled in 제7조(양도) and
+    제8조(비밀유지의무)'s headings. Now the quote is built from the already-
+    confirmed segmentation (clauses), scoped first to a single leaf clause
+    and, failing that, to a single article — so it can never contain another
+    clause's/article's content."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from runtime.review.clause_extraction import extract_clauses
+        from runtime.review.common_legal_risk import _apply_common_legal_risk_rules
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        clauses, _report = extract_clauses(text)
+        cls.clause_results: list = []
+        _apply_common_legal_risk_rules(cls.clause_results, text, clauses)
+
+    def _cr_by_id(self, clause_id: str) -> dict:
+        for cr in self.clause_results:
+            if cr.get("clause_id") == clause_id:
+                return cr
+        raise AssertionError(f"clause_id {clause_id!r} not found: {[c.get('clause_id') for c in self.clause_results]}")
+
+    def test_article6_4_quote_does_not_bleed_into_article6_5(self) -> None:
+        cr = self._cr_by_id("clr_fault_blind_exemption")
+        self.assertNotIn("소송비용", cr["original_text"])
+        self.assertNotIn("변호사보수", cr["original_text"])
+        self.assertEqual(cr.get("article_number"), "6")
+
+    def test_article6_5_quote_does_not_bleed_into_article7_or_8(self) -> None:
+        cr = self._cr_by_id("clr_unlimited_recourse_with_legal_costs")
+        self.assertNotIn("권리 의무의 양도", cr["original_text"])
+        self.assertNotIn("비밀유지의무", cr["original_text"])
+        self.assertEqual(cr.get("article_number"), "6")
+
+    def test_article14_1_quote_is_clean_and_does_not_bleed_into_article14_2(self) -> None:
+        cr = self._cr_by_id("clr_external_terms_incorporation")
+        self.assertTrue(cr["original_text"].startswith("본 약정에 달리 정함이 없는"))
+        self.assertNotIn("전속관할", cr["original_text"])
+        self.assertNotIn("분쟁", cr["original_text"])
+        self.assertEqual(cr.get("article_number"), "14")
 
 
 if __name__ == "__main__":

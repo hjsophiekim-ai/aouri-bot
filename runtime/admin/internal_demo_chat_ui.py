@@ -1409,7 +1409,25 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       const conclusionTitle = document.getElementById('conclusionTitle');
       const conclusionBody = document.getElementById('conclusionBody');
 
-      if (action === 'legal') {
+      const _selfCheck = (meta0 && meta0.self_check) ? meta0.self_check : null;
+      const _reviewStatus = _selfCheck ? String(_selfCheck.review_status || '') : '';
+      const _reviewFailed = _reviewStatus.indexOf('REVIEW_FAILED') === 0;
+
+      if (_reviewFailed) {
+        conclusionTitle.innerText = '검토 실패 (REVIEW_FAILED) — 결과를 신뢰할 수 없습니다';
+        const reasons = [];
+        if (_selfCheck.clause_id_missing_count) {
+          reasons.push(`조항 ID 누락: ${_selfCheck.clause_id_missing_count}건`);
+        }
+        if (_selfCheck.final_findings_count_mismatch) {
+          reasons.push('최종 결과 건수(final_findings)가 실제 조항 목록과 일치하지 않습니다.');
+        }
+        if (_reviewStatus === 'REVIEW_FAILED_LIKELY_FALSE_NEGATIVE') {
+          reasons.push('계약서에 위험 문구가 있으나 탐지된 이슈가 0건입니다 (탐지 누락 의심).');
+        }
+        reasons.push('이 결과를 그대로 사용하지 말고 원문/추출 상태를 다시 확인하세요.');
+        conclusionBody.innerText = reasons.join('\\n');
+      } else if (action === 'legal') {
         conclusionTitle.innerText = '위험도가 높아 법무 검토가 필요합니다';
         const reasons = [];
         reasons.push('high risk 또는 결재/승인 필요 신호가 있어요.');
@@ -1434,7 +1452,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
       const high = !!s.high_risk;
       const appr = !!s.approval_required;
-      document.getElementById('resultTitle').className = 'badge ' + (high ? 'badgeDanger' : (appr ? 'badgeWarn' : 'badgeOk'));
+      document.getElementById('resultTitle').className = 'badge ' + (_reviewFailed ? 'badgeDanger' : (high ? 'badgeDanger' : (appr ? 'badgeWarn' : 'badgeOk')));
 
       const issuesOut = [];
       for (const r of matched.slice(0, 50)) {

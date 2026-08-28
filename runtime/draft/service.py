@@ -139,11 +139,6 @@ def suggest_template_ids(contract_type: str) -> list[str]:
             if isinstance(tid, str) and tid and tid not in hits:
                 hits.append(tid)
 
-    if not hits:
-        available = [t.template_id for t in list_standard_templates() if t.supported]
-        if available:
-            hits.append(available[0])
-
     return hits
 
 

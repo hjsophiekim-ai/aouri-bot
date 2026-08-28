@@ -1145,23 +1145,26 @@ def _apply_original_text_integrity_guard(clause_results: list[dict[str, Any]]) -
         if cut_at is None:
             continue
         truncated = ot[:cut_at].rstrip()
+        # 원문 integrity가 낮으면(=다른 조항 표제가 섞여 들어온 경우) 그 조항에
+        # 대해서는 수정안을 절대 생성하지 않는다 — 남은 텍스트 길이와 무관하게,
+        # 표제가 섞였다는 사실 자체가 이 조항의 세그멘테이션을 신뢰할 수 없다는
+        # 뜻이기 때문이다. UI/DOCX에는 "extraction_error"로 표시한다.
         cr["extraction_integrity_risk"] = True
-        if len(truncated) >= 15:
-            cr["original_text"] = truncated
-        else:
-            # Too little reliable text remains — do not present a quote or an
-            # auto-generated revision the reviewer cannot verify against the
-            # source document.
-            cr["original_text"] = truncated or "[원문 자동추출 불확실 — 원본 문서 직접 확인 필요]"
-            cr["suggested_rewrite"] = None
-            cr["changed_segments"] = []
-            cr["risk_tier"] = "LOW"
-            cr["must_fix"] = False
-            cr["approval_required"] = False
-            cr["high_risk"] = False
-            cr["review_tier"] = "NOTE"
-            if not cr.get("guardrail_block"):
-                cr["guardrail_block"] = {"filter": "original_text_integrity", "reason": "cross_article_contamination"}
+        cr["extraction_error"] = True
+        cr["original_text"] = (
+            truncated if len(truncated) >= 15
+            else (truncated or "[원문 자동추출 불확실 — 원본 문서 직접 확인 필요]")
+        )
+        cr["suggested_rewrite"] = None
+        cr["changed_segments"] = []
+        cr["risk_tier"] = "LOW"
+        cr["must_fix"] = False
+        cr["approval_required"] = False
+        cr["high_risk"] = False
+        cr["review_tier"] = "NOTE"
+        cr["display_kind"] = "extraction_error"
+        if not cr.get("guardrail_block"):
+            cr["guardrail_block"] = {"filter": "original_text_integrity", "reason": "cross_article_contamination"}
 
 
 _SIDIZ_NAMES = frozenset({"시디즈", "SIDIZ", "Sidiz", "sidiz"})
@@ -2575,12 +2578,70 @@ _TOPIC_CONTRACT_COMPAT: dict[str, frozenset[str]] = {
         "payment_settlement", "safety", "termination", "damage",
         "cost_burden",
     }),
+    "testing_service": frozenset({
+        "confidentiality", "damage", "termination", "payment_settlement",
+        "personal_data", "other",
+    }),
     "general": frozenset({
         "payment_settlement", "termination", "damage", "cost_burden",
         "confidentiality", "ip_ownership", "personal_data", "safety",
         "safety_compliance", "dealer_unfair",
     }),
 }
+
+
+# rule_id -> out-of-scope for these contract_class values, regardless of how
+# the rule entered `applicable` (base match, context_expanded_by_questions,
+# or context_expanded_by_text). These ACT-*/RISK-* rules key off whole-document
+# keyword search (query_service.TRIGGER_MAP), not clause-scoped extraction, so
+# a single incidental mention (e.g. "안전한 상태로 제공" in a testing-service
+# 시료 조항) can expand the rule set to include 안전/하도급/기술자료 checklist
+# items that have nothing to do with the actual contract. HARD BLOCK them here
+# so they can never reach suggest_revisions() for these contract classes.
+_OUT_OF_SCOPE_RULE_IDS_BY_CONTRACT_CLASS: dict[str, frozenset[str]] = {
+    "testing_service": frozenset({
+        "ACT-007", "ACT-008", "ACT-010",
+        "RISK-003", "RISK-004", "RISK-005",
+    }),
+}
+
+
+def _hard_block_out_of_scope_rules(review: dict[str, Any], contract_class: str) -> None:
+    """HARD BLOCK: strip contract-class-irrelevant ACT-*/RISK-* rules from the
+    rule-engine output before they ever reach per-clause revision generation.
+    Mutates `review` in place and recomputes summary counts so
+    matched_rule_count/checklist_rule_count/approval_required/high_risk stay
+    internally consistent with the filtered lists."""
+    blocked = _OUT_OF_SCOPE_RULE_IDS_BY_CONTRACT_CLASS.get(contract_class)
+    if not blocked or not isinstance(review, dict):
+        return
+
+    def _keep(r: Any) -> bool:
+        return not (isinstance(r, dict) and str(r.get("rule_id") or "") in blocked)
+
+    matched_rules = [r for r in review.get("matched_rules", []) if _keep(r)]
+    checklist_rules = [r for r in review.get("checklist_rules", []) if _keep(r)]
+    review["matched_rules"] = matched_rules
+    review["checklist_rules"] = checklist_rules
+
+    approval_required_matches = [
+        r for r in matched_rules
+        if isinstance(r, dict) and (r.get("rule_status") == "approval_required" or r.get("approval_required"))
+    ]
+    high_risk_matches = [
+        r for r in matched_rules
+        if isinstance(r, dict) and str(r.get("risk_level") or "").strip().lower() in ("high", "very_high", "critical")
+    ]
+    review["approval_required_matches"] = approval_required_matches
+
+    summary = review.get("summary")
+    if isinstance(summary, dict):
+        summary["matched_rule_count"] = len(matched_rules)
+        summary["checklist_rule_count"] = len(checklist_rules)
+        summary["approval_required_match_count"] = len(approval_required_matches)
+        summary["high_risk_match_count"] = len(high_risk_matches)
+        summary["approval_required"] = len(approval_required_matches) > 0
+        summary["high_risk"] = len(high_risk_matches) > 0
 
 
 def _apply_relevance_validation_gate(
@@ -3271,7 +3332,13 @@ def build_clause_level_result(
             review_focus=review_focus,
         )
     )
+    _hard_block_out_of_scope_rules(review, _contract_class)
     clauses, clause_report = extract_clauses(text)
+    # [Contract-level understanding] requirement.md 2026-08-28: AI가 개별 조항만
+    # 보고 판단하지 않도록, 이미 확정된 segmentation을 바탕으로 계약 목적·기간·
+    # 대금구조·전체 조항 목차를 먼저 구성해 AI 프롬프트에 포함한다.
+    from runtime.review.contract_overview import build_contract_overview
+    _contract_overview = build_contract_overview(clauses=clauses, full_text=str(text or ""))
     derived = review.get("derived_context") if isinstance(review, dict) else None
     prof = infer_contract_profile(contract_type=str(contract_type), text=str(text or ""))
     frc = build_final_review_context(
@@ -3298,6 +3365,7 @@ def build_clause_level_result(
         "final_review_context": frc.to_dict(),
         "contract_structure": _struct.contract_structure,
         "structure_result": _struct.to_dict(),
+        "contract_overview": _contract_overview.to_dict(),
     }
     revision = suggest_revisions(
         clauses,
@@ -4280,6 +4348,13 @@ def build_clause_level_result(
             # [FOUNDATIONAL SYSTEM CHANGE] Legal Scenario Reasoning Engine 적용
             system = (
                 "너는 한국 대형 로펌의 시니어 파트너 변호사다.\n\n"
+                "## [필수] 조항 검토 전 계약 전체 이해\n"
+                "입력의 contract_overview(계약 목적, 계약기간, 대금구조, 전체 조항 목차)와 "
+                "final_review_context를 먼저 읽고 이 계약이 무엇에 관한 것인지, 당사자 지위와 "
+                "거래구조가 무엇인지 파악한 뒤에 개별 조항(items)을 검토하라. 개별 조항만 보고 "
+                "판단하지 말고, 이 계약 전체 맥락에서 실제로 문제되는지 판단하라.\n"
+                "법령 조문 번호(제N조)는 네가 확실히 알고 있는 경우에만 표기하고, 확신이 없으면 "
+                "법률명만 쓰거나 조문 번호 없이 서술하라. 조문 번호를 추정해서 만들어내지 말 것.\n\n"
                 "## [필수] 5단계 Reasoning 순서 — 반드시 이 순서로 사고할 것\n"
                 "STEP 1: 이 계약으로 실제 어떤 사고·분쟁이 발생하는가? (제품 사고, 설치 재해, 리콜, 하자 분쟁, 해지 분쟁 등 구체적 시나리오)\n"
                 "STEP 2: 회사가 실제 어디서 돈을 잃는가? (대규모 손해배상, 생산중단, 리콜 비용, 계약해지 패널티 등)\n"
@@ -4336,6 +4411,7 @@ def build_clause_level_result(
                     "contract_type_code": _canonical_type_code,
                     "our_role_bucket": _our_role_bucket,
                     "out_of_scope_categories": _out_of_scope_notice or None,
+                    "contract_overview": (contract_context.get("contract_overview") if isinstance(contract_context, dict) else None),
                     "final_review_context": (contract_context.get("final_review_context") if isinstance(contract_context, dict) else None),
                     "review_posture": review_posture,
                     "party_role": party.to_dict(),
@@ -4904,7 +4980,7 @@ def build_clause_level_result(
     # 이 Layer 1은 절대 게이트하지 않는다 — 그래야 무관 룰 차단이 실제 존재하는
     # 공통 리스크(일방 면책·무제한 구상·외부약관 편입 등) 탐지까지 죽이지 않는다.
     from runtime.review.common_legal_risk import _apply_common_legal_risk_rules
-    _apply_common_legal_risk_rules(clause_results, str(text or ""))
+    _apply_common_legal_risk_rules(clause_results, str(text or ""), clauses)
     # 1-4. [Layer 2 — 시험·검사·인증 용역 특화] testing_service 계약에서만 실행.
     from runtime.review.testing_service_rules import _apply_testing_service_checklist
     _apply_testing_service_checklist(clause_results, str(text or ""), _contract_class)
@@ -5002,6 +5078,21 @@ def build_clause_level_result(
             cr["display_kind"] = "guidance"
         else:
             cr["display_kind"] = "note"
+
+    # [Dealer Rental Final Gate] isr_*/sppc_* 제거 + 조항-문안 hard gate.
+    # MUST run here — after has_rewrite_change/redline metadata are computed
+    # above (so a mismatch-downgraded item's has_rewrite_change=False is not
+    # clobbered by that loop) but before the Top 3 risk synthesis / Output
+    # Filter / self-check blocks below build meta.final_findings, the single
+    # source of truth the UI and DOCX both read. Previously this gate ran only
+    # once, at the very end of the function, well after meta.final_findings
+    # was already built from the pre-gate clause_results — so a stripped
+    # item's count/clause_id could survive in meta.final_findings while being
+    # absent from the clause_results actually returned to the caller
+    # (final_findings_count(ui) != final_findings_count(docx) / dangling
+    # clause_id).
+    _dlr_type = (getattr(_detailed_profile, "contract_type", None) or str(contract_type or ""))
+    clause_results = apply_dealer_rental_final_gate(clause_results, _dlr_type)
 
     frc1 = contract_context.get("final_review_context") if isinstance(contract_context, dict) else None
     if isinstance(frc1, dict) and bool(frc1.get("expert_mode")):
@@ -5277,6 +5368,10 @@ def build_clause_level_result(
         our_role_bucket=_canonical_profile.our_role_bucket,
         confidence=_canonical_profile.confidence,
         full_text=str(text or ""),
+        final_findings_counts={
+            "high_count": len(_filtered_output.get("high", [])) if _filtered_output else 0,
+            "medium_count": len(_filtered_output.get("medium", [])) if _filtered_output else 0,
+        },
     )
 
     meta = {
@@ -5354,10 +5449,6 @@ def build_clause_level_result(
         user_focus=review_focus,
         our_role=party.our_role,
     )
-
-    # ── [Dealer Rental Final Gate] isr_*/sppc_* 제거 + 조항-문안 hard gate ───
-    _dlr_type = (getattr(_detailed_profile, "contract_type", None) or str(contract_type or ""))
-    clause_results = apply_dealer_rental_final_gate(clause_results, _dlr_type)
 
     # ── [Clause-Level Conflict Check] 조항 간 모순 감지 ─────────────────────
     clause_conflicts = detect_clause_conflicts(clause_results)

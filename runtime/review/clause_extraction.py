@@ -8,6 +8,23 @@ from typing import Any
 from runtime.review.word_markers import contains_wordprocessingml_markers
 
 
+# extract_clauses() only ever mints clause_ids with these prefixes: "KR-" for
+# 조/항/호-segmented Korean contracts, "EN-" for English "Article N" contracts,
+# "P-" for the unstructured-paragraph fallback when no heading pattern is
+# found at all. Any other clause_id format belongs to a rule-engine-injected
+# finding (e.g. clr_*, tsr_*, MI-/MR-, DLR-*, isr_/pi_/svc_/sppc_/mi_/CP-) and
+# was never meant to correspond to a raw segmented clause.
+REAL_SEGMENT_ID_PREFIXES = ("KR-", "EN-", "P-")
+
+
+def is_real_segment_clause_id(clause_id: str) -> bool:
+    """True only for a clause_id that extract_clauses() itself could have
+    produced — used to distinguish a genuine extraction/segmentation
+    inconsistency from a rule-engine finding id that has no counterpart in
+    original_clauses by design."""
+    return bool(clause_id) and clause_id.startswith(REAL_SEGMENT_ID_PREFIXES)
+
+
 @dataclass(frozen=True)
 class ClauseChunk:
     clause_id: str
@@ -47,6 +64,17 @@ class ClauseExtractionReport:
 _RX_XML_TAG_LINE = re.compile(r"^\s*</?[A-Za-z0-9]+:[^>]+>\s*$")
 _RX_NS_ANGLE_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9]*:[^>]{1,200}>")
 
+# text_extract.extract_text_from_pdf() prefixes every page with a "[페이지 N]"
+# marker line so page boundaries survive into the joined document text. If
+# this line is left in, it ends up verbatim inside whichever clause's body
+# happens to span that page break — polluting the "원문" quote shown to the
+# reviewer with a marker that was never actually in the contract. Must be
+# dropped before clause segmentation, not just before display, since clause
+# boundaries are computed from these same lines.
+_RX_PAGE_MARKER_LINE = re.compile(r"^\[\s*페이지\s*\d+\s*\]$")
+
+_RX_KR_ARTICLE_HEAD = re.compile(r"^(제\s*\d+(?:\s*의\s*\d+)?\s*조)\s*(?:\(([^)]{1,80})\))?\s*(.*)$")
+
 
 def _strip_zero_width_and_ctrl(text: str) -> str:
     if not text:
@@ -82,6 +110,9 @@ def _clean_lines(text: str) -> tuple[list[str], int]:
             lines.append("")
             continue
         if contains_wordprocessingml_markers(l):
+            dropped += 1
+            continue
+        if _RX_PAGE_MARKER_LINE.match(l):
             dropped += 1
             continue
         if _RX_XML_TAG_LINE.match(l):
@@ -138,6 +169,34 @@ def _parse_paragraph_start(line: str) -> tuple[str, str] | None:
     if m:
         return str(int(m.group(1))), (m.group(2) or "").strip()
     return None
+
+
+def _split_inline_paragraph_from_article_heading(lines: list[str]) -> list[str]:
+    """A 조문 heading line sometimes carries its first paragraph's full text
+    on the very same physical line, e.g.:
+        "제14조(기타사항) ① 본 약정에 달리 정함이 없는 사항에 대하여는 ... 적용한다."
+    The article-heading regex's trailing catch-all group would otherwise
+    swallow that "① ..." text into the article's `title` — the paragraph
+    then never becomes its own line, so _parse_kr_article_hierarchy never
+    sees it and it silently vanishes from segmentation (not merged into any
+    other article — just dropped). Detect this and split the paragraph text
+    back onto its own line so it flows into `body_lines` like any other
+    paragraph.
+    """
+    out: list[str] = []
+    for line in lines:
+        raw = line or ""
+        s = raw.strip()
+        m = _RX_KR_ARTICLE_HEAD.match(s)
+        if m:
+            rest = (m.group(3) or "").strip()
+            if rest and _parse_paragraph_start(rest) is not None:
+                head = m.group(1) + (f"({m.group(2)})" if m.group(2) else "")
+                out.append(head)
+                out.append(rest)
+                continue
+        out.append(raw)
+    return out
 
 
 def _parse_item_start(line: str) -> tuple[str, str] | None:
@@ -325,6 +384,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
         return [], rep
 
     lines, dropped = _clean_lines(text)
+    lines = _split_inline_paragraph_from_article_heading(lines)
     cleaned = _norm_text("\n".join(lines))
     if not cleaned:
         rep = ClauseExtractionReport(
@@ -347,7 +407,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
         if not l:
             continue
 
-        m = re.match(r"^(제\s*\d+(?:\s*의\s*\d+)?\s*조)\s*(?:\(([^)]{1,80})\))?\s*(.*)$", l)
+        m = _RX_KR_ARTICLE_HEAD.match(l)
         if m:
             idxs.append(i)
             head = (m.group(1) or "").strip()

@@ -22,6 +22,7 @@ import re
 from typing import Any
 
 from runtime.review.hallucination_guard import check_revision_text
+from runtime.review.korean_polish import _strip_unverified_law_article_numbers
 from runtime.review.user_focus import list_objectives
 
 _TOKEN_RX = re.compile(r"[가-힣]{2,}|[A-Za-z]{3,}")
@@ -54,6 +55,7 @@ def run_self_check(
     our_role_bucket: str,
     confidence: float,
     full_text: str,
+    final_findings_counts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the final self-check pass. Mutates clause_results in place for (3),
     returns a report dict summarising all 7 checks for inclusion in meta."""
@@ -91,6 +93,32 @@ def run_self_check(
             if not cr.get("guardrail_block"):
                 cr["guardrail_block"] = {"filter": "self_check_backstop", "violations": guard.violations[:5]}
     report["scope_violations_stripped"] = scope_violations
+
+    # (3b) Backstop law-citation guard: strip any unverified external-law
+    # article number (e.g. "대리점법 제18조") that survived upstream, no
+    # matter which rule/checklist/AI-merge path produced it — only the law
+    # name may remain, since we have no live 국가법령정보 API/DB to confirm
+    # the article number is correct. Applied to every string field EXCEPT the
+    # verbatim/structural ones (original_text/context_text/clause_title/
+    # display_path/article_number/clause_id) — those must reproduce the
+    # source document exactly, including any statute citation the contract
+    # itself quotes, so they are never rewritten. Every other field is
+    # system-generated commentary (rewrite_reason, why_matters,
+    # worst_case_scenario, legal_business_reason, negotiation_strategy, ...)
+    # and the set of field names injectors use keeps growing, so scrubbing by
+    # exclusion rather than an allowlist avoids silently missing new ones.
+    _VERBATIM_FIELDS = frozenset({
+        "original_text", "context_text", "clause_title", "display_path",
+        "article_number", "clause_id",
+    })
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        for field, v in list(cr.items()):
+            if field in _VERBATIM_FIELDS:
+                continue
+            if isinstance(v, str) and v:
+                cr[field] = _strip_unverified_law_article_numbers(v)
 
     # (4) problem/revision same-issue heuristic: flag (do not drop) HIGH/MUST
     # items whose rewrite_reason shares no vocabulary with the quoted 원문 —
@@ -170,7 +198,50 @@ def run_self_check(
         false_negative_suspected = bool(triggered_risk_groups)
     report["zero_findings_but_risk_language_present"] = false_negative_suspected
     report["zero_findings_triggered_risk_groups"] = triggered_risk_groups
-    if false_negative_suspected:
+
+    # (8) hard integrity gate: a clause_id must exist on every finding (the UI
+    # and DOCX both key off clause_id — a missing one means the two renderers
+    # can silently diverge on which findings they show), and the single
+    # final_findings source of truth (meta.final_findings, shared by the UI
+    # and the DOCX writer) must actually match what clause_results contains.
+    # Either condition means the result is not safe to present as "정상
+    # 완료" — report REVIEW_FAILED rather than a passing status.
+    missing_clause_id_ids: list[str] = []
+    for idx, cr in enumerate(clause_results):
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")):
+            continue
+        if not str(cr.get("clause_id") or "").strip():
+            missing_clause_id_ids.append(f"<missing:index{idx}>")
+    report["clause_id_missing_count"] = len(missing_clause_id_ids)
+
+    final_findings_count_mismatch = False
+    if isinstance(final_findings_counts, dict):
+        actual_high = sum(
+            1 for cr in clause_results
+            if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is")
+            and str(cr.get("risk_tier") or "").upper() == "HIGH"
+        )
+        actual_medium = sum(
+            1 for cr in clause_results
+            if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is")
+            and str(cr.get("risk_tier") or "").upper() == "MEDIUM"
+        )
+        reported_high = int(final_findings_counts.get("high_count") or 0)
+        reported_medium = int(final_findings_counts.get("medium_count") or 0)
+        # final_findings applies its own quality filter (output_filter.filter_issues),
+        # so it may legitimately report fewer than the raw tier counts — but it
+        # must never report MORE than what clause_results actually contains,
+        # and never fewer than zero of what survives should be unaccounted for
+        # by more than the filter's own exclusions.
+        final_findings_count_mismatch = reported_high > actual_high or reported_medium > actual_medium
+    report["final_findings_count_mismatch"] = final_findings_count_mismatch
+
+    hard_integrity_failed = bool(missing_clause_id_ids) or final_findings_count_mismatch
+    if hard_integrity_failed:
+        report["review_status"] = "REVIEW_FAILED"
+    elif false_negative_suspected:
         report["review_status"] = "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE"
     else:
         report["review_status"] = "OK"
@@ -180,5 +251,6 @@ def run_self_check(
         and not report["type_confidence_low"]
         and not incomplete_high
         and not false_negative_suspected
+        and not hard_integrity_failed
     )
     return report
