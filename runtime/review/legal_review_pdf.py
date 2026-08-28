@@ -19,6 +19,7 @@ from runtime.review.legal_review_docx import (
     _build_review_issues,
     _filter_and_sort_issues,
     _format_val,
+    _review_issue_from_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,9 @@ def build_legal_review_pdf(
     include_low: bool = False,
     contract_type_code: str = "general",
     is_counterparty_form: bool = True,
+    top_risks_filtered: list[dict[str, Any]] | None = None,
+    high_issues_filtered: list[dict[str, Any]] | None = None,
+    medium_issues_filtered: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review PDF.
 
@@ -170,11 +174,24 @@ def build_legal_review_pdf(
         contract_type_code=contract_type_code,
         is_counterparty_form=is_counterparty_form,
     )
-    filtered = _filter_and_sort_issues(issues_raw, max_medium=10, max_top_risks=5, contract_type_code=contract_type_code)
-    top_issues = filtered["top_risks"]
-    high_issues = filtered["high"]
-    medium_issues = filtered["medium"]
-    low_issues = filtered["low"] if include_low else []
+    # If pre-filtered issues are provided (e.g. output_filter.build_final_
+    # findings(), the same canonical filter the review response and the DOCX
+    # download use), render those instead of re-deriving our own filter here
+    # — otherwise DOCX/PDF/UI can each show a different set of findings.
+    if top_risks_filtered is not None and (high_issues_filtered is not None or medium_issues_filtered is not None):
+        def _from_dict(d: dict) -> ReviewIssue:
+            return _review_issue_from_dict(d, is_counterparty_form=is_counterparty_form)
+
+        top_issues = [_from_dict(d) for d in (top_risks_filtered or []) if isinstance(d, dict)]
+        high_issues = [_from_dict(d) for d in (high_issues_filtered or []) if isinstance(d, dict)]
+        medium_issues = [_from_dict(d) for d in (medium_issues_filtered or []) if isinstance(d, dict)]
+        low_issues: list[ReviewIssue] = []
+    else:
+        filtered = _filter_and_sort_issues(issues_raw, max_medium=10, max_top_risks=5, contract_type_code=contract_type_code)
+        top_issues = filtered["top_risks"]
+        high_issues = filtered["high"]
+        medium_issues = filtered["medium"]
+        low_issues = filtered["low"] if include_low else []
     excluded_count = max(0, len(issues_raw) - len(high_issues) - len(medium_issues))
 
     pdf = FPDF(format="A4")

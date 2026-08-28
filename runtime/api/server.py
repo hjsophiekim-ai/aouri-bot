@@ -48,6 +48,7 @@ from runtime.review.docx_writer import build_revision_docx
 from runtime.review.legal_review_docx import build_legal_review_docx as _build_legal_review_docx
 from runtime.review.legal_review_pdf import build_legal_review_pdf as _build_legal_review_pdf
 from runtime.review.mandatory_issues import inject_mandatory_issues as _inject_mandatory_issues
+from runtime.review.output_filter import build_final_findings as _build_final_findings
 from runtime.review.severity_reclassifier import reclassify_for_consignment_dealer as _reclassify_consignment
 from runtime.review.hallucination_guard import check_revision_text as _hg_check_revision
 from runtime.review.contract_classifier import classify_contract_detailed as _classify_detailed
@@ -1553,6 +1554,7 @@ def create_handler(service: RuleQueryService):
                         clause_results=_all_results,
                         contract_type_code=_ct_code,
                         is_counterparty_form=True,
+                        clauses=original_clauses,
                     )
 
                     # Severity reclassification for dealer contracts
@@ -1631,6 +1633,49 @@ def create_handler(service: RuleQueryService):
                                 _cr["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
                                 _cr["has_rewrite_change"] = False
 
+                    # [REVIEW_FAILED gate] Compute the SAME canonical final-
+                    # findings the DOCX/PDF will actually contain
+                    # (build_final_findings, shared with clause_level.py) and
+                    # sanity-check it against the raw HIGH/MEDIUM tier counts
+                    # already present in this same _all_results. _all_results
+                    # has gone through extra, legitimate post-processing
+                    # (mandatory-issue injection, severity reclassification,
+                    # dealer gate, hallucination guardrail) that the initial
+                    # review never applied, so a moderate count difference
+                    # from the initial review's own final_findings is expected
+                    # and NOT a bug — but the output-quality filter dropping
+                    # nearly everything (e.g. 17 raw HIGH/MEDIUM candidates
+                    # collapsing to 1 in the final output) is a pipeline
+                    # malfunction, not an editorial choice, and must block
+                    # rather than silently hand back a gutted file.
+                    _docx_final = _build_final_findings(_all_results, contract_type_code=_ct_code, include_low=False)
+                    _docx_high = int(_docx_final.get("high_count") or 0)
+                    _docx_medium = int(_docx_final.get("medium_count") or 0)
+                    _raw_high = sum(
+                        1 for cr in _all_results
+                        if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is")
+                        and str(cr.get("risk_tier") or "").upper() == "HIGH"
+                    )
+                    _raw_medium = sum(
+                        1 for cr in _all_results
+                        if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is")
+                        and str(cr.get("risk_tier") or "").upper() == "MEDIUM"
+                    )
+                    _raw_total = _raw_high + _raw_medium
+                    _docx_total = _docx_high + _docx_medium
+                    if _raw_total >= 5 and _docx_total <= max(1, _raw_total // 5):
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "REVIEW_FAILED: final_findings_count(docx) collapsed relative to raw clause_results",
+                                "review_status": "REVIEW_FAILED",
+                                "raw_high_medium_count": _raw_total,
+                                "final_findings_count_docx": {"high": _docx_high, "medium": _docx_medium},
+                            },
+                        )
+                        return
+
                     doc_bytes = _builder(
                         entity=entity,
                         contract_type=contract_type,
@@ -1641,6 +1686,9 @@ def create_handler(service: RuleQueryService):
                         include_low=False,
                         contract_type_code=_ct_code,
                         is_counterparty_form=True,
+                        top_risks_filtered=_docx_final.get("top_risks"),
+                        high_issues_filtered=_docx_final.get("high_issues"),
+                        medium_issues_filtered=_docx_final.get("medium_issues"),
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})
@@ -1722,6 +1770,7 @@ def create_handler(service: RuleQueryService):
                 _cr_list2 = _inject_mandatory_issues(
                     full_text=contract_text, clause_results=list(clause_results),
                     contract_type_code=_ct2, is_counterparty_form=True,
+                    clauses=original_clauses,
                 )
                 _DEALER_CODES2 = {"consignment_sales_agency", "direct_customer_sales_support", "dealer_agency", "dealer_rental_service_contract"}
                 _SUPPRESS2 = ("isr_", "sppc_", "pi_", "svc_")

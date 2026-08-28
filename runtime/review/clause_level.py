@@ -4015,6 +4015,14 @@ def build_clause_level_result(
             meta=meta,
         )
 
+    # [Original Text Integrity] AI 선정보다 먼저 실행 — 기존 호출은 이 함수
+    # 훨씬 아래(여러 룰체인 이후)에 있어, 그 시점까지는 AI가 이미 오염된
+    # original_text를 넘겨받아 rewrite를 생성한 뒤였다. 여기서 한 번 더 실행해
+    # 지금까지 채워진 clause_results의 오염을 AI 선정 전에 걸러내고, 이후
+    # 새로 추가되는 룰체인의 오염은 기존 위치의 재호출이 마저 잡는다
+    # (멱등 함수라 두 번 호출해도 안전함).
+    _apply_original_text_integrity_guard(clause_results)
+
     must_count = sum(1 for cr in clause_results if bool(cr.get("approval_required")) or str(cr.get("risk_tier") or "").upper() == "HIGH")
     medium_count = sum(1 for cr in clause_results if str(cr.get("risk_tier") or "").upper() == "MEDIUM" and not bool(cr.get("approval_required")))
     low_count = sum(1 for cr in clause_results if str(cr.get("risk_tier") or "").upper() == "LOW")
@@ -4060,6 +4068,11 @@ def build_clause_level_result(
     selected = deep_review_shortlist[: max(0, desired)]
     # dedup_suppressed 항목은 AI 처리 대상에서 제외
     selected = [cr for cr in selected if not bool(cr.get("dedup_suppressed"))]
+    # extraction_error(원문 integrity 낮음) 항목은 AI 검토·rewrite 대상에서 제외
+    # — segmentation을 신뢰할 수 없는 조항에 대해 AI가 새 rewrite를 만들어내면
+    # (integrity guard가 이미 suggested_rewrite=None으로 비워둔 것을) 다시
+    # 채워 넣어버릴 수 있으므로, 애초에 AI에게 보내지 않는다.
+    selected = [cr for cr in selected if not bool(cr.get("extraction_error"))]
 
     # ── [Hybrid AI Review] 룰 DB/키워드가 전혀 건드리지 않은 조항도 AI에게 보여준다.
     # 지금까지는 clause_results(이미 룰 매칭되었거나 review_focus에 걸린 조항)만
@@ -4469,6 +4482,13 @@ def build_clause_level_result(
                 _FLOOR_PROTECTED_KEYS = ("is_common_legal_risk", "is_checklist_item", "is_mandatory")
 
                 def _apply_ai_update(cr: dict[str, Any], upd: dict[str, Any], *, is_new: bool) -> None:
+                    # Belt-and-suspenders: extraction_error clauses are already
+                    # excluded from `selected` before the AI call, but refuse
+                    # any AI-provided rewrite/reasoning here too in case one
+                    # ever reaches this path (e.g. a future caller of
+                    # _apply_ai_update that doesn't go through `selected`).
+                    if bool(cr.get("extraction_error")):
+                        return
                     rr = upd.get("rewrite_reason")
                     sr = upd.get("suggested_rewrite")
                     cs = upd.get("changed_segments")
@@ -4983,7 +5003,7 @@ def build_clause_level_result(
     _apply_common_legal_risk_rules(clause_results, str(text or ""), clauses)
     # 1-4. [Layer 2 — 시험·검사·인증 용역 특화] testing_service 계약에서만 실행.
     from runtime.review.testing_service_rules import _apply_testing_service_checklist
-    _apply_testing_service_checklist(clause_results, str(text or ""), _contract_class)
+    _apply_testing_service_checklist(clause_results, str(text or ""), _contract_class, clauses)
     # 2. 리뷰 우선순위 엔진 (LEVEL 1~3 분류, HIGH 최대 5개 — 체크리스트 제외)
     _apply_review_priority_engine(clause_results, max_high=5)
     # 3. No Inline Rewrite 정책 (advisory: 원문 보존 + [추가 권고] 형태)
@@ -5318,37 +5338,20 @@ def build_clause_level_result(
     # ─────────────────────────────────────────────────────────────────────────
 
     # ── [Output Filter] HIGH/MEDIUM 필터 + Top 5 핵심 리스크 ─────────────────
+    # build_final_findings() is the single canonical clause_results -> final-
+    # issue-list conversion, shared with server.py's DOCX/PDF download
+    # endpoint — so "what the reviewer sees here" and "what ends up in the
+    # downloaded file" are computed by the same rule, not two independently
+    # maintained filters that can silently diverge in count and content.
     _filtered_output: dict = {}
     try:
-        from runtime.review.output_filter import ReviewIssue as _RI, filter_issues as _fi, count_low_issues_in_output as _cli
-        _review_issues_raw: list[_RI] = []
-        for _cr in clause_results:
-            if not isinstance(_cr, dict):
-                continue
-            if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
-                continue
-            _sev = str(_cr.get("risk_tier") or "LOW").upper()
-            if _sev not in ("HIGH", "MEDIUM", "LOW"):
-                _sev = "LOW"
-            _ot = str(_cr.get("original_text") or "").strip()
-            _pr = str(_cr.get("suggested_rewrite") or "").strip()
-            _pb = str(_cr.get("rewrite_reason") or "").strip()
-            if not _ot or not _pb:
-                continue
-            _review_issues_raw.append(_RI(
-                clause_id=str(_cr.get("clause_id") or ""),
-                clause_title=str(_cr.get("clause_title") or ""),
-                severity=_sev,  # type: ignore[arg-type]
-                approval_required=bool(_cr.get("approval_required")),
-                issue_title=str((_cr.get("detected_issue_list") or [{}])[0].get("issue_title") or _pb)[:120] if isinstance(_cr.get("detected_issue_list"), list) and _cr.get("detected_issue_list") else _pb[:120],
-                original_text=_ot[:500],
-                problem=_pb[:400],
-                legal_business_reason=_pb[:400],
-                proposed_revision=_pr[:600],
-                negotiation_position=str(_cr.get("negotiation_strategy") or "").strip()[:300],
-                confidence=float(_cr.get("confidence") or 0.75),
-            ))
+        from runtime.review.output_filter import (
+            filter_issues as _fi,
+            clause_results_to_review_issues as _cr_to_ri,
+            count_low_issues_in_output as _cli,
+        )
         _type_code = (_detailed_profile.contract_type if _detailed_profile is not None else "general")
+        _review_issues_raw = _cr_to_ri(clause_results)
         _filtered_output = _fi(_review_issues_raw, contract_type_code=_type_code, include_low=False)
         _low_count_in_output = _cli({"clause_results": clause_results})
     except Exception:

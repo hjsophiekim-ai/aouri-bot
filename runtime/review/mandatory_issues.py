@@ -645,9 +645,26 @@ def _detect_issue_in_text(issue: MandatoryIssue, text: str) -> bool:
     return False
 
 
-def _extract_matched_excerpt(issue: MandatoryIssue, text: str, max_len: int = 200) -> str:
-    """Extract the matching text excerpt from the contract."""
+def _extract_matched_excerpt(
+    issue: MandatoryIssue,
+    text: str,
+    max_len: int = 200,
+    clauses: list[Any] | None = None,
+) -> str:
+    """Extract the matching text excerpt from the contract.
+
+    Scoped to the already-confirmed segmentation (`clauses`) whenever
+    available, so the quote can never bleed into an adjacent clause/article —
+    a raw whole-document character-offset window doesn't know where one
+    항/조 ends and the next begins."""
+    from runtime.review.clause_extraction import find_clause_scoped_excerpt
+
     for pat in issue.trigger_patterns:
+        if clauses:
+            scoped = find_clause_scoped_excerpt(clauses, pat, before=20, after=100)
+            if scoped is not None:
+                return scoped[0][:max_len]
+            continue
         m = pat.search(text)
         if m:
             start = max(0, m.start() - 20)
@@ -672,6 +689,7 @@ def inject_mandatory_issues(
     clause_results: list[dict[str, Any]],
     contract_type_code: str,
     is_counterparty_form: bool = True,
+    clauses: list[Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Inject mandatory issues for consignment dealer contracts.
 
@@ -685,6 +703,8 @@ def inject_mandatory_issues(
         clause_results: raw clause results from build_clause_level_result
         contract_type_code: e.g. "consignment_sales_agency"
         is_counterparty_form: True if the contract is the counterparty's form
+        clauses: already-segmented clauses (ClauseChunk or dict), used to
+            scope the "원문" quote so it can never bleed into another clause
 
     Returns:
         Updated clause_results with mandatory issues injected/merged
@@ -706,7 +726,7 @@ def inject_mandatory_issues(
         if not _detect_issue_in_text(mandatory, full_text):
             continue
 
-        excerpt = _extract_matched_excerpt(mandatory, full_text)
+        excerpt = _extract_matched_excerpt(mandatory, full_text, clauses=clauses)
 
         # Always add mandatory issue as a NEW cr with its own clause_id (MI-001 etc.)
         # This ensures _filter_and_sort_issues can identify it as mandatory via clause_id.

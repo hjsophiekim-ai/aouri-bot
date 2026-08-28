@@ -82,6 +82,24 @@ class ContractClassifierTest(unittest.TestCase):
         profile = classify_contract_detailed(entity="시디즈", contract_type="", text=text)
         self.assertNotEqual(profile.contract_type, "ai_search_marketing")
 
+    def test_incidental_dealer_keyword_anywhere_in_document_does_not_veto_testing_service(self) -> None:
+        # Regression (2026-08-28, real-world upload): a real FITI-style PDF
+        # can incidentally mention "대리점" once, far from any dealer-contract
+        # context (e.g. a miscellaneous clause disclaiming that a test result
+        # doesn't endorse resale through 대리점/유통 channels). A bare
+        # whole-document keyword scan for "대리점" used to veto the otherwise
+        # unambiguous testing_inspection_service classification and misroute
+        # the whole review into consignment/dealer rule engines — which then
+        # fired 기술자료/소스코드/안전 rules that have nothing to do with a
+        # testing/inspection contract. has_testing_strong signals (시험연구원/
+        # 시험기관/시험성적서 등) must win regardless of an incidental hit.
+        from runtime.review.contract_classifier import classify_contract_detailed
+
+        text = self.text + "\n제15조(기타) 본 시험성적서는 대리점을 통한 재판매를 보증하지 아니한다."
+        profile = classify_contract_detailed(entity="시디즈", contract_type="", text=text)
+        self.assertEqual(profile.contract_type, "testing_inspection_service")
+        self.assertNotEqual(profile.contract_type, "consignment_sales_agency")
+
     def test_answers_override_low_confidence_classification(self) -> None:
         from runtime.review.contract_classifier import classify_contract_detailed
 
@@ -99,6 +117,37 @@ class ContractClassifierTest(unittest.TestCase):
         self.assertEqual(confirmed.contract_type, "testing_inspection_service")
         self.assertEqual(confirmed.our_role_bucket, "service_recipient")
         self.assertGreaterEqual(confirmed.confidence, 0.9)
+
+
+class TemplateRecommendationNoMatchTest(unittest.TestCase):
+    """Regression: a testing/inspection contract must never get a dealer or
+    furniture-manufacturing subcontract template recommended.
+
+    Two separate bugs produced this: (1) suggest_template_ids() used to fall
+    back to whatever standard template sorted first alphabetically when
+    nothing matched (가구제조업종 표준 하도급계약서.docx), and (2) "위탁" was
+    listed as a 재판매대리점 template trigger keyword — far too generic, since
+    it also appears in "위탁시험"/"위탁분석"/"위탁가공" style contract-type
+    descriptions that have nothing to do with a dealer/distribution contract."""
+
+    def test_wide_area_test_no_longer_matches_dealer_template_via_witak_keyword(self) -> None:
+        from runtime.draft.service import suggest_template_ids
+
+        hits = suggest_template_ids("시험위탁계약")
+        self.assertNotIn("사내표준 재판매대리점 약정서.docx", hits)
+
+    def test_real_dealer_contract_type_still_matches_dealer_template(self) -> None:
+        # The keyword narrowing must not silently break legitimate matches.
+        from runtime.draft.service import suggest_template_ids
+
+        hits = suggest_template_ids("대리점 판매계약")
+        self.assertIn("사내표준 재판매대리점 약정서.docx", hits)
+
+    def test_no_match_returns_empty_not_a_blind_fallback(self) -> None:
+        from runtime.draft.service import suggest_template_ids
+
+        hits = suggest_template_ids("시험분석 성적서 발급")
+        self.assertEqual(hits, [])
 
 
 class PipelineNoOutOfScopeInjectionTest(unittest.TestCase):
@@ -319,6 +368,114 @@ class HallucinationGuardBackstopTest(unittest.TestCase):
         text = "구매자는 물품 수령 후 검수 완료 간주 규정에 동의한다."
         result = check_revision_text(text, contract_type_code="purchase_supply")
         self.assertTrue(result.is_clean)
+
+
+class TopicMismatchSemanticValidationTest(unittest.TestCase):
+    """Regression (2026-08-28, real-world report): 제14조② (dispute-jurisdiction
+    clause, "본 약정과 관련된 분쟁은 서울중앙지방법원을 전속관할로 한다") got a
+    "경영간섭"/인사권 (management-interference) rewrite_reason meant for a
+    completely different (dealer-domain) clause — a wrong clause_id-to-
+    reasoning pairing from a misrouted rule/AI merge.
+
+    self_check flags (does not auto-strip) a HIGH/MEDIUM finding whose
+    reasoning shares no vocabulary with its own quoted 원문. An earlier
+    version of this fix auto-stripped HIGH matches on this signal, but a real
+    end-to-end run against the FITI fixture with AI enabled showed the bare
+    token-overlap check (even with common function words removed) firing on
+    several of FITI's own genuine, on-topic findings — AI-written
+    rewrite_reason text routinely paraphrases the clause rather than
+    repeating its exact nouns, so "zero overlap" is not a reliable enough
+    signal to delete content on. Flagging stays; auto-stripping doesn't."""
+
+    def test_zero_vocabulary_overlap_is_flagged_not_stripped(self) -> None:
+        from runtime.review.self_check import run_self_check
+
+        clause_results = [
+            {
+                "clause_id": "KR-14-p2",
+                "risk_tier": "HIGH",
+                "must_fix": True,
+                "approval_required": True,
+                "high_risk": True,
+                "original_text": "본 약정과 관련된 분쟁은 서울중앙지방법원을 전속관할로 한다.",
+                # Deliberately avoids any hallucination_guard banned phrase
+                # (대리점/판매대리점/CI-SI/product-supply/결과물/산출물 등) so
+                # this test isolates the topic-mismatch check (item 4) rather
+                # than the pre-existing phrase-based backstop (item 3), which
+                # would otherwise strip it first for an unrelated reason.
+                "rewrite_reason": "안전관리자를 지정하고 중대재해 발생 시 산업안전보건법에 따른 안전보건교육을 실시하여야 한다.",
+                "suggested_rewrite": "현장에 안전관리자를 상시 배치하고 중대재해 예방 조치를 이행하여야 한다.",
+            }
+        ]
+        report = run_self_check(
+            clause_results=clause_results,
+            contract_type_code="testing_inspection_service",
+            contract_class="testing_service",
+            our_role_bucket="service_recipient",
+            confidence=0.9,
+            full_text="",
+        )
+        cr = clause_results[0]
+        self.assertIn("KR-14-p2", report.get("topic_mismatch_clause_ids", []))
+        self.assertTrue(cr.get("topic_mismatch_risk"))
+        # Flagged for reviewer visibility, but never auto-deleted.
+        self.assertIsNotNone(cr["suggested_rewrite"])
+        self.assertEqual(cr["risk_tier"], "HIGH")
+        self.assertTrue(cr["approval_required"])
+
+    def test_generic_stopwords_alone_do_not_count_as_overlap(self) -> None:
+        # Two unrelated sentences sharing only generic sentence-final verbs
+        # ("~한다") must still be flagged as mismatched — the stopword filter
+        # in _tokens() exists so this class of trivial overlap doesn't mask
+        # a real mismatch.
+        from runtime.review.self_check import run_self_check
+
+        clause_results = [
+            {
+                "clause_id": "KR-14-p2",
+                "risk_tier": "MEDIUM",
+                "original_text": "본 약정과 관련된 분쟁은 서울중앙지방법원을 전속관할로 한다.",
+                "rewrite_reason": "현장에 안전관리자를 상시 배치하여야 한다.",
+                "suggested_rewrite": "안전관리자를 지정한다.",
+            }
+        ]
+        report = run_self_check(
+            clause_results=clause_results,
+            contract_type_code="testing_inspection_service",
+            contract_class="testing_service",
+            our_role_bucket="service_recipient",
+            confidence=0.9,
+            full_text="",
+        )
+        self.assertIn("KR-14-p2", report.get("topic_mismatch_clause_ids", []))
+
+    def test_real_topical_overlap_is_not_flagged(self) -> None:
+        # Sanity check against false positives: a genuine on-topic finding
+        # that repeats an exact content word from its own quoted 원문 must
+        # not be flagged. (Korean inflection means even on-topic paraphrases
+        # often share zero *exact* tokens — see the class docstring — so
+        # this only proves the mechanism works when a word IS repeated
+        # verbatim, not that it never false-positives on paraphrases.)
+        from runtime.review.self_check import run_self_check
+
+        clause_results = [
+            {
+                "clause_id": "KR-9-p1",
+                "risk_tier": "MEDIUM",
+                "original_text": "본 약정의 계약기간은 2년으로 한다.",
+                "rewrite_reason": "계약기간은 2년으로 장기임에도 임의 해지권이 없어 위탁자가 구속될 위험이 있음.",
+                "suggested_rewrite": "위탁자는 3개월 전 서면 통지로 해지할 수 있다.",
+            }
+        ]
+        report = run_self_check(
+            clause_results=clause_results,
+            contract_type_code="testing_inspection_service",
+            contract_class="testing_service",
+            our_role_bucket="service_recipient",
+            confidence=0.9,
+            full_text="",
+        )
+        self.assertNotIn("KR-9-p1", report.get("topic_mismatch_clause_ids", []))
 
 
 class LawCitationBackstopCoversAllFieldsTest(unittest.TestCase):

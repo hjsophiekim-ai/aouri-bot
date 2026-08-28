@@ -262,6 +262,72 @@ def filter_issues(
     }
 
 
+def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> list[ReviewIssue]:
+    """Convert clause_results dicts to ReviewIssue objects.
+
+    Single canonical conversion — used by both the initial review pipeline
+    (clause_level.py, for meta.final_findings) and the DOCX/PDF download
+    endpoint (server.py, after its own extra mandatory-issue/severity/
+    guardrail post-processing) so "what the reviewer saw" and "what's in the
+    downloaded file" are built by the same rule, not two independently
+    maintained filters that can silently diverge in count and content."""
+    out: list[ReviewIssue] = []
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        sev = str(cr.get("risk_tier") or "LOW").upper()
+        if sev not in ("HIGH", "MEDIUM", "LOW"):
+            sev = "LOW"
+        ot = str(cr.get("original_text") or "").strip()
+        pr = str(cr.get("suggested_rewrite") or cr.get("proposed_revision") or "").strip()
+        pb = str(cr.get("rewrite_reason") or cr.get("problem") or "").strip()
+        if not ot or not pb:
+            continue
+        detected = cr.get("detected_issue_list")
+        issue_title = ""
+        if isinstance(detected, list) and detected and isinstance(detected[0], dict):
+            issue_title = str(detected[0].get("issue_title") or "").strip()
+        if not issue_title:
+            issue_title = pb[:120]
+        out.append(ReviewIssue(
+            clause_id=str(cr.get("clause_id") or ""),
+            clause_title=str(cr.get("clause_title") or ""),
+            severity=sev,  # type: ignore[arg-type]
+            approval_required=bool(cr.get("approval_required")),
+            issue_title=issue_title[:120],
+            original_text=ot[:500],
+            problem=pb[:400],
+            legal_business_reason=str(cr.get("legal_business_reason") or pb)[:400],
+            proposed_revision=pr[:600],
+            negotiation_position=str(cr.get("negotiation_position") or cr.get("negotiation_strategy") or "").strip()[:300],
+            confidence=float(cr.get("confidence") or 0.75),
+        ))
+    return out
+
+
+def build_final_findings(
+    clause_results: list[dict[str, Any]],
+    *,
+    contract_type_code: str = "",
+    include_low: bool = False,
+) -> dict[str, Any]:
+    """Canonical "what should the reviewer see as the final result" for a
+    clause_results list — the single function both the initial review and
+    the DOCX/PDF download endpoint call, so their counts and content can be
+    directly compared (and must match)."""
+    issues = clause_results_to_review_issues(clause_results)
+    filtered = filter_issues(issues, contract_type_code=contract_type_code, include_low=include_low)
+    return {
+        "high_count": len(filtered["high"]),
+        "medium_count": len(filtered["medium"]),
+        "high_issues": [i.to_dict() for i in filtered["high"]],
+        "medium_issues": [i.to_dict() for i in filtered["medium"]],
+        "top_risks": [i.to_dict() for i in filtered["top_risks"]],
+    }
+
+
 def count_low_issues_in_output(raw_output: dict[str, Any]) -> int:
     """Count how many LOW-severity items appear in the raw bundle output.
 

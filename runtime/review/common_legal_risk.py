@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from runtime.review.clause_extraction import ClauseChunk
+from runtime.review.clause_extraction import ClauseChunk, find_clause_scoped_excerpt
 
 _CLR_ITEMS: list[dict[str, Any]] = [
     {
@@ -147,71 +147,6 @@ _RX_CONVENIENCE_TERMINATION = re.compile(
 _RX_CAUSE_ONLY_TERMINATION = re.compile(r"중대한\s*(?:약정|계약)\s*위반", re.IGNORECASE)
 
 
-def _group_clause_text_by_article(clauses: list[ClauseChunk] | None) -> list[tuple[str, str]]:
-    """Concatenate each already-segmented clause's own text by article_number,
-    in first-appearance order. Used to scope a regex search to a single
-    article's real text so a match can never be windowed into an adjacent
-    article's heading/body — the bug this module used to have by searching
-    over the raw whole-document string with a fixed character offset."""
-    order: list[str] = []
-    parts: dict[str, list[str]] = {}
-    for c in (clauses or []):
-        art = str(getattr(c, "article_number", None) or "").strip()
-        if not art:
-            continue
-        if art not in parts:
-            parts[art] = []
-            order.append(art)
-        t = str(getattr(c, "text", None) or "").strip()
-        if t:
-            parts[art].append(t)
-    return [(art, "\n".join(parts[art])) for art in order]
-
-
-def _find_clause_scoped_excerpt(
-    clauses: list[ClauseChunk] | None,
-    pattern: re.Pattern,
-    *,
-    before: int = 40,
-    after: int = 120,
-) -> tuple[str, str | None] | None:
-    """Search `pattern` against already-segmented clause text and return
-    (excerpt, article_number) for the first match, or None if nothing
-    matches. Two passes, in order of preference:
-
-    1. Per-leaf-clause: search each clause's own `.text` in isolation. This
-       is the common case (e.g. a whole finding sits inside one 항/호) and
-       guarantees the excerpt can never spill into a sibling paragraph —
-       joining a whole article's text and windowing across it would let a
-       match near the end of one 항 pull in the start of the next 항, which
-       is a different clause the finding isn't about.
-    2. Per-article fallback: only reached when no single leaf clause
-       contains the full match (e.g. the source text ran a paragraph intro
-       and its enumerated items onto one physical line, so segmentation
-       could not split them into separate leaves) — grouped by
-       article_number so the window still never crosses into a *different*
-       article.
-    """
-    for c in (clauses or []):
-        leaf_text = str(getattr(c, "text", None) or "")
-        m = pattern.search(leaf_text)
-        if not m:
-            continue
-        start = max(0, m.start() - before)
-        end = min(len(leaf_text), m.end() + after)
-        art = str(getattr(c, "article_number", None) or "").strip() or None
-        return leaf_text[start:end].strip(), art
-
-    for art, art_text in _group_clause_text_by_article(clauses):
-        m = pattern.search(art_text)
-        if not m:
-            continue
-        start = max(0, m.start() - before)
-        end = min(len(art_text), m.end() + after)
-        return art_text[start:end].strip(), art
-    return None
-
-
 def _apply_common_legal_risk_rules(
     clause_results: list[dict[str, Any]],
     full_text: str,
@@ -241,7 +176,7 @@ def _apply_common_legal_risk_rules(
             continue
         if item["id"] in existing_ids:
             continue
-        scoped = _find_clause_scoped_excerpt(clauses, item["present"])
+        scoped = find_clause_scoped_excerpt(clauses, item["present"])
         if scoped is not None:
             excerpt, article_number = scoped
         else:
@@ -305,7 +240,7 @@ def _apply_termination_vs_term_check(
     if not (has_long_term and has_cause_only and not has_convenience):
         return
     years = term_match.group(1) if term_match else "장기"
-    scoped = _find_clause_scoped_excerpt(clauses, _RX_CAUSE_ONLY_TERMINATION, after=100)
+    scoped = find_clause_scoped_excerpt(clauses, _RX_CAUSE_ONLY_TERMINATION, after=100)
     if scoped is not None:
         cause_excerpt, cause_article = scoped
     elif not clauses:

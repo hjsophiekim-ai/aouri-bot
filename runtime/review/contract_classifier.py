@@ -387,7 +387,19 @@ def _classify_type_code(
         "검사의뢰", "인증심사", "적합성평가",
     )
     has_dealer_signal_early = has("위탁판매", "대리점", "판매대리점")
-    if (has_testing_strong or has_testing_generic) and not has_dealer_signal_early:
+    # has_testing_strong keywords ("시험연구원"/"시험기관"/"공인시험"/"시험성적서" 등)
+    # are unambiguous — a real dealer/대리점 계약서 essentially never uses them.
+    # A whole-document bare keyword scan for "대리점" can trip on one incidental
+    # mention anywhere in a long contract (e.g. a jurisdiction/miscellaneous
+    # clause disclaiming that a test result doesn't endorse resale through
+    # 대리점/유통 channels) — that single hit must not veto an otherwise
+    # unambiguous testing-service classification. Only the weaker
+    # has_testing_generic signals (시험분석/품질검사 등, which can plausibly
+    # co-occur in a genuine dealer contract) stay subject to the dealer veto.
+    if has_testing_strong:
+        reasons.append("testing_inspection_service_strong_signal_priority")
+        return "testing_inspection_service", reasons
+    if has_testing_generic and not has_dealer_signal_early:
         reasons.append("testing_inspection_service")
         return "testing_inspection_service", reasons
 

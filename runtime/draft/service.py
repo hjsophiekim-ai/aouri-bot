@@ -69,7 +69,13 @@ DEFAULT_TEMPLATE_HINTS: list[dict[str, object]] = [
         ],
     },
     {
-        "contract_type_keywords": ["대리점", "유통", "위탁"],
+        # "위탁" alone used to be a keyword here, but it's far too generic —
+        # it appears in many non-dealer contract types (위탁시험, 위탁가공,
+        # 위탁개발, 개인정보 처리위탁 등), which caused a testing/inspection
+        # contract like "시험위탁계약" to incorrectly get the 재판매대리점
+        # template recommended just for containing "위탁분석/위탁시험" 등.
+        # Only genuinely dealer/distribution-specific terms remain.
+        "contract_type_keywords": ["대리점", "유통", "재판매"],
         "template_ids": ["사내표준 재판매대리점 약정서.docx"],
     },
     {

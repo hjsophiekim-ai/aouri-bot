@@ -254,6 +254,35 @@ def _is_valid_issue(
     return True
 
 
+def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> ReviewIssue:
+    """Convert an already-filtered issue dict (e.g. output_filter.
+    build_final_findings()'s high_issues/medium_issues/top_risks) back into a
+    ReviewIssue for rendering. Shared by build_legal_review_docx and
+    build_legal_review_pdf so a caller that passes pre-filtered issues gets
+    identical DOCX/PDF content from the exact same conversion rule."""
+    sev = str(d.get("severity") or d.get("risk_tier") or "LOW").upper()
+    if sev not in ("HIGH", "MEDIUM", "LOW"):
+        sev = "LOW"
+    neg = str(d.get("negotiation_position") or "").strip()
+    if not neg or _has_placeholder(neg):
+        from runtime.review.mandatory_issues import get_mandatory_negotiation_position
+        neg = get_mandatory_negotiation_position(is_counterparty_form)
+    return ReviewIssue(
+        clause_id=str(d.get("clause_id") or ""),
+        clause_title=str(d.get("clause_title") or ""),
+        severity=sev,  # type: ignore[arg-type]
+        approval_required=bool(d.get("approval_required")),
+        issue_title=str(d.get("issue_title") or "")[:120],
+        original_text=str(d.get("original_text") or "")[:500],
+        problem=str(d.get("problem") or d.get("rewrite_reason") or "")[:400],
+        legal_business_reason=str(d.get("legal_business_reason") or d.get("problem") or "")[:400],
+        proposed_revision=str(d.get("proposed_revision") or d.get("suggested_rewrite") or "")[:800],
+        negotiation_position=neg[:300],
+        related_clauses=[str(r) for r in (d.get("related_clauses") or [])[:6]],
+        confidence=float(d.get("confidence") or 0.75),
+    )
+
+
 def _build_review_issues(
     clause_results: list[dict[str, Any]],
     *,
@@ -515,27 +544,7 @@ def build_legal_review_docx(
     # If pre-filtered issues are provided, use them (converted back to ReviewIssue)
     if top_risks_filtered is not None and (high_issues_filtered is not None or medium_issues_filtered is not None):
         def _from_dict(d: dict) -> ReviewIssue:
-            sev = str(d.get("severity") or d.get("risk_tier") or "LOW").upper()
-            if sev not in ("HIGH", "MEDIUM", "LOW"):
-                sev = "LOW"
-            neg = str(d.get("negotiation_position") or "").strip()
-            if not neg or _has_placeholder(neg):
-                from runtime.review.mandatory_issues import get_mandatory_negotiation_position
-                neg = get_mandatory_negotiation_position(is_counterparty_form)
-            return ReviewIssue(
-                clause_id=str(d.get("clause_id") or ""),
-                clause_title=str(d.get("clause_title") or ""),
-                severity=sev,  # type: ignore[arg-type]
-                approval_required=bool(d.get("approval_required")),
-                issue_title=str(d.get("issue_title") or "")[:120],
-                original_text=str(d.get("original_text") or "")[:500],
-                problem=str(d.get("problem") or d.get("rewrite_reason") or "")[:400],
-                legal_business_reason=str(d.get("legal_business_reason") or d.get("problem") or "")[:400],
-                proposed_revision=str(d.get("proposed_revision") or d.get("suggested_rewrite") or "")[:800],
-                negotiation_position=neg[:300],
-                related_clauses=[str(r) for r in (d.get("related_clauses") or [])[:6]],
-                confidence=float(d.get("confidence") or 0.75),
-            )
+            return _review_issue_from_dict(d, is_counterparty_form=is_counterparty_form)
 
         top_issues = [_from_dict(d) for d in (top_risks_filtered or []) if isinstance(d, dict)]
         high_issues = [_from_dict(d) for d in (high_issues_filtered or []) if isinstance(d, dict)]

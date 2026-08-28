@@ -43,8 +43,23 @@ _FALSE_NEGATIVE_RISK_GROUPS: dict[str, list[str]] = {
 }
 
 
+# Generic Korean legal-prose function words that end up in nearly every
+# clause regardless of topic ("~하여야 한다", "~할 수 있다", "~에 대하여", ...).
+# Left in, these trivially "overlap" any two unrelated sentences and make the
+# topic-mismatch check (item 4 below) a no-op — the exact failure mode this
+# stopword filter exists to close.
+_STOPWORD_TOKENS: frozenset[str] = frozenset({
+    "한다", "있다", "없다", "된다", "한다.", "하다", "되다",
+    "아니한다", "아니된다", "하여야", "되어야", "하여서는", "하지",
+    "경우", "때에", "대하여", "관하여", "관한", "대한", "위하여", "위한",
+    "따라", "따른", "의하여", "의한",
+    "각호", "각", "등의", "등을", "등이", "그리고", "또는", "및",
+    "이러한", "그러한", "본", "당", "해당",
+})
+
+
 def _tokens(text: str) -> set[str]:
-    return set(_TOKEN_RX.findall(text or ""))
+    return set(_TOKEN_RX.findall(text or "")) - _STOPWORD_TOKENS
 
 
 def run_self_check(
@@ -120,9 +135,21 @@ def run_self_check(
             if isinstance(v, str) and v:
                 cr[field] = _strip_unverified_law_article_numbers(v)
 
-    # (4) problem/revision same-issue heuristic: flag (do not drop) HIGH/MUST
+    # (4) problem/revision same-issue heuristic: flag (do not drop) HIGH/MEDIUM
     # items whose rewrite_reason shares no vocabulary with the quoted 원문 —
     # a sign the "문제점" and "원문" may not actually be about the same clause.
+    #
+    # This is reporting-only, not an auto-strip gate: a bag-of-words overlap
+    # check (even with common function words removed) is far too blunt to
+    # safely delete content automatically — real AI-written rewrite_reason
+    # text routinely paraphrases the clause instead of repeating its exact
+    # nouns, which produces "zero overlap" for entirely correct, on-topic
+    # findings. An earlier attempt to auto-strip HIGH findings on this signal
+    # was reverted after it fired on FITI's own genuine 제5조/제6조/제11조/제14조
+    # findings in a real run — false positives at a rate that made the
+    # "validation" actively harmful. Use hallucination_guard's targeted
+    # phrase-list backstop (item 3 above) for high-precision auto-stripping;
+    # this heuristic stays a flag for manual review only.
     topic_mismatch_flags: list[str] = []
     for cr in clause_results:
         if not isinstance(cr, dict):

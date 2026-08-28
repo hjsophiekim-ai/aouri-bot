@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from runtime.review.clause_extraction import ClauseChunk, find_clause_scoped_excerpt
+
 _TSR_ITEMS: list[dict[str, Any]] = [
     {
         "id": "tsr_certificate_usage_restriction",
@@ -124,10 +126,17 @@ def _apply_testing_service_checklist(
     clause_results: list[dict[str, Any]],
     full_text: str,
     contract_class: str,
+    clauses: list[ClauseChunk] | None = None,
 ) -> None:
     """[Layer 2] Testing/inspection/certification service checklist.
 
     HARD BLOCK: must only run for contract_class == "testing_service".
+
+    The "원문" quote is scoped to the already-confirmed segmentation
+    (`clauses`) whenever available, so it can never bleed into an adjacent
+    clause/article — a raw whole-document character-offset window (the
+    previous behavior) doesn't know where one 항/조 ends and the next
+    begins.
     """
     if contract_class != "testing_service":
         return
@@ -138,18 +147,29 @@ def _apply_testing_service_checklist(
         if item["id"] in existing_ids:
             continue
         is_missing_check = bool(item.get("is_missing_clause_check"))
-        m = item["present"].search(text)
         if is_missing_check:
-            # Inverted: inject the finding when the safeguard is ABSENT.
-            if m:
+            # Inverted: inject the finding when the safeguard is ABSENT anywhere
+            # in the document — this is a document-wide absence check, not a
+            # quote, so it stays on the raw text (there is no clause to scope to).
+            if item["present"].search(text):
                 continue
             excerpt = ""
         else:
-            if not m:
-                continue
-            start = max(0, m.start() - 40)
-            end = min(len(text), m.end() + 120)
-            excerpt = text[start:end].strip()
+            scoped = find_clause_scoped_excerpt(clauses, item["present"])
+            if scoped is not None:
+                excerpt, _art = scoped
+            else:
+                if clauses:
+                    # Segmented clauses exist but none of them matched — trust
+                    # the segmentation over a raw full-text scan rather than
+                    # risk a cross-clause quote.
+                    continue
+                m = item["present"].search(text)
+                if not m:
+                    continue
+                start = max(0, m.start() - 40)
+                end = min(len(text), m.end() + 120)
+                excerpt = text[start:end].strip()
         risk = item["risk"]
         clause_results.append({
             "clause_id": item["id"],

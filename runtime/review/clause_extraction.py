@@ -621,3 +621,82 @@ def _split_by_subclauses(text: str) -> list[str]:
     if not out:
         return _fallback_split(s)
     return [_norm_text(x) for x in out]
+
+
+# ─── Clause-scoped regex search ──────────────────────────────────────────────
+# Shared by any rule-checklist module (common_legal_risk.py, testing_service_
+# rules.py, mandatory_issues.py, ...) that needs to quote a matched span of
+# contract text as "원문". A regex search over the raw whole-document string
+# with a fixed before/after character window is exactly how contamination
+# between unrelated clauses/articles has repeatedly entered these quotes
+# (a match near the end of one 항/조 pulls in the start of the next) — these
+# two functions scope the search to the already-confirmed segmentation
+# instead, so a quote can never contain another clause's/article's text.
+
+
+def _clause_field(c: Any, field: str) -> Any:
+    """Read `field` off a clause whether it's a ClauseChunk instance (e.g.
+    from extract_clauses()) or a plain dict (e.g. session-stored
+    `original_clauses`, which are ClauseChunk fields serialized to JSON)."""
+    if isinstance(c, dict):
+        return c.get(field)
+    return getattr(c, field, None)
+
+
+def group_clause_text_by_article(clauses: list[Any] | None) -> list[tuple[str, str]]:
+    """Concatenate each already-segmented clause's own text by article_number,
+    in first-appearance order."""
+    order: list[str] = []
+    parts: dict[str, list[str]] = {}
+    for c in (clauses or []):
+        art = str(_clause_field(c, "article_number") or "").strip()
+        if not art:
+            continue
+        if art not in parts:
+            parts[art] = []
+            order.append(art)
+        t = str(_clause_field(c, "text") or "").strip()
+        if t:
+            parts[art].append(t)
+    return [(art, "\n".join(parts[art])) for art in order]
+
+
+def find_clause_scoped_excerpt(
+    clauses: list[Any] | None,
+    pattern: "re.Pattern[str]",
+    *,
+    before: int = 40,
+    after: int = 120,
+) -> tuple[str, str | None] | None:
+    """Search `pattern` against already-segmented clause text (ClauseChunk
+    instances or plain dicts with the same field names) and return (excerpt,
+    article_number) for the first match, or None if nothing matches. Two
+    passes, in order of preference:
+
+    1. Per-leaf-clause: search each clause's own `.text` in isolation — the
+       common case, and the only way to guarantee the excerpt can never
+       spill into a sibling paragraph.
+    2. Per-article fallback (grouped via `group_clause_text_by_article`):
+       only reached when no single leaf clause contains the full match (e.g.
+       the source text ran a paragraph intro and its enumerated items onto
+       one physical line, so segmentation could not split them into
+       separate leaves) — still never crosses into a *different* article.
+    """
+    for c in (clauses or []):
+        leaf_text = str(_clause_field(c, "text") or "")
+        m = pattern.search(leaf_text)
+        if not m:
+            continue
+        start = max(0, m.start() - before)
+        end = min(len(leaf_text), m.end() + after)
+        art = str(_clause_field(c, "article_number") or "").strip() or None
+        return leaf_text[start:end].strip(), art
+
+    for art, art_text in group_clause_text_by_article(clauses):
+        m = pattern.search(art_text)
+        if not m:
+            continue
+        start = max(0, m.start() - before)
+        end = min(len(art_text), m.end() + after)
+        return art_text[start:end].strip(), art
+    return None
