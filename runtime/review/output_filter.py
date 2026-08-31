@@ -393,8 +393,22 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
         sev = str(cr.get("risk_tier") or "LOW").upper()
         if sev not in ("HIGH", "MEDIUM", "LOW"):
             sev = "LOW"
+        # Checklist items (is_checklist_item=True, e.g. isr_installation_defect)
+        # flag a clause the contract is MISSING entirely — there is no quote to
+        # show, by design, and the suggested new-clause text lives in
+        # recommendation_text rather than suggested_rewrite/proposed_revision
+        # (see clause_level.py's checklist injectors). Requiring a non-empty
+        # original_text here silently dropped every such finding before it
+        # ever reached the HIGH/MEDIUM buckets, which is what tripped the
+        # REVIEW_FAILED collapse gate in server.py for contracts whose risk
+        # was mostly missing-clause checklist items (e.g. project_installation).
+        is_checklist = bool(cr.get("is_checklist_item"))
         ot = str(cr.get("original_text") or "").strip()
-        pr = str(cr.get("suggested_rewrite") or cr.get("proposed_revision") or "").strip()
+        if not ot and is_checklist:
+            ot = "(해당 조항 없음 — 계약서에 신설 필요)"
+        pr = str(
+            cr.get("suggested_rewrite") or cr.get("proposed_revision") or cr.get("recommendation_text") or ""
+        ).strip()
         pb = str(cr.get("rewrite_reason") or cr.get("problem") or "").strip()
         if not ot or not pb:
             continue
