@@ -3,10 +3,13 @@ from __future__ import annotations
 import difflib
 import difflib as _difflib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from runtime.ai.enhance import _try_json
 from runtime.ai.http_openai_compatible_provider import build_messages
@@ -29,6 +32,7 @@ from runtime.review.risk_scenarios import detect_risk_scenarios
 from runtime.review.strategic_inquiry import generate_strategic_inquiry
 from runtime.review.clause_conflicts import detect_clause_conflicts
 from runtime.review.executive_summary import generate_executive_summary
+from runtime.review.legal_effect_taxonomy import LEGAL_EFFECT_TAGS, effects_overlap
 
 # ─── [Phase 2] 지능형 법무검토 시스템 프롬프트 ──────────────────────────────────
 CLAUSE_REVIEW_SYSTEM = (
@@ -3414,11 +3418,29 @@ def build_clause_level_result(
     )
     _hard_block_out_of_scope_rules(review, _contract_class)
     clauses, clause_report = extract_clauses(text)
-    # [Contract-level understanding] requirement.md 2026-08-28: AI가 개별 조항만
-    # 보고 판단하지 않도록, 이미 확정된 segmentation을 바탕으로 계약 목적·기간·
-    # 대금구조·전체 조항 목차를 먼저 구성해 AI 프롬프트에 포함한다.
+    # [Layer 0 — Contract Legal Map] requirement.md 2026-08-28 / 변호사형
+    # 전체계약 판단(2026-09-01): 개별 조항 검토를 시작하기 전에 계약 전체를
+    # 한 번 읽고 당사자·거래구조·의무구조·해지구조·책임구조 등을 먼저
+    # 구조화한다. AI가 있으면 실제 AI 호출로 채우고(계약당 1회), 없으면
+    # 기존 regex 기반 4필드만으로 축소판을 반환한다 — 어느 쪽이든 이후
+    # Layer 1(공통 법률효과)·Layer 2(유형별) 조항 검토가 이 결과를 공유
+    # 컨텍스트로 사용한다.
+    from runtime.review.contract_legal_map import build_contract_legal_map
+    _legal_map = build_contract_legal_map(
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_timeout_sec=ai_timeout_sec,
+        ai_max_tokens=ai_max_tokens,
+        ai_temperature=ai_temperature,
+        entity=str(entity),
+        contract_type=str(contract_type),
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+        text=str(text or ""),
+        clauses=clauses,
+    )
     from runtime.review.contract_overview import build_contract_overview
     _contract_overview = build_contract_overview(clauses=clauses, full_text=str(text or ""))
+    _contract_overview_dict = {**_contract_overview.to_dict(), **_legal_map.to_dict()}
     derived = review.get("derived_context") if isinstance(review, dict) else None
     prof = infer_contract_profile(contract_type=str(contract_type), text=str(text or ""))
     frc = build_final_review_context(
@@ -3445,7 +3467,7 @@ def build_clause_level_result(
         "final_review_context": frc.to_dict(),
         "contract_structure": _struct.contract_structure,
         "structure_result": _struct.to_dict(),
-        "contract_overview": _contract_overview.to_dict(),
+        "contract_overview": _contract_overview_dict,
     }
     revision = suggest_revisions(
         clauses,
@@ -4394,7 +4416,15 @@ def build_clause_level_result(
         + (f"## 이 계약유형({_contract_class})에서는 다음 카테고리의 제안을 절대 하지 말 것: {_out_of_scope_notice}\n\n" if _out_of_scope_notice else "")
         + "출력은 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하고, 코드펜스/설명 문장을 절대 포함하지 마라. "
         "각 원소 형식은 clause_id/original_text_quote/party_obligations/our_company_risk/rewrite_reason/"
-        "suggested_rewrite/changed_segments/risk_tier/must_fix 로 통일하라. "
+        "suggested_rewrite/changed_segments/risk_tier/must_fix/original_effect_tags/rewrite_effect_tags 로 통일하라. "
+        f"original_effect_tags, rewrite_effect_tags: 이 조항의 원문과 네가 제안하는 수정문안이 실제로 어떤 "
+        f"법률효과를 발생시키는지, 아래 taxonomy 중 해당하는 값들의 배열로 분류하라(단어가 아니라 효과로 "
+        f"판단할 것 — 예: '해지'라는 단어가 있어도 실제로는 반환·폐기 조항의 트리거 조건일 뿐이면 "
+        f"termination_for_breach가 아니라 return_destruction으로 분류). taxonomy: "
+        f"{', '.join(LEGAL_EFFECT_TAGS)}. 수정문안이 원문과 근본적으로 다른 법률효과로 바뀌면(예: 원문은 "
+        f"양도조항의 연대책임인데 수정문안이 지급보증 문구가 되는 경우) rewrite_effect_tags가 원문과 겹치는 "
+        f"태그를 최소 하나는 포함하도록 재작성하라 — 겹치지 않으면 자동으로 REVIEW_FAILED_SEMANTIC_MISMATCH로 "
+        f"처리되어 그 finding이 버려진다. "
         "original_text_quote: 판단의 근거가 된 원문 조항에서 그대로(변형 없이) 발췌한 10자 이상의 문구 — "
         "원문에 실제로 없는 문구를 지어내지 마라. "
         "party_obligations: 이 조항이 규정하는 각 당사자의 권리·의무를 80자 이내 1문장으로. "
@@ -4615,6 +4645,38 @@ def build_clause_level_result(
                             ai_grounding_rejected.append(str(cr.get("clause_id") or ""))
                             return
 
+                    # [Layer 3 — semantic consistency gate] AI가 스스로 분류한
+                    # 원문/수정문안의 법률효과 태그가 전혀 겹치지 않으면(예: 원문=
+                    # return_destruction인데 rewrite=termination_for_breach),
+                    # 조용히 finding을 버리지 않고 REVIEW_FAILED_SEMANTIC_MISMATCH로
+                    # 기록한다(변호사형 전체계약 판단 지시, 2026-09-01 — 항목 3).
+                    _oet = upd.get("original_effect_tags")
+                    _ret = upd.get("rewrite_effect_tags")
+                    _oet = [str(x) for x in _oet if isinstance(x, str) and x in LEGAL_EFFECT_TAGS] if isinstance(_oet, list) else []
+                    _ret = [str(x) for x in _ret if isinstance(x, str) and x in LEGAL_EFFECT_TAGS] if isinstance(_ret, list) else []
+                    if _oet:
+                        cr["original_effect_tags"] = _oet
+                    if _ret:
+                        cr["rewrite_effect_tags"] = _ret
+                    if _oet and _ret and not effects_overlap(_oet, _ret) and isinstance(sr, str) and sr.strip():
+                        cr["semantic_mismatch"] = {
+                            "stage": "ai_rewrite_effect_consistency",
+                            "status": "REVIEW_FAILED_SEMANTIC_MISMATCH",
+                            "clause_id": str(cr.get("clause_id") or ""),
+                            "original_effect_tags": _oet,
+                            "rewrite_effect_tags": _ret,
+                        }
+                        logger.warning(
+                            "REVIEW_FAILED_SEMANTIC_MISMATCH clause_id=%s original_effect_tags=%s rewrite_effect_tags=%s",
+                            cr.get("clause_id"), _oet, _ret,
+                        )
+                        # 원문이 규정하는 법률효과와 완전히 다른 효과로 수정문안을
+                        # 재작성한 셈이므로, 그 rewrite는 신뢰할 수 없다 — 적용하지
+                        # 않고(finding 자체는 남겨 로그·추적 가능하게 유지) reason만
+                        # mismatch 사유로 남긴다.
+                        rr = f"[REVIEW_FAILED_SEMANTIC_MISMATCH] AI가 제안한 수정문안의 법률효과({_ret})가 원문의 법률효과({_oet})와 일치하지 않아 자동 적용을 보류함."
+                        sr = None
+
                     if isinstance(rr, str) and rr.strip():
                         cr["rewrite_reason"] = polish_korean_legal_style(rr.strip())
                     if isinstance(sr, str) and sr.strip():
@@ -4775,6 +4837,20 @@ def build_clause_level_result(
             cr["changed_segments"] = []
             if not (isinstance(cr.get("rewrite_reason"), str) and str(cr.get("rewrite_reason") or "").strip()):
                 cr["rewrite_reason"] = "조항 주제와 무관한 수정문안은 제외(guardrail)."
+            # [Layer 3 — semantic consistency gate] 어떤 단계(clause_topic
+            # 기반 guardrail)에서 mismatch가 발생했는지 로그에 남긴다(변호사형
+            # 전체계약 판단 지시, 2026-09-01 — 항목 3). 조용히 버리지 않는다.
+            cr["semantic_mismatch"] = {
+                "stage": "clause_topic_rewrite_consistency",
+                "status": "REVIEW_FAILED_SEMANTIC_MISMATCH",
+                "clause_id": str(cr.get("clause_id") or ""),
+                "original_clause_topic": clause_topic,
+                "rewrite_topics": sorted(list(rt))[:8],
+            }
+            logger.warning(
+                "REVIEW_FAILED_SEMANTIC_MISMATCH clause_id=%s clause_topic=%s rewrite_topics=%s",
+                cr.get("clause_id"), clause_topic, sorted(list(rt))[:8],
+            )
 
     # ── [STEP 4] Industry-Specific Legal Reasoning (가구·설비·제조물 12개 항목) ──
     _apply_industry_specific_review(clause_results, str(text or ""), _contract_class, _contract_nature, str(contract_type or ""))
@@ -5606,6 +5682,13 @@ def build_clause_level_result(
 
     # ── [Executive Summary] 변호사식 핵심 요약 생성 ─────────────────────────
     executive_summary = generate_executive_summary(clause_results, clause_conflicts)
+
+    meta["contract_legal_map"] = _legal_map.to_dict()
+    meta["semantic_mismatches"] = [
+        cr.get("semantic_mismatch")
+        for cr in clause_results
+        if isinstance(cr, dict) and cr.get("semantic_mismatch")
+    ]
 
     return ClauseLevelResult(
         review={
