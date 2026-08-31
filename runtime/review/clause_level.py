@@ -117,6 +117,10 @@ def _contains_wordprocessingml_markers(text: str) -> bool:
     return contains_wordprocessingml_markers(text)
 
 
+_RX_ACTIVE_TERMINATION_RIGHT = re.compile(
+    r"해지(?:할\s*수\s*있다|권)|해제(?:할\s*수\s*있다|권)|즉시\s*(?:해지|해제)|계약을\s*(?:해지|해제)",
+    re.DOTALL,
+)
 _RX_DEDUP = re.compile(r"[\s\r\n\t]+")
 _RX_DEDUP_PUNCT = re.compile(r"[^\w가-힣]+")
 
@@ -4883,7 +4887,17 @@ def build_clause_level_result(
                 cr["must_fix"] = False
                 cr["review_tier"] = "SUGGEST"
             continue
-        if ct0 == "termination":
+        if ct0 == "termination" and not _RX_ACTIVE_TERMINATION_RIGHT.search(ot0):
+            # clause_topic 분류가 "해지"/"종료"라는 단어가 조항 어딘가에
+            # 있기만 하면(예: 비밀정보 반환 조항의 "계약이 해제·해지·종료
+            # 되거나"라는 트리거 조건 문구) termination으로 분류하기 때문에,
+            # 실제로 해지권을 행사/제한하는 조항이 아닌데도 "해지 요건 객관화"
+            # 템플릿이 삽입되는 것을 방지한다(변호사형 전체계약 판단 지시,
+            # 2026-09-01 — NDA 반환·폐기 조항 오염 사례). 실제 해지권
+            # 조항인지는 "해지/해제할 수 있다"/"해지권"/"즉시 해지" 같은
+            # 능동적 행사 문언으로 판별한다.
+            pass
+        elif ct0 == "termination":
             add = (
                 "\n\n[추가]\n"
                 "① 해지(또는 계약 종료)는 객관적으로 중대한 위반이 있는 경우로 한정한다.\n"

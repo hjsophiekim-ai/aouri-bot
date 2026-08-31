@@ -129,8 +129,16 @@ _CLR_ITEMS: list[dict[str, Any]] = [
     {
         "id": "clr_payment_guarantee_ambiguous",
         "name": "지급보증/연대책임으로 확대해석될 수 있는 모호한 협조 의무",
+        # "연대하여 책임을 진다"는 양도·하도급 조항의 통상적인 문구(양수인이
+        # 원채무자의 책임을 면제시키지 않는다는 취지)로도 흔히 쓰이며, 그
+        # 자체로는 지급보증 문제가 아니다 — 미수금/대금/채무 같은 결제
+        # 맥락과 함께 나타날 때만 지급보증으로 확대해석될 위험이 있다
+        # (변호사형 전체계약 판단 지시, 2026-09-01 — NDA 양도조항의 연대
+        # 책임을 지급보증으로 오독하던 사례).
         "present": re.compile(
-            r"미수금이?\s*발생하지\s*않도록\s*적극\s*협조|연대하여\s*책임|연대\s*보증|연대\s*책임을?\s*진다",
+            r"미수금이?\s*발생하지\s*않도록\s*적극\s*협조"
+            r"|(미수금|대금|채무|지급)[^.\n]{0,30}(연대하여\s*책임|연대\s*보증|연대\s*책임을?\s*진다)"
+            r"|(연대하여\s*책임|연대\s*보증|연대\s*책임을?\s*진다)[^.\n]{0,30}(미수금|대금|채무|지급)",
             re.IGNORECASE | re.DOTALL,
         ),
         "risk": "MEDIUM",
@@ -424,6 +432,119 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         "negotiation_position": "변경요청 자체보다 '착수 전 서면합의' 요건 신설을 우선 요청 — 협력의무는 유지하되 대가 없는 선이행을 막는 최소수정.",
         "clause_topic": "sow_change",
     },
+    # ── 변호사형 전체계약 판단 (2026-09-01 지시) — NDA를 golden test로 확인한
+    # 범용 legal-effect 패턴. 조항번호·회사명과 무관하게 "손해배상 범위가
+    # 무제한인가", "제3자 귀책까지 연대책임을 지는가", "관리의무 기준이
+    # 모호한가", "부수계약 위반이 본계약 해지로 확산되는가" 같은 법률효과를
+    # 판별한다 — NDA 전용이 아니라 용역/공급 등 다른 계약에서도 동일하게
+    # 나타날 수 있는 패턴이다.
+    {
+        "id": "clr_uncapped_consequential_damages",
+        "name": "간접손해·예상손실·법률비용까지 포함한 무제한 손해배상",
+        "present": re.compile(
+            r"(?=.*간접적?\s*손해)(?=.*(예상\s*손실|위자료))(?=.*(법률비용|소송비용))",
+            re.DOTALL,
+        ),
+        "risk": "HIGH",
+        "direction": "손해배상 범위를 귀책사유와 상당인과관계 있는 직접·통상손해로 한정하고, 간접손해·특별손해·예상손실은 원칙적으로 배제, 법률비용은 합리적 범위로 제한",
+        "reason": "손해배상 범위에 직접손해뿐 아니라 간접손해·예상손실·위자료·일체의 법률비용·제3자 배상채무까지 포함되어 있고 상한이 없다.",
+        "legal_business_reason": (
+            "실제 손해 규모와 무관하게 예상손실·위자료·법률비용까지 무제한으로 배상해야 하는 구조가 되어, "
+            "위반 1건의 경제적 노출 규모를 사전에 예측·통제할 수 없다."
+        ),
+        "rewrite": (
+            "손해배상의 범위는 귀책사유와 상당인과관계 있는 직접·통상손해로 한정하며, 간접손해·특별손해·"
+            "예상손실은 원칙적으로 배상 범위에서 제외한다. 법률비용은 법원이 인정하는 합리적 범위 내에서만 "
+            "배상 대상으로 한다."
+        ),
+        "negotiation_position": "손해배상 범위 자체를 없애기보다 '직접·통상손해로 한정 + 간접/특별손해 배제' 문구 추가를 우선 요청 — 필요 시 배상액 상한(cap)도 함께 협상.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "clr_third_party_joint_liability_regardless_of_selection_fault",
+        "name": "제3자·하청업체 고의과실에 대한 연대책임(선정·감독 귀책 불문)",
+        "present": re.compile(
+            r"(하청업체|수급인|제\s*3\s*자).{0,90}(고의|과실).{0,90}연대하여.{0,20}(배상|책임)",
+            re.DOTALL,
+        ),
+        "risk": "MEDIUM",
+        "direction": "제3자에게 동등한 비밀유지의무를 부과하고 합리적으로 선정·관리·감독한 경우, 그 제3자의 독립적 위반에 대해서는 책임을 지지 않도록 한정",
+        "reason": "우리가 선정·관리하지 않은 제3자·하청업체의 고의·과실에 대해서도 연대하여 배상 책임을 진다.",
+        "legal_business_reason": (
+            "제3자에게 동등한 비밀유지의무를 부과하고 합리적으로 선정·관리·감독했음에도, 그 제3자가 "
+            "독자적으로 저지른 위반까지 우리가 전액 연대책임을 지면 우리 통제 밖의 행위에 대한 책임을 "
+            "지는 구조가 된다."
+        ),
+        "rewrite": (
+            "제3자에게 본 계약과 동등한 비밀유지의무를 부과하고 합리적인 선정·관리·감독 의무를 이행한 "
+            "경우, 그 제3자의 독립적인 위반에 대해서는 책임을 부담하지 아니한다."
+        ),
+        "negotiation_position": "연대책임 삭제보다 '선정·감독 의무를 다한 경우 면책' 요건 추가를 우선 요청 — 통제 가능한 범위로 책임을 한정하는 최소수정.",
+        "clause_topic": "damage",
+    },
+    {
+        "id": "clr_best_efforts_standard_of_care_ambiguous",
+        "name": "관리의무 기준 — '가능한 최선의 노력' 모호",
+        "present": re.compile(r"가능한\s*최선의\s*노력"),
+        "risk": "MEDIUM",
+        "direction": "관리의무 기준을 '동종의 자기 정보에 적용하는 것과 동일한 수준' + '최소 합리적 주의의무'로 구체화",
+        "reason": "관리·보호 의무의 기준이 '가능한 최선의 노력'이라는 추상적 문언으로만 되어 있다.",
+        "legal_business_reason": (
+            "'최선의 노력'은 객관적 기준(objective standard)이 지나치게 높게 해석될 여지가 있어, 사소한 "
+            "관리 미비도 의무 위반으로 주장될 위험이 있다."
+        ),
+        "rewrite": (
+            "자신의 동종 중요정보에 적용하는 것과 동일한 수준의 주의를 기울이되, 최소한 합리적인 주의의무를 "
+            "다하는 것으로 관리·보호 의무를 이행한 것으로 본다."
+        ),
+        "negotiation_position": "관리의무 기준을 '동종 자기정보 대비 동일 수준 + 최소 합리적 주의'로 구체화하는 최소수정 — 객관적 최고기준 해석 여지를 없앤다.",
+        "clause_topic": "other",
+    },
+    {
+        "id": "clr_breach_triggers_related_contract_termination",
+        "name": "본계약(부수계약) 위반만으로 관련 본계약 해지 가능",
+        "present": re.compile(
+            r"(계약상의|본\s*계약).{0,20}(위반|불이행).{0,60}(정식\s*계약|관련된?\s*계약).{0,20}(해지|해제)",
+            re.DOTALL,
+        ),
+        "risk": "MEDIUM",
+        "direction": "본계약(비밀유지 등 부수계약) 위반이 중대한 경우로 한정하고, 시정기회를 부여한 후에도 시정되지 않을 때에 한하여 관련 본계약 해지 사유가 되도록 제한",
+        "reason": "이 계약(비밀유지 등 부수계약) 위반만으로, 위반의 중대성이나 시정기회 없이 관련된 본계약(정식 계약)까지 해지·해제될 수 있다.",
+        "legal_business_reason": (
+            "경미한 위반까지 본계약 위반 사유가 되어 관련된 본 거래(정식 계약) 전체가 해지될 수 있으면, "
+            "부수적인 의무 위반이 핵심 거래관계 상실이라는 불균형한 결과로 이어질 위험이 있다."
+        ),
+        "rewrite": (
+            "이 계약을 중대하게 위반하고, 상당한 기간을 정한 시정 요구에도 불구하고 시정되지 아니한 경우에 "
+            "한하여 관련된 정식 계약을 해지 또는 해제할 수 있다."
+        ),
+        "negotiation_position": "관련계약 해지권 삭제보다 '중대한 위반 + 시정기회' 요건 추가를 우선 요청 — 경미한 위반으로 핵심 거래 전체가 흔들리지 않도록 하는 최소수정.",
+        "clause_topic": "termination",
+    },
+    {
+        "id": "clr_ethics_morality_termination_waiver_cluster",
+        "name": "광범위 윤리·품위의무 + 즉시해지(관련계약 포함) + 손해배상청구 포기",
+        "present": re.compile(
+            r"(?=.*(불륜|음주운전|막말|혐오\s*발언))(?=.*(별도의?\s*최고절차\s*없이|최고\s*없이))"
+            r"(?=.*손해배상\s*청구를?\s*하지\s*않는)",
+            re.DOTALL,
+        ),
+        "risk": "HIGH",
+        "direction": "품위의무는 계약 이행과 직접 관련된 중대한 위법·부정행위로 범위를 축소하고, 일반 위반은 시정기간을 부여하며, 손해배상청구 포기 조항은 삭제",
+        "reason": "계약 이행과 직접 관계없는 사생활·품위 의무 위반만으로 최고절차 없이 관련 계약까지 즉시 해지되고, 그 경우 손해배상 청구권까지 포기해야 한다.",
+        "legal_business_reason": (
+            "품위의무 위반 범위가 지나치게 넓고(불륜·음주운전 등 사생활 영역 포함), 최고절차 없는 즉시해지가 "
+            "관련 본계약까지 확산되며, 여기에 손해배상 청구권 포기까지 결합되면 절차적 방어수단 없이 "
+            "핵심 거래관계와 구제수단을 동시에 잃는 구조가 된다."
+        ),
+        "rewrite": (
+            "품위의무는 계약 이행과 직접 관련된 중대한 위법행위 또는 부정행위로 한정한다. 그 외의 일반적인 "
+            "위반은 상당한 기간을 정한 시정 요구 절차를 거친 후에만 해지 사유가 되며, 본 조에 따른 해지 시 "
+            "손해배상 청구권을 포기하는 것으로 보지 아니한다."
+        ),
+        "negotiation_position": "세 요소를 하나로 묶어 협상 — ① 품위의무 범위를 계약 관련 중대 위반으로 축소, ② 즉시해지에 최고절차 추가, ③ 손해배상청구 포기 조항 삭제.",
+        "clause_topic": "termination",
+    },
 ]
 
 _RX_LATE_PENALTY_RATE = re.compile(
@@ -567,6 +688,81 @@ def _apply_common_legal_risk_rules(
 
     _apply_termination_vs_term_check(clause_results, text, clauses)
     _apply_late_penalty_uncapped_check(clause_results, text, clauses)
+    _apply_confidentiality_survival_undefined_check(clause_results, clauses)
+
+
+_RX_SURVIVAL_NO_TERM = re.compile(
+    r"비밀유지의무.{0,100}(유효한\s*것으로\s*한다|존속한다|효력을?\s*(가진다|유지한다))",
+    re.DOTALL,
+)
+_RX_SURVIVAL_HAS_TERM = re.compile(r"\d+\s*년|\d+\s*개월")
+
+
+def _apply_confidentiality_survival_undefined_check(
+    clause_results: list[dict[str, Any]],
+    clauses: list[ClauseChunk] | None = None,
+) -> None:
+    """변호사형 전체계약 판단(2026-09-01 지시) > survival — 비밀유지의무가
+    계약 종료 후에도 "유효한 것으로 한다"처럼 존속한다고만 규정하고 구체적
+    종료 시점(예: N년)을 명시하지 않으면, 사실상 무기한 존속으로 해석될
+    여지가 있다. 조항번호·계약유형과 무관한 일반 survival 패턴."""
+    existing = {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}
+    if "clr_confidentiality_survival_undefined" in existing:
+        return
+    for c in (clauses or []):
+        leaf_text = str(getattr(c, "text", None) or (c.get("text") if isinstance(c, dict) else "") or "")
+        m = _RX_SURVIVAL_NO_TERM.search(leaf_text)
+        if not m:
+            continue
+        # 세그멘테이션이 조 단위까지만 되는 문서(항 단위로 안 쪼개짐)에서는
+        # 같은 조 안의 다른 항(예: 계약기간 자체를 "1년"으로 정하는 별도
+        # 문장)에 있는 숫자가 "존속기간이 있다"는 오탐을 만들 수 있다 —
+        # 반드시 존속 문구 주변(±80자)에서만 기간 표기를 찾는다.
+        _window_start = max(0, m.start() - 80)
+        _window_end = min(len(leaf_text), m.end() + 80)
+        if _RX_SURVIVAL_HAS_TERM.search(leaf_text[_window_start:_window_end]):
+            continue
+        art = str(getattr(c, "article_number", None) or (c.get("article_number") if isinstance(c, dict) else "") or "").strip() or None
+        para = str(getattr(c, "paragraph_number", None) or (c.get("paragraph_number") if isinstance(c, dict) else "") or "").strip() or None
+        display_path = str(getattr(c, "display_path", None) or (c.get("display_path") if isinstance(c, dict) else "") or "").strip() or None
+        title = f"{display_path} [비밀유지의무 존속기간 불명확]" if display_path else "[공통 법률리스크] 비밀유지의무 존속기간 불명확"
+        clause_results.append({
+            "clause_id": "clr_confidentiality_survival_undefined",
+            "article_number": art,
+            "paragraph_number": para,
+            "display_path": display_path,
+            "clause_title": title,
+            "clause_number_uncertain": not bool(display_path),
+            "clause_topic": "other",
+            "original_text": leaf_text.strip()[:400],
+            "risk_tier": "MEDIUM",
+            "severity": "MEDIUM",
+            "high_risk": False,
+            "must_fix": False,
+            "approval_required": False,
+            "review_tier": "SUGGEST",
+            "suggested_rewrite": (
+                "본계약 종료 후에도 비밀유지의무는 존속하되, 일반 비밀정보는 계약 종료 후 3~5년간, "
+                "법률상 영업비밀에 해당하는 정보는 그 영업비밀성이 유지되는 기간 동안 존속한다."
+            ),
+            "rewrite_reason": "비밀유지의무가 계약 종료 후에도 '유효한 것으로 한다'고만 되어 있고 구체적인 종료 시점이 없다.",
+            "legal_business_reason": (
+                "존속기간이 특정되지 않으면 사실상 무기한 비밀유지의무로 해석되어, 시간이 지날수록 "
+                "정보의 실질적 가치가 낮아져도 의무 위반 주장에서 자유로울 수 없다."
+            ),
+            "suggested_direction": ["일반 비밀정보와 영업비밀을 구분해 각각 구체적인 존속기간을 명시"],
+            "negotiation_position": "무기한 존속을 구체적 기간(일반정보 3~5년, 영업비밀은 영업비밀성 유지기간)으로 한정하는 최소수정.",
+            "confidence": 0.8,
+            "is_common_legal_risk": True,
+            "has_rewrite_change": True,
+            "display_kind": "guidance",
+            "dedup_suppressed": False,
+            "keep_as_is": False,
+            "user_focus_hit": False,
+            "factual_hit": False,
+            "ai_deep_reviewed": False,
+        })
+        return
 
 
 def _apply_late_penalty_uncapped_check(
