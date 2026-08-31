@@ -36,6 +36,15 @@ def _has_any_ci(text: str, needles: list[str]) -> bool:
     return False
 
 
+_RX_PAYMENT_ACTION = re.compile(
+    r"(대금|용역비|수수료|보수|사용료|렌탈료)[^.\n]{0,20}(지급|납부|정산|청구|지불|공제|상계)"
+    r"|(지급|납부|정산|청구|지불|공제|상계)[^.\n]{0,20}(대금|용역비|수수료|보수|사용료|렌탈료)"
+    r"|정산\s*(서|식|기준|주기|기한)|공제\s*[/·]?\s*상계|상계\s*[/·]?\s*공제"
+    r"|세금계산서|invoice|지체상금|지연이자",
+    re.IGNORECASE,
+)
+
+
 def classify_clause_topic(*, title: str | None, text: str | None) -> str:
     t = (title or "").strip()
     b = (text or "").strip()
@@ -43,10 +52,14 @@ def classify_clause_topic(*, title: str | None, text: str | None) -> str:
     if not hay:
         return TOPIC_OTHER
 
-    if _has_any_ci(hay, ["대금", "지급", "정산", "상계", "공제", "invoice", "세금계산서", "지체상금", "지연이자"]):
-        pay_hint = True
-    else:
-        pay_hint = False
+    # "대금"/"지급" 같은 단어가 조항 어딘가에 한 번이라도 나오면(예: 계약
+    # 변경 조항이 "대금의 증감이 예상되는 경우" 정도만 언급) 그 조항 전체를
+    # payment_settlement로 분류하던 bare 키워드 스캔을 대금/정산 관련 "행위"
+    # 문맥(지급한다/정산한다/공제·상계 등)이 실제로 있는지로 좁혔다 —
+    # 계약변경·해지 등 다른 주제의 조항에 정산/공제/상계 rewrite 템플릿이
+    # 잘못 삽입되는 rewrite contamination을 막기 위함(계약유형·회사명에
+    # 무관한 일반 판단 기준).
+    pay_hint = bool(_RX_PAYMENT_ACTION.search(hay))
 
     if _has_any_ci(hay, ["개인정보", "개인정보보호", "고객정보", "정보주체", "privacy", "dpa", "personal data"]):
         return TOPIC_PRIVACY

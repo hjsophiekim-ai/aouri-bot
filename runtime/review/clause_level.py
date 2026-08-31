@@ -1367,7 +1367,11 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
         # LEVEL 3으로 떨어지더라도(예: RuleQueryService의 KR-*/ACT-* 매칭 결과처럼
         # clause_topic을 세팅하지 않는 경로) 강제로 LOW 강등하면 false negative가 된다.
         _has_substantiated_match = bool(cr.get("detected_issue_list")) or bool(cr.get("related_rules"))
-        # LEVEL 3 — 선언/일반 조항: 실질 리스크 없으면 NOTE로 강등
+        # LEVEL 3 — 선언/일반 조항: 실질 리스크 없으면 NOTE로 강등. 단
+        # common_legal_risk.py가 원문 regex로 직접 확인해 만든 finding
+        # (is_common_legal_risk=True)은 제외한다 — 그 조항의 clause_topic이
+        # 이 함수의 LEVEL1/2 키워드·토픽 목록에 없다는 이유만으로(예:
+        # "sow_change") 실제로 확인된 리스크를 조용히 LOW 강등하면 안 된다.
         if (
             level == 3
             and tier != "HIGH"
@@ -1375,6 +1379,7 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
             and not bool(cr.get("must_fix"))
             and not bool(cr.get("user_focus_hit"))
             and not bool(cr.get("approval_required"))
+            and not bool(cr.get("is_common_legal_risk"))
         ):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
