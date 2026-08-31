@@ -912,6 +912,25 @@ def _ai_quote_is_grounded(quote: Any, original_text: str) -> bool:
     return len(probe) >= 8 and probe in hay
 
 
+# [Hybrid AI Review guardrail] Keyword clusters whose presence in AI-
+# generated rewrite_reason/suggested_rewrite content is a strong signal of a
+# hallucinated, off-topic response — UNLESS the clause's own original_text
+# already discusses that same subject. A grounded quote only proves the
+# AI's excerpt is real; it does not prove the AI's REASONING about that
+# excerpt stayed on-topic. Confirmed against a real FITI 시험분석약정서 run
+# where 제14조② (관할/분쟁 조항) repeatedly received AI content about
+# personnel/HR management ("인력 채용·배치·평가·징계") — a subject that
+# clause's own text never mentions. Each tuple is (foreign-topic markers,
+# keywords that — if present in the clause's own original_text — mean this
+# topic genuinely belongs here and the content should NOT be rejected).
+_FOREIGN_TOPIC_MARKER_CLUSTERS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (
+        frozenset({"인력 채용", "인력 운용", "인사관리", "인사권", "채용·배치", "채용ㆍ배치", "인력 배치", "인력에 대한 평가"}),
+        frozenset({"채용", "인사", "징계", "근로", "고용", "인력", "직원"}),
+    ),
+)
+
+
 def _sanitize_ai_severity(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -4489,15 +4508,51 @@ def build_clause_level_result(
                     # _apply_ai_update that doesn't go through `selected`).
                     if bool(cr.get("extraction_error")):
                         return
+                    quote = upd.get("original_text_quote")
+                    original_text = str(cr.get("original_text") or "")
+                    grounded = _ai_quote_is_grounded(quote, original_text)
+                    if not grounded:
+                        # An AI response that can't be grounded in an actual
+                        # excerpt of THIS clause's own text means the AI has
+                        # confused this clause with another (or invented
+                        # content outright) — confirmed against a real FITI
+                        # 시험분석약정서 run where 제14조(관할조항)'s finding
+                        # carried "인력 채용·배치·평가·징계" reasoning that has
+                        # nothing to do with jurisdiction. This used to gate
+                        # only the severity update below, while rewrite_
+                        # reason/suggested_rewrite/worst_case_scenario were
+                        # still applied unconditionally above — exactly the
+                        # fields that reach the Word output. Reject the ENTIRE
+                        # update here, before any field is touched, so a
+                        # hallucinated response can never overwrite this
+                        # clause's (safe, rule-engine-provided) existing
+                        # content.
+                        ai_grounding_rejected.append(str(cr.get("clause_id") or ""))
+                        return
                     rr = upd.get("rewrite_reason")
                     sr = upd.get("suggested_rewrite")
                     cs = upd.get("changed_segments")
                     wcs = upd.get("worst_case_scenario")
                     neg = upd.get("negotiation_strategy")
-                    quote = upd.get("original_text_quote")
                     ai_sev = _sanitize_ai_severity(upd.get("risk_tier"))
-                    original_text = str(cr.get("original_text") or "")
-                    grounded = _ai_quote_is_grounded(quote, original_text)
+
+                    # A quote can be genuinely grounded in this clause's own
+                    # text while the AI's reasoning is still about a
+                    # completely unrelated subject — grounding only proves
+                    # the QUOTE is real, not that the REASONING is on-topic.
+                    # Confirmed twice in the same real FITI run: 제14조②
+                    # (관할/분쟁 조항, "본약정과관련된 분쟁은 서울중앙지방법원을
+                    # 전속관할로 한다") repeatedly got AI-generated content
+                    # about "인력 채용·배치·평가·징계" (personnel/HR
+                    # management) — a subject this clause's own text never
+                    # mentions at all. Reject any AI content that introduces
+                    # a foreign-topic keyword cluster the clause's own
+                    # original_text has no trace of.
+                    _ai_text_combined = " ".join(x for x in (rr, sr) if isinstance(x, str))
+                    for _markers, _allow_if_present in _FOREIGN_TOPIC_MARKER_CLUSTERS:
+                        if any(m in _ai_text_combined for m in _markers) and not any(a in original_text for a in _allow_if_present):
+                            ai_grounding_rejected.append(str(cr.get("clause_id") or ""))
+                            return
 
                     if isinstance(rr, str) and rr.strip():
                         cr["rewrite_reason"] = polish_korean_legal_style(rr.strip())
@@ -4525,15 +4580,10 @@ def build_clause_level_result(
                         if cleaned:
                             cr["changed_segments"] = cleaned
 
-                    # [Hybrid AI Review] severity: AI's own 5-step assessment,
-                    # but only if grounded in an actual quote from the clause —
-                    # an ungrounded severity call is exactly the kind of
-                    # hallucinated-but-plausible finding the guardrails exist
-                    # to catch, so it is rejected here rather than displayed.
+                    # [Hybrid AI Review] severity: AI's own 5-step assessment.
+                    # Groundedness was already checked above (gating this
+                    # entire update); only need a valid severity value here.
                     if ai_sev is None:
-                        return
-                    if not grounded:
-                        ai_grounding_rejected.append(str(cr.get("clause_id") or ""))
                         return
                     cur_sev = str(cr.get("risk_tier") or "LOW").upper()
                     # 룰 엔진(Layer1/Layer2/mandatory)이 부여한 등급은 "최소 보장" —
@@ -5114,6 +5164,16 @@ def build_clause_level_result(
     _dlr_type = (getattr(_detailed_profile, "contract_type", None) or str(contract_type or ""))
     clause_results = apply_dealer_rental_final_gate(clause_results, _dlr_type)
 
+    # [Mandatory Review Targets] 사용자가 review_focus에 직접 인용한 조항번호
+    # (예: "제5조 제2항 제1호")는 룰/AI 매칭 여부와 무관하게 최종 결과에서
+    # 절대 누락되어서는 안 된다 — see mandatory_review_target.py.
+    from runtime.review.mandatory_review_target import annotate_and_track_mandatory_targets
+    _mandatory_target_status = annotate_and_track_mandatory_targets(
+        clause_results=clause_results,
+        clauses=clauses,
+        review_focus=review_focus,
+    )
+
     frc1 = contract_context.get("final_review_context") if isinstance(contract_context, dict) else None
     if isinstance(frc1, dict) and bool(frc1.get("expert_mode")):
         party1 = frc1.get("party_role") if isinstance(frc1.get("party_role"), dict) else {}
@@ -5363,6 +5423,9 @@ def build_clause_level_result(
     # 일관되게 쓰였는지, 유형과 무관한 문구가 남아있지 않은지, 원문-문제점-수정안이
     # 같은 조항을 가리키는지, 놓친 우선순위 리스크가 있는지. 이 패스는 상위
     # 단계의 개별 게이트가 놓친 경우를 잡아내는 최종 안전망이다.
+    _final_findings_clause_ids = {
+        str(i.clause_id) for i in (_filtered_output.get("high", []) + _filtered_output.get("medium", []))
+    } if _filtered_output else set()
     from runtime.review.self_check import run_self_check as _run_self_check
     _self_check_report = _run_self_check(
         clause_results=clause_results,
@@ -5375,10 +5438,13 @@ def build_clause_level_result(
             "high_count": len(_filtered_output.get("high", [])) if _filtered_output else 0,
             "medium_count": len(_filtered_output.get("medium", [])) if _filtered_output else 0,
         },
+        mandatory_review_targets=_mandatory_target_status,
+        final_findings_clause_ids=_final_findings_clause_ids,
     )
 
     meta = {
         "self_check": _self_check_report,
+        "mandatory_review_targets": _mandatory_target_status,
         "review_posture": review_posture,
         "party_role": party.to_dict(),
         "contract_profile": (contract_context.get("contract_profile") if isinstance(contract_context, dict) else None),

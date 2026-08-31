@@ -84,6 +84,7 @@ class ReviewIssue:
     related_clauses: list[str] = field(default_factory=list)
     confidence: float = 0.75
     is_checklist_item: bool = False
+    is_mandatory_target: bool = False
 
     @property
     def display_bucket(self) -> str:
@@ -134,6 +135,28 @@ def _has_dev_phrase(text: str) -> bool:
 
 def _is_dealer_contract(contract_type_code: str) -> bool:
     return contract_type_code in _DEALER_TYPE_CODES
+
+
+def _compose_display_title(clause_title: str, display_path: str) -> str:
+    """Every HIGH/MEDIUM finding's title must show its real "제N조 제N항
+    제N호" citation, not a bare rule id or a generic article-heading name
+    (e.g. "손해배상책임", "상호협력", "시험성적서" — an article's own title,
+    shared by every paragraph/item under it, says nothing about WHICH
+    paragraph the finding is actually about).
+
+    Some injectors (common_legal_risk.py, testing_service_rules.py) already
+    bake the citation into `clause_title` at the source (so it reads
+    "제6조 제4항 [...]"); detect that and don't double-prefix. Everything
+    else — in particular the main per-clause item, whose clause_title is
+    just the bare article-heading name — gets `display_path` prefixed here.
+    """
+    title = (clause_title or "").strip()
+    disp = (display_path or "").strip()
+    if not disp:
+        return title
+    if title.startswith("제"):
+        return title
+    return f"{disp} [{title}]" if title else disp
 
 
 def _clean_text(text: str, max_len: int = 3000) -> str:
@@ -269,7 +292,7 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         neg = get_mandatory_negotiation_position(is_counterparty_form)
     return ReviewIssue(
         clause_id=str(d.get("clause_id") or ""),
-        clause_title=str(d.get("clause_title") or ""),
+        clause_title=_compose_display_title(str(d.get("clause_title") or ""), str(d.get("display_path") or "")),
         severity=sev,  # type: ignore[arg-type]
         approval_required=bool(d.get("approval_required")),
         issue_title=str(d.get("issue_title") or "")[:120],
@@ -278,7 +301,14 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         legal_business_reason=str(d.get("legal_business_reason") or d.get("problem") or "")[:400],
         proposed_revision=str(d.get("proposed_revision") or d.get("suggested_rewrite") or "")[:800],
         negotiation_position=neg[:300],
-        related_clauses=[str(r) for r in (d.get("related_clauses") or [])[:6]],
+        # output_filter.build_final_findings() emits "related_clause_ids"
+        # (ReviewIssue.to_dict()'s key there); legal_review_docx.py's own
+        # _build_review_issues() (used only when no pre-filtered lists are
+        # supplied) emits "related_clauses" — accept either so a sibling
+        # clause carrying the same defect (e.g. "제11조 제1항" alongside a
+        # 제6조 finding) survives into the DOCX "함께 수정할 조항" line
+        # regardless of which path produced this dict.
+        related_clauses=[str(r) for r in (d.get("related_clause_ids") or d.get("related_clauses") or [])][:6],
         confidence=float(d.get("confidence") or 0.75),
     )
 
@@ -350,7 +380,9 @@ def _build_review_issues(
 
         ri = ReviewIssue(
             clause_id=clause_id,
-            clause_title=str(cr.get("clause_title") or cr.get("display_path") or clause_id),
+            clause_title=_compose_display_title(
+                str(cr.get("clause_title") or clause_id), str(cr.get("display_path") or "")
+            ),
             severity=sev,  # type: ignore[arg-type]
             approval_required=bool(cr.get("approval_required")),
             issue_title=issue_title or problem[:80],
@@ -362,6 +394,7 @@ def _build_review_issues(
             related_clauses=[str(r) for r in related[:6]],
             confidence=float(cr.get("confidence") or 0.75),
             is_checklist_item=bool(cr.get("is_checklist_item")),
+            is_mandatory_target=bool(cr.get("is_mandatory_review_target") or cr.get("is_mandatory")),
         )
         issues.append(ri)
 
@@ -482,7 +515,8 @@ def _filter_and_sort_issues(
     )
 
     high = [i for i in all_issues if i.severity == "HIGH"]
-    medium = [i for i in all_issues if i.severity == "MEDIUM"][:max_medium]
+    medium_all = [i for i in all_issues if i.severity == "MEDIUM"]
+    medium = [i for i in medium_all if i.is_mandatory_target] + [i for i in medium_all if not i.is_mandatory_target][:max_medium]
     low = [i for i in all_issues if i.severity == "LOW"]
 
     # Sort within HIGH/MEDIUM: CP first, then MI, then others by confidence
@@ -524,6 +558,7 @@ def build_legal_review_docx(
     include_low: bool = False,
     contract_type_code: str = "general",
     is_counterparty_form: bool = True,
+    mandatory_review_targets: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review DOCX.
 
@@ -573,6 +608,34 @@ def build_legal_review_docx(
     _para(body, "- MEDIUM / 권장수정: 주황색", color=COLOR_MEDIUM)
     _para(body, "- LOW / 참고: 파란색, 기본 숨김", color=COLOR_LOW)
     _blank(body)
+
+    # ── Section 0: 최초 요청사항 반영 여부 요약표 ───────────────────────────
+    # review_focus에서 사용자가 직접 인용한 조항번호(예: "제5조 제2항 제1호")가
+    # 최종 결과에서 누락되지 않았는지 한눈에 확인할 수 있는 표. 모든 항목이
+    # 채워지지 않으면(즉 하나라도 미확인/누락이면) 정상 완료로 취급하지 않는다
+    # — self_check.py의 REVIEW_FAILED_USER_REQUEST_MISSING 게이트가 이를 강제한다.
+    if mandatory_review_targets:
+        _heading1(body, "0. 최초 요청사항 반영 여부")
+        _status_label = {
+            "flagged": "검토완료 · 수정 필요",
+            "checked_low_risk": "검토완료 · 낮은 위험(현행 유지 가능)",
+            "checked_no_issue": "검토완료 · 특이사항 없음",
+            "clause_not_found": "계약서에서 조항 확인 불가",
+        }
+        for t in mandatory_review_targets:
+            if not isinstance(t, dict):
+                continue
+            disp = str(t.get("display_path") or t.get("raw_citation") or "")
+            status = str(t.get("status") or "")
+            sev = str(t.get("severity") or "")
+            label = _status_label.get(status, status or "미확인")
+            color = COLOR_HIGH if status == "clause_not_found" else (COLOR_LOW if status in ("checked_no_issue", "checked_low_risk") else None)
+            p_row = _p(body)
+            r_row = _r(p_row, bold=True, color=color)
+            sev_suffix = f" [{sev}]" if sev else ""
+            _t(r_row, f"- {disp}: {label}{sev_suffix}")
+        _blank(body)
+        _separator(body)
 
     # ── Section 1: 계약 구조 및 우리 측 포지션 ──────────────────────────────
     _heading1(body, "1. 계약 구조 및 우리 측 포지션")

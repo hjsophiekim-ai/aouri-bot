@@ -34,6 +34,16 @@ class ReviewIssue:
     negotiation_position: str
     confidence: float
     related_clause_ids: list[str] = field(default_factory=list)
+    is_mandatory: bool = False
+    # Clause identity — carried through so the DOCX/PDF renderer can always
+    # show a real "제N조 제N항 제N호" in the finding's title instead of a
+    # bare rule id or a generic article-heading name (e.g. "손해배상책임"),
+    # and so findings anchored on the exact same clause can be merged
+    # instead of shown as separate, duplicate-looking findings.
+    article_number: str = ""
+    paragraph_number: str = ""
+    item_number: str = ""
+    display_path: str = ""
 
     @property
     def display_bucket(self) -> str:
@@ -62,6 +72,11 @@ class ReviewIssue:
             "negotiation_position": self.negotiation_position,
             "confidence": round(self.confidence, 3),
             "related_clause_ids": list(self.related_clause_ids),
+            "is_mandatory": self.is_mandatory,
+            "article_number": self.article_number,
+            "paragraph_number": self.paragraph_number,
+            "item_number": self.item_number,
+            "display_path": self.display_path,
         }
 
 
@@ -154,11 +169,95 @@ def is_valid_issue(
 
 # ─── Deduplication ────────────────────────────────────────────────────────────
 
+def _clause_identity_key(issue: ReviewIssue) -> tuple[str, str, str] | None:
+    # Prefer the already-formatted display_path string ("제5조 제2항 1호")
+    # over the separate article/paragraph/item fields: a clause_result whose
+    # chunk lookup failed downstream can end up with paragraph_number/
+    # item_number blank while display_path (set earlier, straight from the
+    # matched segmentation leaf) is still correct — comparing the tuple in
+    # that case would wrongly treat two findings on the exact same clause as
+    # unrelated. display_path is normalized identically by every producer
+    # (clause_extraction._display_path), so an exact string match is exactly
+    # as precise as the tuple when both are present.
+    if issue.display_path:
+        return (issue.display_path, "", "")
+    if not issue.article_number:
+        return None
+    return (issue.article_number, issue.paragraph_number, issue.item_number)
+
+
+def _merge_same_clause_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
+    """Merge findings anchored on the exact same (article, paragraph, item)
+    identity into one representative.
+
+    The main per-clause AI-reviewed item and a rule-engine-injected item
+    (clr_*/tsr_*/...) routinely both fire on the same real clause — in
+    substance the same finding shown twice under two different titles (e.g.
+    a generic AI item titled "손해배상책임" and "제11조 제2항 [구상권
+    범위·한도 불명확]", both anchored on the exact same 제11조② text).
+    Distinct item numbers (e.g. 제5조 제2항 1호 vs 2호) are never merged —
+    only an EXACT (article, paragraph, item) match collapses, since those
+    are genuinely different clauses even when they share an article/
+    paragraph.
+    """
+    from runtime.review.clause_extraction import is_real_segment_clause_id
+
+    _SEV_ORDER = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
+    groups: dict[tuple[str, str, str], list[ReviewIssue]] = {}
+    standalone: list[ReviewIssue] = []
+    for issue in issues:
+        key = _clause_identity_key(issue)
+        if key is None:
+            standalone.append(issue)
+        else:
+            groups.setdefault(key, []).append(issue)
+
+    def _priority(i: ReviewIssue) -> tuple[int, int, int]:
+        # Higher severity wins first (never silently downgrade what's
+        # shown); among equal severity, prefer a rule-engine-authored
+        # finding (clr_*/tsr_*/MI-/...) over a raw per-clause AI item, since
+        # the former is hand-reasoned, specific text rather than a generic
+        # restatement; final tie-break favors the more detailed revision.
+        return (
+            _SEV_ORDER.get(i.severity, 0),
+            0 if is_real_segment_clause_id(i.clause_id) else 1,
+            len(i.proposed_revision),
+        )
+
+    out: list[ReviewIssue] = list(standalone)
+    for group in groups.values():
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        rep = max(group, key=_priority)
+        # The folded-in duplicate's own clause_id/display_path is NOT a
+        # "related clause" — it names the exact same clause as `rep`, just
+        # from a different source, so listing it as related would read as
+        # self-reference ("함께 수정할 조항: 제6조 제4항" on a finding that
+        # already IS about 제6조 제4항). Only genuinely different clauses —
+        # each duplicate's own already-known related_clause_ids (e.g. a
+        # sibling article carrying the same defect) — are worth carrying
+        # forward.
+        merged_related = list(rep.related_clause_ids)
+        for other in group:
+            if other is rep:
+                continue
+            for rc in other.related_clause_ids:
+                if rc not in merged_related:
+                    merged_related.append(rc)
+            rep.approval_required = rep.approval_required or other.approval_required
+            rep.is_mandatory = rep.is_mandatory or other.is_mandatory
+        rep.related_clause_ids = merged_related
+        out.append(rep)
+    return out
+
+
 def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
     """Merge issues with the same issue_title into the highest-severity representative.
 
     Related clause IDs are accumulated into the representative's `related_clause_ids`.
     """
+    issues = _merge_same_clause_issues(issues)
     seen: dict[str, ReviewIssue] = {}
     _SEV_ORDER = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
 
@@ -185,10 +284,16 @@ def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
                     negotiation_position=issue.negotiation_position,
                     confidence=max(issue.confidence, existing.confidence),
                     related_clause_ids=new_related,
+                    is_mandatory=issue.is_mandatory or existing.is_mandatory,
+                    article_number=issue.article_number,
+                    paragraph_number=issue.paragraph_number,
+                    item_number=issue.item_number,
+                    display_path=issue.display_path,
                 )
             else:
                 # Add new clause_id to existing's related list
                 existing.related_clause_ids.append(issue.clause_id)
+                existing.is_mandatory = existing.is_mandatory or issue.is_mandatory
 
     return list(seen.values())
 
@@ -240,16 +345,24 @@ def filter_issues(
     # Step 2: deduplicate
     valid = deduplicate_issues(valid)
 
-    # Step 3: split by severity
+    # Step 3: split by severity. A clause the user explicitly named in
+    # review_focus (is_mandatory=True, see mandatory_review_target.py) must
+    # never be silently dropped by the max_medium cap — it is kept in
+    # addition to, not counted against, the ordinary top-N MEDIUM slots.
     high = [i for i in valid if i.severity == "HIGH"]
-    medium = [i for i in valid if i.severity == "MEDIUM"][:max_medium]
+    medium_all = [i for i in valid if i.severity == "MEDIUM"]
+    medium_mandatory = [i for i in medium_all if i.is_mandatory]
+    medium_other = [i for i in medium_all if not i.is_mandatory][:max_medium]
+    medium = medium_mandatory + medium_other
     low = [i for i in valid if i.severity == "LOW"] if include_low else []
 
-    # Step 4: top risks (HIGH first, then MEDIUM, sorted by confidence)
+    # Step 4: top risks (HIGH first, then MEDIUM, sorted by confidence).
+    # Mandatory items are boosted ahead of equal-severity ordinary ones so a
+    # user-cited clause can't be squeezed out of the TOP N by confidence rank.
     _SEV_KEY = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
     combined = sorted(
         high + medium,
-        key=lambda x: (_SEV_KEY.get(x.severity, 0), x.confidence),
+        key=lambda x: (int(x.is_mandatory), _SEV_KEY.get(x.severity, 0), x.confidence),
         reverse=True,
     )
     top_risks = combined[:max_top_risks]
@@ -303,6 +416,12 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             proposed_revision=pr[:600],
             negotiation_position=str(cr.get("negotiation_position") or cr.get("negotiation_strategy") or "").strip()[:300],
             confidence=float(cr.get("confidence") or 0.75),
+            is_mandatory=bool(cr.get("is_mandatory_review_target") or cr.get("is_mandatory")),
+            related_clause_ids=[str(r) for r in (cr.get("related_clauses") or []) if isinstance(r, str) and r][:6],
+            article_number=str(cr.get("article_number") or "").strip(),
+            paragraph_number=str(cr.get("paragraph_number") or "").strip(),
+            item_number=str(cr.get("item_number") or "").strip(),
+            display_path=str(cr.get("display_path") or "").strip(),
         ))
     return out
 

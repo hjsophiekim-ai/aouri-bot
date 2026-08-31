@@ -414,6 +414,82 @@ def _ocr_pdf_pages(file_path: Path) -> str:
     return "\n\n".join(texts)
 
 
+def _extract_page_text_column_aware(page) -> str:
+    """Extract one page's text, splitting it into left/right columns first
+    when the page shows a genuine vertical gutter through the middle.
+
+    pdfplumber's plain page.extract_text() orders text primarily by
+    vertical position — on a real two-column contract layout, the left and
+    right columns sit at the same heights, so their unrelated sentences get
+    concatenated onto the same output line (e.g. a "제3조" clause finishing
+    in the left column gets glued directly onto "제5조" starting in the
+    right column). That silently corrupts article boundaries downstream:
+    an article heading buried mid-line is invisible to the line-anchored
+    "제N조" heading scanner in clause_extraction.py, so its content gets
+    absorbed into whatever article happens to be accumulating at that
+    point instead of becoming its own clause.
+
+    Detects a column layout via a wide, page-height-spanning empty band in
+    the character x-position histogram (a real gutter, never present on an
+    ordinary single-column page where every paragraph spans near the full
+    width) and, only then, extracts each column separately and concatenates
+    left-column-then-right-column. Falls back to the plain single-stream
+    extraction whenever no such gutter is found, so ordinary single-column
+    contracts (the overwhelming majority) are completely unaffected.
+    """
+    plain = page.extract_text() or ""
+    chars = page.chars
+    if not chars:
+        return plain
+    width = float(page.width or 0)
+    if width <= 0:
+        return plain
+
+    bin_count = 100
+    bin_w = width / bin_count
+    occupied = [False] * bin_count
+    for ch in chars:
+        try:
+            cx = (float(ch["x0"]) + float(ch["x1"])) / 2
+        except Exception:
+            continue
+        b = min(bin_count - 1, max(0, int(cx / bin_w)))
+        occupied[b] = True
+
+    # Only look for a gutter within the central band — a real column gap
+    # sits roughly in the middle of the page, not near either margin.
+    lo, hi = int(bin_count * 0.25), int(bin_count * 0.75)
+    best_len, best_start, best_end = 0, -1, -1
+    run_start: int | None = None
+    for i in range(lo, hi + 1):
+        if not occupied[i]:
+            if run_start is None:
+                run_start = i
+        elif run_start is not None:
+            if i - run_start > best_len:
+                best_len, best_start, best_end = i - run_start, run_start, i
+            run_start = None
+    if run_start is not None and hi + 1 - run_start > best_len:
+        best_len, best_start, best_end = hi + 1 - run_start, run_start, hi + 1
+
+    # Require a meaningfully wide gap — normal word/sentence spacing never
+    # leaves a multi-percent-wide band empty across the *entire* page height.
+    if best_len * bin_w < width * 0.04:
+        return plain
+
+    split_x = (best_start + best_end) / 2.0 * bin_w
+    try:
+        left = page.within_bbox((0, 0, split_x, page.height))
+        right = page.within_bbox((split_x, 0, page.width, page.height))
+        left_text = (left.extract_text() or "").strip()
+        right_text = (right.extract_text() or "").strip()
+    except Exception:
+        return plain
+    if not left_text or not right_text:
+        return plain
+    return (left_text + "\n" + right_text).strip()
+
+
 def extract_text_from_pdf(file_path: Path) -> str:
     # 1차: pdfplumber (텍스트 레이어 있는 PDF)
     import pdfplumber
@@ -421,7 +497,7 @@ def extract_text_from_pdf(file_path: Path) -> str:
     texts: list[str] = []
     with pdfplumber.open(str(file_path)) as pdf:
         for page_num, page in enumerate(pdf.pages, 1):
-            text = page.extract_text()
+            text = _extract_page_text_column_aware(page)
             if text and text.strip():
                 texts.append(f"[페이지 {page_num}]\n{text.strip()}")
     if texts:

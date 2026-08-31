@@ -171,6 +171,24 @@ def _parse_paragraph_start(line: str) -> tuple[str, str] | None:
     return None
 
 
+def _parse_paragraph_start_circled_only(line: str) -> tuple[str, str] | None:
+    """Circled-number paragraph markers only — no bare "제N항" text
+    fallback. Used once an article has already shown at least one circled
+    marker (①②③...): a later plain "제N항 ..." line can then only be a
+    PDF line-wrap splitting a cross-reference mid-sentence (e.g. "...제3조\n
+    제3항 또는 제4항을 위반하여..." — confirmed against a real FITI
+    시험분석약정서 where this fabricated a nonexistent 제11조 제3항), never a
+    genuine new paragraph heading — a real document never mixes both
+    numbering styles for the same hierarchy level within one article.
+    """
+    l = (line or "").strip()
+    if l and l[0] in _CIRCLED_NUMS:
+        pn = _circled_to_int(l[0])
+        if pn:
+            return pn, _strip_prefix(l, 1)
+    return None
+
+
 def _split_inline_paragraph_from_article_heading(lines: list[str]) -> list[str]:
     """A 조문 heading line sometimes carries its first paragraph's full text
     on the very same physical line, e.g.:
@@ -243,6 +261,107 @@ def _split_blocks(lines: list[str], is_start) -> list[tuple[tuple[str, str], lis
     return out
 
 
+def _merge_paragraphs_with_non_leading_items(
+    para_blocks: list[tuple[tuple[str, str], list[str]]],
+) -> list[tuple[tuple[str, str], list[str]]]:
+    """A genuine 항(paragraph)'s own 호(item) list always starts at item 1 —
+    Korean legal drafting never begins an item list at item 2 or later. A
+    paragraph block whose first detected item is not "1" is a strong signal
+    that this paragraph boundary is spurious rather than real: e.g. a stray
+    circled-number fragment from another article bled in and interrupted a
+    still-open item list from the PRECEDING paragraph. Confirmed against a
+    real FITI 시험분석약정서: "③ 제2항에 따른 본 약정의 연장은 1회로
+    한정한다." (actually 제9조 제3항) bled into the middle of 제12조 제3항's
+    4-item 해지사유 list, fabricating a spurious "제12조 제4항" whose only
+    item was numbered 4. Such a block is merged back onto the previous
+    block instead of being kept as its own paragraph, so the real item list
+    (1~4) ends up correctly under its one genuine paragraph.
+
+    The spurious block's own header line (`first_line` — the text
+    immediately after the stray circled-number marker that triggered the
+    false split) is DROPPED rather than merged back in: since this pattern
+    only fires when the block's own item list doesn't start at 1, that
+    header line is always the foreign sentence that caused the false split
+    in the first place (confirmed above: "제2항에 따른 본 약정의 연장은
+    1회로 한정한다." is itself 제9조 제3항's content, not 제12조's) — never
+    genuine content of the article being parsed. Everything after it
+    (`body`) — the real continuation of the interrupted item plus any
+    following genuine items — is kept and merged back in.
+    """
+    if len(para_blocks) < 2:
+        return para_blocks
+    out: list[tuple[tuple[str, str], list[str]]] = [para_blocks[0]]
+    for (pn, first_line), body in para_blocks[1:]:
+        candidate_lines = [x for x in ([first_line] + body) if (x or "").strip()]
+        items = _split_blocks(candidate_lines, _parse_item_start)
+        first_item_num = items[0][0][0] if items else None
+        if first_item_num is not None and first_item_num != "1":
+            prev_pn, prev_first = out[-1][0]
+            merged_body = out[-1][1] + body
+            out[-1] = ((prev_pn, prev_first), merged_body)
+            continue
+        out.append(((pn, first_line), body))
+    return out
+
+
+def _renumber_duplicate_paragraph_markers(
+    para_blocks: list[tuple[tuple[str, str], list[str]]],
+) -> list[tuple[tuple[str, str], list[str]]]:
+    """A source document occasionally mislabels a second, genuinely distinct
+    paragraph with the same circled number as an earlier one within the same
+    article (e.g. two separate "①" blocks — real authoring defect, not a
+    parsing artifact: confirmed against an actual FITI 시험분석약정서 whose
+    제5조 has two "①"-headed blocks with unrelated content, the second one
+    logically being 제5조 제2항). Left as-is, both blocks collide on the
+    same paragraph_number and produce duplicate clause_ids, so the second
+    (and any further) genuinely-duplicate marker is renumbered to the next
+    unused paragraph number in document order — a purely structural fix,
+    never touching which article/paragraph the ORIGINAL numbering correctly
+    identifies when it isn't duplicated.
+    """
+    seen: set[str] = set()
+    max_pn = 0
+    out: list[tuple[tuple[str, str], list[str]]] = []
+    for (pn, first_line), body in para_blocks:
+        try:
+            pn_int: int | None = int(pn)
+        except (TypeError, ValueError):
+            pn_int = None
+        if pn in seen:
+            max_pn += 1
+            pn = str(max_pn)
+        elif pn_int is not None:
+            max_pn = max(max_pn, pn_int)
+        else:
+            max_pn += 1
+        seen.add(pn)
+        out.append(((pn, first_line), body))
+    return out
+
+
+_RX_STRAY_CIRCLED_PARAGRAPH_MARKER = re.compile(f"[{''.join(_CIRCLED_NUMS)}]")
+
+
+def _strip_stray_circled_number_tail(text: str) -> str:
+    """A single 항/호/목 leaf's own body must never contain another circled
+    paragraph marker (①②③...) — those are consumed exclusively as this
+    hierarchy parser's own paragraph-boundary markers one level up, so a
+    circled number surviving inside a leaf's joined text means an unrelated
+    paragraph's opening line bled into this leaf (e.g. a stray "③ 제2항에
+    따른 본 약정의 연장은 1회로 한정한다." landing inside a different
+    article's 호 body — confirmed against a real FITI 시험분석약정서 where
+    this happened at a page boundary). Truncate at the first such marker
+    (allowing one at position 0 — this function is never called on that
+    case since a genuine leaf's own first character is never a fresh
+    circled number) so no finding ever quotes text that isn't really part
+    of this clause.
+    """
+    m = _RX_STRAY_CIRCLED_PARAGRAPH_MARKER.search(text)
+    if m is None or m.start() == 0:
+        return text
+    return text[: m.start()].rstrip()
+
+
 def _parse_kr_article_hierarchy(
     *,
     base_clause_id: str,
@@ -251,7 +370,11 @@ def _parse_kr_article_hierarchy(
     body_lines: list[str],
 ) -> list[ClauseChunk]:
     lines = [x for x in body_lines if (x or "").strip()]
-    para_blocks = _split_blocks(lines, _parse_paragraph_start)
+    has_circled_paragraph_marker = any((l.strip()[:1] in _CIRCLED_NUMS) for l in lines if l.strip())
+    para_start_fn = _parse_paragraph_start_circled_only if has_circled_paragraph_marker else _parse_paragraph_start
+    para_blocks = _split_blocks(lines, para_start_fn)
+    para_blocks = _merge_paragraphs_with_non_leading_items(para_blocks)
+    para_blocks = _renumber_duplicate_paragraph_markers(para_blocks)
     if not para_blocks:
         full = _norm_text("\n".join(lines))
         head = _norm_text(title)
@@ -290,7 +413,7 @@ def _parse_kr_article_hierarchy(
         para_parent_id = f"{base_clause_id}-p{pn}"
 
         if not items:
-            para_text = _norm_text("\n".join(para_lines))
+            para_text = _strip_stray_circled_number_tail(_norm_text("\n".join(para_lines)))
             ctx = "\n".join([x for x in [article_head, article_intro] if x])
             out.append(
                 ClauseChunk(
@@ -336,7 +459,7 @@ def _parse_kr_article_hierarchy(
                         parent_clause_id=para_parent_id,
                         context_text=_norm_text(base_ctx) if base_ctx else None,
                         title=title,
-                        text=_norm_text("\n".join(item_lines)),
+                        text=_strip_stray_circled_number_tail(_norm_text("\n".join(item_lines))),
                     )
                 )
                 continue
@@ -364,7 +487,7 @@ def _parse_kr_article_hierarchy(
                         parent_clause_id=item_id,
                         context_text=_norm_text(ctx) if ctx else None,
                         title=title,
-                        text=_norm_text("\n".join(sub_lines)),
+                        text=_strip_stray_circled_number_tail(_norm_text("\n".join(sub_lines))),
                     )
                 )
     return out
@@ -700,3 +823,54 @@ def find_clause_scoped_excerpt(
         end = min(len(art_text), m.end() + after)
         return art_text[start:end].strip(), art
     return None
+
+
+@dataclass(frozen=True)
+class ClauseScopedMatch:
+    """Full clause identity for a single regex match against already-segmented
+    clause text — everything a rule-engine injector (common_legal_risk.py,
+    testing_service_rules.py, ...) needs to show a real "제N조 제N항 제N호"
+    citation instead of only the bare article number `find_clause_scoped_excerpt`
+    returns."""
+    excerpt: str
+    article_number: str | None
+    paragraph_number: str | None
+    item_number: str | None
+    display_path: str | None
+
+
+def find_all_clause_scoped_matches(
+    clauses: list[Any] | None,
+    pattern: "re.Pattern[str]",
+    *,
+    before: int = 40,
+    after: int = 120,
+    limit: int = 8,
+) -> list[ClauseScopedMatch]:
+    """Like find_clause_scoped_excerpt(), but returns every matching leaf
+    clause (not just the first) with full article/paragraph/item identity —
+    used so a rule-engine finding can (a) show the real clause number in its
+    title instead of a bare rule id, and (b) list sibling clauses carrying
+    the same defect pattern (e.g. a duplicated exemption clause repeated at
+    both 제6조 and 제11조) in `related_clauses` instead of silently covering
+    only the first occurrence."""
+    out: list[ClauseScopedMatch] = []
+    for c in (clauses or []):
+        leaf_text = str(_clause_field(c, "text") or "")
+        m = pattern.search(leaf_text)
+        if not m:
+            continue
+        start = max(0, m.start() - before)
+        end = min(len(leaf_text), m.end() + after)
+        out.append(
+            ClauseScopedMatch(
+                excerpt=leaf_text[start:end].strip(),
+                article_number=str(_clause_field(c, "article_number") or "").strip() or None,
+                paragraph_number=str(_clause_field(c, "paragraph_number") or "").strip() or None,
+                item_number=str(_clause_field(c, "item_number") or "").strip() or None,
+                display_path=str(_clause_field(c, "display_path") or "").strip() or None,
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out

@@ -71,6 +71,8 @@ def run_self_check(
     confidence: float,
     full_text: str,
     final_findings_counts: dict[str, Any] | None = None,
+    mandatory_review_targets: list[dict[str, Any]] | None = None,
+    final_findings_clause_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Run the final self-check pass. Mutates clause_results in place for (3),
     returns a report dict summarising all 7 checks for inclusion in meta."""
@@ -265,8 +267,27 @@ def run_self_check(
         final_findings_count_mismatch = reported_high > actual_high or reported_medium > actual_medium
     report["final_findings_count_mismatch"] = final_findings_count_mismatch
 
+    # (9) mandatory review targets: clause numbers the user explicitly named
+    # in review_focus must survive into the final output — see
+    # mandatory_review_target.py. A "flagged" target (a real issue was found
+    # for it) that doesn't appear in the final high/medium findings means the
+    # user's own request was silently dropped somewhere downstream (dedup,
+    # truncation, a later guardrail stripping it) — this is not an editorial
+    # omission and must block, distinctly from the generic false-negative
+    # check above (which only samples broad keyword groups, not an explicit
+    # user citation).
+    from runtime.review.mandatory_review_target import check_all_targets_addressed
+    targets_ok, missing_targets = check_all_targets_addressed(
+        mandatory_review_targets or [],
+        final_findings_clause_ids=final_findings_clause_ids,
+    )
+    report["mandatory_review_targets"] = mandatory_review_targets or []
+    report["mandatory_targets_missing"] = missing_targets
+
     hard_integrity_failed = bool(missing_clause_id_ids) or final_findings_count_mismatch
-    if hard_integrity_failed:
+    if missing_targets:
+        report["review_status"] = "REVIEW_FAILED_USER_REQUEST_MISSING"
+    elif hard_integrity_failed:
         report["review_status"] = "REVIEW_FAILED"
     elif false_negative_suspected:
         report["review_status"] = "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE"
@@ -279,5 +300,6 @@ def run_self_check(
         and not incomplete_high
         and not false_negative_suspected
         and not hard_integrity_failed
+        and targets_ok
     )
     return report

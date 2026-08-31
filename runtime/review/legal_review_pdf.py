@@ -157,6 +157,7 @@ def build_legal_review_pdf(
     top_risks_filtered: list[dict[str, Any]] | None = None,
     high_issues_filtered: list[dict[str, Any]] | None = None,
     medium_issues_filtered: list[dict[str, Any]] | None = None,
+    mandatory_review_targets: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review PDF.
 
@@ -203,6 +204,26 @@ def build_legal_review_pdf(
 
     _heading(pdf, "아우리봇 계약 검토·수정본 (법무팀 검토용)", size=15)
     _body(pdf, "표시 기준: HIGH/필수수정=빨간색 · MEDIUM/권장수정=주황색 · LOW/참고=파란색(기본 숨김)", size=9)
+
+    if mandatory_review_targets:
+        _heading(pdf, "0. 최초 요청사항 반영 여부")
+        _status_label = {
+            "flagged": "검토완료 · 수정 필요",
+            "checked_low_risk": "검토완료 · 낮은 위험(현행 유지 가능)",
+            "checked_no_issue": "검토완료 · 특이사항 없음",
+            "clause_not_found": "계약서에서 조항 확인 불가",
+        }
+        _rows = []
+        for t in mandatory_review_targets:
+            if not isinstance(t, dict):
+                continue
+            disp = str(t.get("display_path") or t.get("raw_citation") or "")
+            status = str(t.get("status") or "")
+            sev = str(t.get("severity") or "")
+            label = _status_label.get(status, status or "미확인")
+            sev_suffix = f" [{sev}]" if sev else ""
+            _rows.append(f"- {disp}: {label}{sev_suffix}")
+        _body(pdf, "\n".join(_rows))
 
     _heading(pdf, "1. 계약 구조 및 우리 측 포지션")
     party = dp.get("party_role") if isinstance(dp.get("party_role"), dict) else {}

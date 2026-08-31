@@ -1648,6 +1648,21 @@ def create_handler(service: RuleQueryService):
                     # collapsing to 1 in the final output) is a pipeline
                     # malfunction, not an editorial choice, and must block
                     # rather than silently hand back a gutted file.
+                    # [Mandatory Review Targets] review_focus에서 사용자가 직접
+                    # 인용한 조항번호(예: "제5조 제2항 제1호")는 이 다운로드 경로가
+                    # _all_results를 독립적으로 재구성하므로 여기서 다시 태깅해야
+                    # 한다 — clause_level.py의 초기 리뷰 단계 태깅만으로는 이 경로에
+                    # 반영되지 않는다. See mandatory_review_target.py.
+                    from runtime.review.mandatory_review_target import (
+                        annotate_and_track_mandatory_targets as _annotate_mandatory_targets,
+                        check_all_targets_addressed as _check_mandatory_targets,
+                    )
+                    _mandatory_target_status = _annotate_mandatory_targets(
+                        clause_results=_all_results,
+                        clauses=original_clauses,
+                        review_focus=(review_focus if isinstance(review_focus, str) else None),
+                    )
+
                     _docx_final = _build_final_findings(_all_results, contract_type_code=_ct_code, include_low=False)
                     _docx_high = int(_docx_final.get("high_count") or 0)
                     _docx_medium = int(_docx_final.get("medium_count") or 0)
@@ -1676,6 +1691,26 @@ def create_handler(service: RuleQueryService):
                         )
                         return
 
+                    _final_findings_clause_ids = {
+                        str(i.get("clause_id") or "")
+                        for i in (list(_docx_final.get("high_issues") or []) + list(_docx_final.get("medium_issues") or []))
+                        if isinstance(i, dict)
+                    }
+                    _targets_ok, _missing_targets = _check_mandatory_targets(
+                        _mandatory_target_status, final_findings_clause_ids=_final_findings_clause_ids,
+                    )
+                    if not _targets_ok:
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "REVIEW_FAILED_USER_REQUEST_MISSING: user-cited clause(s) from review_focus missing from final output",
+                                "review_status": "REVIEW_FAILED_USER_REQUEST_MISSING",
+                                "missing_clause_citations": _missing_targets,
+                            },
+                        )
+                        return
+
                     doc_bytes = _builder(
                         entity=entity,
                         contract_type=contract_type,
@@ -1689,6 +1724,7 @@ def create_handler(service: RuleQueryService):
                         top_risks_filtered=_docx_final.get("top_risks"),
                         high_issues_filtered=_docx_final.get("high_issues"),
                         medium_issues_filtered=_docx_final.get("medium_issues"),
+                        mandatory_review_targets=_mandatory_target_status,
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})

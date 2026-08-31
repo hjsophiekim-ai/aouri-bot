@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from runtime.review.clause_extraction import ClauseChunk, find_clause_scoped_excerpt
+from runtime.review.clause_extraction import ClauseChunk, find_clause_scoped_excerpt, find_all_clause_scoped_matches
 
 _TSR_ITEMS: list[dict[str, Any]] = [
     {
@@ -21,7 +21,7 @@ _TSR_ITEMS: list[dict[str, Any]] = [
         "present": re.compile(
             r"사전\s*서면\s*동의\s*없이.{0,10}시험\s*성적서를?\s*.{0,20}(?:언론\s*보도|공표|광고|판촉|홍보)"
             r"|시험\s*성적서를?\s*(?:언론\s*보도|공표|광고|판촉|홍보).{0,20}(?:사전\s*서면\s*동의|승인)",
-            re.IGNORECASE,
+            re.IGNORECASE | re.DOTALL,
         ),
         "risk": "MEDIUM",
         "direction": "성적서를 내부 품질관리·규제 대응 목적으로 사용하는 경우까지 사전동의가 필요하지 않도록 예외를 명시",
@@ -43,7 +43,7 @@ _TSR_ITEMS: list[dict[str, Any]] = [
         "name": "시험신청서·시료 관련 위탁자 책임 범위 과다",
         "present": re.compile(
             r"(?:신청서|시료).{0,30}(?:허위|부실|누락).{0,30}법적\s*책임을?\s*진다",
-            re.IGNORECASE,
+            re.IGNORECASE | re.DOTALL,
         ),
         "risk": "MEDIUM",
         "direction": "위탁자 책임을 고의·과실이 인정되는 경우로 한정하고, 책임 범위(직접손해 한도 등)를 명시",
@@ -63,7 +63,7 @@ _TSR_ITEMS: list[dict[str, Any]] = [
         "name": "타 시험기관과의 거래·약정 제한(사전통보)",
         "present": re.compile(
             r"수탁자\s*이외의\s*자.{0,20}(?:시험분석\s*)?약정을?\s*체결.{0,30}사전에.{0,15}통보",
-            re.IGNORECASE,
+            re.IGNORECASE | re.DOTALL,
         ),
         "risk": "MEDIUM",
         "direction": "사전통보 의무가 실질적으로 타 시험기관 이용을 제한하는 효과를 갖지 않도록, 통보 거부권이 수탁자에게 없음을 명확히",
@@ -83,7 +83,7 @@ _TSR_ITEMS: list[dict[str, Any]] = [
         "name": "수탁자의 위탁자 자료·데이터 연구·분석 활용",
         "present": re.compile(
             r"영업정책의?\s*수립.{0,15}평가.{0,15}(?:연구|분석).{0,20}활용.{0,200}자료\s*등을?\s*사용할\s*수\s*있다",
-            re.IGNORECASE,
+            re.IGNORECASE | re.DOTALL,
         ),
         "risk": "MEDIUM",
         "direction": "활용 가능한 자료의 범위(익명화·통계화 여부)와 제3자 제공 금지를 명확히, 위탁자의 사후 활용중단 요청권 확보",
@@ -102,7 +102,7 @@ _TSR_ITEMS: list[dict[str, Any]] = [
     {
         "id": "tsr_retest_error_correction_missing",
         "name": "시험결과 오류 시 재시험·정정 절차 부재",
-        "present": re.compile(r"재시험|재검사|성적\s*정정|오류\s*수정|재분석", re.IGNORECASE),
+        "present": re.compile(r"재시험|재검사|성적\s*정정|오류\s*수정|재분석", re.IGNORECASE | re.DOTALL),
         "risk": "MEDIUM",
         "direction": "시험 결과에 오류가 확인된 경우의 재시험/정정 절차와 비용 부담 주체를 명시",
         "reason": (
@@ -147,6 +147,10 @@ def _apply_testing_service_checklist(
         if item["id"] in existing_ids:
             continue
         is_missing_check = bool(item.get("is_missing_clause_check"))
+        article_number = None
+        paragraph_number = None
+        display_path = None
+        related_clauses: list[str] = []
         if is_missing_check:
             # Inverted: inject the finding when the safeguard is ABSENT anywhere
             # in the document — this is a document-wide absence check, not a
@@ -155,26 +159,44 @@ def _apply_testing_service_checklist(
                 continue
             excerpt = ""
         else:
-            scoped = find_clause_scoped_excerpt(clauses, item["present"])
-            if scoped is not None:
-                excerpt, _art = scoped
+            all_matches = find_all_clause_scoped_matches(clauses, item["present"])
+            if all_matches:
+                first = all_matches[0]
+                excerpt = first.excerpt
+                article_number = first.article_number
+                paragraph_number = first.paragraph_number
+                display_path = first.display_path
+                seen_paths = {display_path} if display_path else set()
+                for other in all_matches[1:]:
+                    if other.display_path and other.display_path not in seen_paths:
+                        related_clauses.append(other.display_path)
+                        seen_paths.add(other.display_path)
             else:
-                if clauses:
-                    # Segmented clauses exist but none of them matched — trust
-                    # the segmentation over a raw full-text scan rather than
-                    # risk a cross-clause quote.
-                    continue
-                m = item["present"].search(text)
-                if not m:
-                    continue
-                start = max(0, m.start() - 40)
-                end = min(len(text), m.end() + 120)
-                excerpt = text[start:end].strip()
+                scoped = find_clause_scoped_excerpt(clauses, item["present"])
+                if scoped is not None:
+                    excerpt, _art = scoped
+                else:
+                    if clauses:
+                        # Segmented clauses exist but none of them matched — trust
+                        # the segmentation over a raw full-text scan rather than
+                        # risk a cross-clause quote.
+                        continue
+                    m = item["present"].search(text)
+                    if not m:
+                        continue
+                    start = max(0, m.start() - 40)
+                    end = min(len(text), m.end() + 120)
+                    excerpt = text[start:end].strip()
         risk = item["risk"]
+        clause_title = f"{display_path} [{item['name']}]" if display_path else f"[시험·검사 용역] {item['name']}"
         clause_results.append({
             "clause_id": item["id"],
-            "article_number": None,
-            "clause_title": f"[시험·검사 용역] {item['name']}",
+            "article_number": article_number,
+            "paragraph_number": paragraph_number,
+            "display_path": display_path,
+            "clause_title": clause_title,
+            "clause_number_uncertain": not bool(display_path),
+            "related_clauses": related_clauses,
             "clause_topic": item.get("clause_topic", "other"),
             "original_text": excerpt or f"[{item['name']}] — 계약서에 해당 절차 없음",
             "risk_tier": risk,

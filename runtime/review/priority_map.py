@@ -94,10 +94,18 @@ def infer_contract_profile(*, contract_type: str, text: str) -> ContractProfile:
         ev.append("ops_outsourcing_token_weak")
         return ContractProfile(profile="ops_outsourcing", evidence=ev)
 
-    is_dealer = has_any(["대리점", "유통", "위탁판매", "위탁거래", "consignment", "dealer", "distributor"])
+    # "유통" deliberately excluded here (unlike ct_pref_dealer above, which only
+    # checks the short contract_type label): a bare "유통" hit anywhere in a
+    # full contract body is far too generic to signal an actual dealer/
+    # consignment agreement — confirmed against a real FITI 시험분석약정서
+    # where "유통질서의 확립" (a routine 목적 clause phrase, "contributing to
+    # the establishment of sound market/distribution order") falsely
+    # triggered dealer_consignment profile, which in turn injected an
+    # unrelated "인력 채용·배치·평가 자율성" (personnel/HR management)
+    # boilerplate finding onto that contract's 관할조항 (jurisdiction
+    # clause) via the article==14 dealer-template branch below.
+    is_dealer = has_any(["대리점", "위탁판매", "위탁거래", "consignment", "dealer", "distributor"])
     if is_dealer:
-        # Weak signal: same caveat as above -- e.g. bare "유통" is common outside
-        # dealer contracts too (분석계약, 물류, 데이터 유통 등).
         ev.append("dealer_token_weak")
         return ContractProfile(profile="dealer_consignment", evidence=ev)
 

@@ -74,6 +74,41 @@ def _strip_unverified_law_article_numbers(text: str) -> str:
     return _LAW_ARTICLE_NUMBER_RX.sub(r"\1", text)
 
 
+def _collapse_immediate_repeated_phrases(text: str, max_phrase_words: int = 6) -> str:
+    """Collapse a word-sequence immediately repeated back-to-back into one
+    occurrence — e.g. "사전 서면 사전 서면 동의" -> "사전 서면 동의".
+
+    This is a post-generation safety net, not a source-specific patch: the
+    "동의를 받아야" -> "사전 서면 동의를 득하여야" style substitutions above
+    already prepend "사전 서면" unconditionally, so any AI- or rule-generated
+    text that already said "...사전 서면 동의를 받아야..." ends up with the
+    phrase doubled after this table runs. Rather than special-casing that one
+    substitution, this catches the duplication generically wherever it
+    occurs (same class of defect from any future substitution or AI output).
+    """
+    if not text:
+        return text
+    # Split on spaces but keep them so punctuation-adjacent tokens aren't
+    # merged; Korean legal text here is already space-segmented.
+    tokens = text.split(" ")
+    n = len(tokens)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        matched = False
+        max_w = min(max_phrase_words, (n - i) // 2)
+        for w in range(max_w, 0, -1):
+            if tokens[i:i + w] == tokens[i + w:i + 2 * w]:
+                out.extend(tokens[i:i + w])
+                i += 2 * w
+                matched = True
+                break
+        if not matched:
+            out.append(tokens[i])
+            i += 1
+    return " ".join(out)
+
+
 # 법률 문어체 접속사/어미 정규화
 _REGEX_FORMAL: list[tuple[str, str]] = [
     (r"하고\s*있다\b", "하고 있다"),
@@ -134,6 +169,10 @@ def polish_korean_legal_style(text: str) -> str:
         s = stripped + "."
     else:
         s = stripped
+
+    # 8. post-generation 문안 검사: 치환 규칙(예: "사전 서면" 중복 삽입)이나
+    # AI 응답 자체에서 발생할 수 있는 즉시-반복 문구를 정리한다.
+    s = _collapse_immediate_repeated_phrases(s)
 
     return s.strip()
 
