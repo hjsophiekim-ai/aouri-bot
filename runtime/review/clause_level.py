@@ -1381,7 +1381,13 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
             cr["review_tier"] = "NOTE"
 
     # HIGH 최대 max_high개: LEVEL 순 정렬 후 초과분 MEDIUM 강등
-    # 체크리스트 항목(is_checklist_item=True)은 캡 계산에서 제외
+    # 체크리스트 항목(is_checklist_item=True)과 공통 법률리스크(common_legal_risk.py,
+    # is_common_legal_risk=True)는 캡 계산에서 제외한다. 전자는 "없는 조항 신설"
+    # 권고라 Priority 3(원칙적 제외)로 이미 별도 처리되고, 후자는 지체상금 무상한·
+    # 위약벌 배수·귀책불문 해지 등 실제 존재하는 불리한 조항(Priority 1)을
+    # regex로 직접 확인해 만든 고정밀 finding이므로, 임의의 개수 상한으로
+    # 조용히 MEDIUM 강등하면 "실제 중요한 독소조항의 우선순위를 놓치는" 결과가
+    # 된다(변호사형 전체계약 판단 지시, 2026-08-31).
     high_items = [
         cr for cr in clause_results
         if isinstance(cr, dict)
@@ -1389,6 +1395,7 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
         and not bool(cr.get("dedup_suppressed"))
         and not bool(cr.get("keep_as_is"))
         and not bool(cr.get("is_checklist_item"))
+        and not bool(cr.get("is_common_legal_risk"))
     ]
     if len(high_items) > max_high:
         high_items.sort(key=lambda x: (int(x.get("_priority_level") or 3), -int(bool(x.get("must_fix"))), -int(bool(x.get("approval_required")))))
@@ -1903,6 +1910,43 @@ _INDUSTRY_SPECIFIC_ITEMS: list[dict[str, Any]] = [
         ),
     },
 ]
+
+
+def _apply_checklist_item_priority_demotion(
+    clause_results: list[dict[str, Any]],
+    focus_topics: set[str] | None,
+    derived_topics: set[str] | None,
+) -> None:
+    """requirement.md > 변호사형 전체계약 판단 (2026-08-31 지시).
+
+    체크리스트 injector(서비스/프로젝트설치 안전·교육/제조물/공급자보호 +
+    content_production 4~5곳)가 만드는 finding은 전부 "계약서에 없는 조항을
+    신설하라"는 권고다 — 실제 존재하는 불리한 조항(Priority 1)보다 후순위인
+    Priority 2이며, 사용자가 그 주제를 직접 요청하지 않았다면 원칙적으로
+    결과에서 제외한다(Priority 3). PL보험 가입, 사고 즉시 보고, 사용자
+    매뉴얼, 안전인증 보증처럼 우리 회사의 새 의무를 자진해서 추가하는 제안을
+    기본 출력에 올리지 않기 위함 — "리스크를 줄이는 목적"과 정면으로
+    충돌하기 때문. 사용자가 review_focus로 해당 주제를 직접 물어본 경우
+    (user_focus_hit/factual_hit/clause_topic 일치) 또는 mandatory 항목인
+    경우에만 원래 등급을 유지한다.
+    """
+    wanted_topics = set(focus_topics or ()) | set(derived_topics or ())
+    for cr in clause_results:
+        if not isinstance(cr, dict) or not bool(cr.get("is_checklist_item")):
+            continue
+        if bool(cr.get("user_focus_hit")) or bool(cr.get("factual_hit")) or bool(cr.get("is_mandatory")):
+            continue
+        topic = str(cr.get("clause_topic") or "")
+        if topic and topic in wanted_topics:
+            continue
+        cr["risk_tier"] = "LOW"
+        cr["severity"] = "LOW"
+        cr["must_fix"] = False
+        cr["high_risk"] = False
+        cr["approval_required"] = False
+        cr["review_tier"] = "NOTE"
+        cr["_priority_level"] = 3
+        cr["_checklist_demoted"] = True
 
 
 def _apply_industry_specific_review(
@@ -2680,6 +2724,14 @@ def _apply_relevance_validation_gate(
         if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
             continue
         if bool(cr.get("is_checklist_item")):
+            continue
+        # common_legal_risk.py의 Layer 1 rule은 "계약유형과 무관하게 모든 계약에서
+        # 검토"하도록 의도적으로 설계됨(그 파일 자체의 docstring — HARD BLOCK도
+        # 적용받지 않음). 이 relevance gate의 조건 1/3(계약유형별 topic 호환성)이
+        # Layer 1 finding에도 그대로 적용되면 실제로 존재하는 불리한 조항
+        # (지체상금 무상한·위약벌 배수·귀책불문 해지 등, clause_topic="other"/
+        # "damage" 등)이 계약유형 미스매치로 오인되어 조용히 LOW 강등되므로 제외한다.
+        if bool(cr.get("is_common_legal_risk")):
             continue
 
         sr = str(cr.get("suggested_rewrite") or "")
@@ -5045,6 +5097,10 @@ def build_clause_level_result(
     _apply_project_installation_checklist(clause_results, str(text or ""), _contract_class)
     # 1-2. [STEP 3] Supplier-Protective Product Contract 체크리스트
     _apply_supplier_product_checklist(clause_results, str(text or ""), _contract_class, party.our_role, review_posture)
+    # 1-2b. [Priority 3 억제] 위 체크리스트들이 만든 "누락 조항 신설" 권고는
+    # 사용자가 직접 요청한 주제가 아니면 기본 출력에서 제외한다 — 새로운
+    # 의무를 자진해서 추가하지 않기 위함(변호사형 전체계약 판단 지시).
+    _apply_checklist_item_priority_demotion(clause_results, focus_topics, derived_topics)
     # 1-3. [Layer 1 — 공통 법률리스크] 계약유형과 무관하게 모든 계약에서 검토.
     # HARD BLOCK(계약유형 게이트)은 아래 Layer 2(유형특화) 룰에만 적용하고,
     # 이 Layer 1은 절대 게이트하지 않는다 — 그래야 무관 룰 차단이 실제 존재하는
@@ -5178,12 +5234,19 @@ def build_clause_level_result(
     if isinstance(frc1, dict) and bool(frc1.get("expert_mode")):
         party1 = frc1.get("party_role") if isinstance(frc1.get("party_role"), dict) else {}
         our_role1 = str(party1.get("our_role") or "")
+        # is_common_legal_risk(원문 regex로 직접 확인된 실존 독소조항)와
+        # is_checklist_item(없는 조항 신설 권고 — 이미 Priority 3로 별도 억제됨)은
+        # 이 top-5 재점수 캡에서도 제외한다. 그렇지 않으면 위의 _apply_review_
+        # priority_engine에서 준 예외가 여기서 다시 무력화되어 실제 존재하는
+        # 불리한 조항이 임의로 MEDIUM 강등된다(변호사형 전체계약 판단 지시).
         high_candidates = [
             cr
             for cr in clause_results
             if isinstance(cr, dict)
             and not bool(cr.get("keep_as_is"))
             and not bool(cr.get("dedup_suppressed"))
+            and not bool(cr.get("is_common_legal_risk"))
+            and not bool(cr.get("is_checklist_item"))
             and (str(cr.get("risk_tier") or "").upper() == "HIGH" or bool(cr.get("high_risk")) or bool(cr.get("approval_required")))
         ]
         if len(high_candidates) > 5:

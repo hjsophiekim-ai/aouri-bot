@@ -79,7 +79,9 @@ class LegalReviewDocxTest(unittest.TestCase):
         z = zipfile.ZipFile(BytesIO(docx_bytes))
         self.assertIn("word/document.xml", z.namelist())
 
-    def test_docx_contains_top5_section(self) -> None:
+    def test_docx_contains_high_section(self) -> None:
+        # TOP 5 핵심 리스크 섹션은 폐지됨(필수수정 HIGH 섹션과 중복되어 삭제,
+        # 변호사형 전체계약 판단 지시 2026-08-31).
         from runtime.review.legal_review_docx import build_legal_review_docx
         from runtime.review.contract_classifier import classify_contract_detailed
 
@@ -94,7 +96,8 @@ class LegalReviewDocxTest(unittest.TestCase):
             contract_type_code=detailed.contract_type,
         )
         xml = _read_docx_xml(docx_bytes)
-        self.assertIn("TOP 5", xml, "DOCX must contain 'TOP 5 핵심 리스크' section")
+        self.assertIn("필수수정", xml, "DOCX must contain '필수수정' (HIGH) section")
+        self.assertNotIn("TOP 5", xml, "TOP 5 핵심 리스크 section must no longer appear")
 
     def test_docx_contains_article6_13_revision(self) -> None:
         from runtime.review.legal_review_docx import build_legal_review_docx

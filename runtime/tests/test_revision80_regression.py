@@ -194,8 +194,9 @@ class Revision80PresenceTest(unittest.TestCase):
         has_skai = "스카이" in self.text
         self.assertTrue(has_skai, "Counterparty 스카이인텔리전스 must appear")
 
-    def test_top5_section_present(self) -> None:
-        self._present("TOP 5")
+    def test_conclusion_section_present(self) -> None:
+        # TOP 5 핵심 리스크 섹션은 폐지됨 — 필수수정(HIGH)이 그 자리를 대신한다.
+        self._present("1. 계약 구조 및 검토 결론")
 
     def test_article9_high_present(self) -> None:
         self._present("제9조")
@@ -231,10 +232,10 @@ class Revision80PresenceTest(unittest.TestCase):
         self._present("제12조")
 
     def test_high_section_present(self) -> None:
-        self._present("3. 필수수정")
+        self._present("2. 필수수정")
 
     def test_medium_section_present(self) -> None:
-        self._present("4. 권장수정")
+        self._present("3. 권장수정")
 
 
 class Revision80ClassificationTest(unittest.TestCase):

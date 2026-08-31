@@ -273,7 +273,9 @@ class ContentContractTop5Test(unittest.TestCase):
         cls.text_content = _read_docx_text(cls.docx_bytes)
 
     def test_top5_section_exists(self) -> None:
-        self.assertIn("TOP 5", self.text_content)
+        # TOP 5 핵심 리스크 섹션은 폐지됨(필수수정 HIGH 섹션과 중복) — 대신
+        # 그 자리를 대체한 필수수정 섹션이 존재하는지 확인한다.
+        self.assertIn("필수수정", self.text_content)
 
     def test_cp004_in_top5_area(self) -> None:
         self.assertIn("제9조", self.text_content,
@@ -362,9 +364,9 @@ class ContentContractDocxQualityTest(unittest.TestCase):
                              f"Legacy section '{title}' must not appear")
 
     def test_new_section_structure(self) -> None:
-        self.assertIn("1. 계약 구조 및 우리 측 포지션", self.text_no_low)
-        self.assertIn("2. TOP 5", self.text_no_low)
-        self.assertIn("3. 필수수정", self.text_no_low)
+        self.assertIn("1. 계약 구조 및 검토 결론", self.text_no_low)
+        self.assertIn("2. 필수수정", self.text_no_low)
+        self.assertIn("3. 권장수정", self.text_no_low)
 
     def test_ip_revision_content(self) -> None:
         has_ip_content = (

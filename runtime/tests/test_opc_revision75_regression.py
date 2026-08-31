@@ -188,8 +188,9 @@ class Revision75PresenceTest(unittest.TestCase):
         has_role = "공급업자" in self.xml
         self.assertTrue(has_role, "우리 측 지위: 공급업자 must appear")
 
-    def test_top5_section_present(self) -> None:
-        self.assertIn("TOP 5", self.xml, "TOP 5 핵심 리스크 section must appear")
+    def test_high_section_present(self) -> None:
+        # TOP 5 핵심 리스크 섹션은 폐지됨(필수수정 HIGH 섹션과 중복되어 삭제).
+        self.assertIn("필수수정", self.xml, "필수수정(HIGH) section must appear")
 
     def test_article5_1_high_present(self) -> None:
         has_art5 = "제5조" in self.xml and "HIGH" in self.xml

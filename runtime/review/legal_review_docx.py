@@ -1,12 +1,12 @@
 """법무팀 검토용 DOCX 생성 — 변호사식 계약검토 형식 (v2).
 
-구조:
-  1. 계약 구조 및 우리 측 포지션
-  2. TOP 5 핵심 리스크
-  3. 필수수정 조항 — HIGH (빨간색)
-  4. 권장수정 조항 — MEDIUM (주황색)
-  5. 참고 조항 — LOW 부록 (파란색, include_low=True일 때만)
-  6. 제외된 항목 요약
+구조 (변호사형 전체계약 판단 지시, 2026-08-31 — TOP 5 핵심 리스크 섹션 폐지,
+HIGH 섹션과 중복되어 삭제):
+  1. 계약 구조 및 검토 결론 (우리 측 지위·고객사 양식 여부·HIGH/MEDIUM 건수·핵심 결론 3줄)
+  2. 필수수정 조항 — HIGH (빨간색)
+  3. 권장수정 조항 — MEDIUM (주황색)
+  4. 참고 조항 — LOW 부록 (파란색, include_low=True일 때만)
+  5. 제외된 항목 요약
 
 색상 기준:
   - HIGH / 필수수정: 빨간색 (FF0000)
@@ -637,8 +637,8 @@ def build_legal_review_docx(
         _blank(body)
         _separator(body)
 
-    # ── Section 1: 계약 구조 및 우리 측 포지션 ──────────────────────────────
-    _heading1(body, "1. 계약 구조 및 우리 측 포지션")
+    # ── Section 1: 계약 구조 및 검토 결론 ────────────────────────────────────
+    _heading1(body, "1. 계약 구조 및 검토 결론")
 
     _para(body, f"계약명: {filename or '미상'}")
     _para(body, f"우리 회사: {_format_val(dp.get('our_party') or entity)}")
@@ -718,7 +718,21 @@ def build_legal_review_docx(
     if conf is not None:
         _para(body, f"분석 신뢰도: {float(conf):.0%}")
 
+    _para(body, "고객사(상대방) 양식 여부: " + ("고객사(상대방) 양식" if is_counterparty_form else "당사 표준 양식"))
+
     _para(body, f"검토 결과: HIGH {len(high_issues)}건 | MEDIUM {len(medium_issues)}건 | 내부 승인 필요 {sum(1 for i in high_issues if i.approval_required)}건")
+
+    # 핵심 결론 3줄 — 변호사형 전체계약 판단(2026-08-31 지시): TOP 5 섹션을
+    # 별도로 두지 않는 대신, 첫 페이지 결론에 HIGH 우선 최대 3건을 한 줄
+    # 요약으로 압축해 "체결 전 반드시 봐야 할 것"을 바로 보여준다.
+    _conclusion_source = (high_issues or [])[:3]
+    if len(_conclusion_source) < 3:
+        _conclusion_source = _conclusion_source + (medium_issues or [])[: 3 - len(_conclusion_source)]
+    if _conclusion_source:
+        _para(body, "핵심 결론:", bold=True)
+        for _ci in _conclusion_source:
+            _cc = COLOR_HIGH if _ci.severity == "HIGH" else COLOR_MEDIUM
+            _para(body, f"- [{_ci.severity}] {_ci.clause_title} — {_ci.issue_title}", color=_cc, indent=1)
 
     uq = dp.get("unresolved_questions") or []
     if isinstance(uq, list) and uq:
@@ -730,7 +744,9 @@ def build_legal_review_docx(
 
     # dealer_rental: 6-section professional report format
     _is_dealer_rental_docx = (contract_type_code == "dealer_rental_service_contract")
-    _sec_offset = -1 if _is_dealer_rental_docx else 0  # dealer_rental: 번호 1씩 당김
+    # TOP 5 핵심 리스크 섹션을 폐지했으므로(HIGH 섹션과 중복), 번호를 항상 1씩
+    # 당긴다 — dealer_rental은 원래도 TOP 5를 건너뛰었으므로 동작 변화 없음.
+    _sec_offset = -1
 
     if _is_dealer_rental_docx:
         # ── dealer_rental 전용: 섹션 2 = 역할매트릭스 ──────────────────────────
@@ -758,31 +774,9 @@ def build_legal_review_docx(
         _blank(body)
         _separator(body)
 
-    if not _is_dealer_rental_docx:
-        # ── Section 2: TOP 5 핵심 리스크 ──────────────────────────────────────
-        _heading1(body, "2. TOP 5 핵심 리스크")
-        if not top_issues:
-            _para(body, "분석된 핵심 리스크가 없습니다.", italic=True)
-        else:
-            for i, issue in enumerate(top_issues[:5], 1):
-                c = _severity_color(issue.severity)
-                p_head = _p(body)
-                r_sev = _r(p_head, bold=True, color=c)
-                _t(r_sev, f"[{issue.severity}] {i}. {issue.clause_title} — {issue.issue_title}")
-                if issue.original_text and not issue.original_text.startswith("["):
-                    _para(body, f"원문: {issue.original_text[:200]}", indent=1)
-                _para(body, f"문제점: {issue.problem[:300]}", indent=1)
-                if issue.proposed_revision:
-                    _para(body, "수정문안:", bold=True, indent=1)
-                    for line in issue.proposed_revision.splitlines()[:12]:
-                        line = line.strip()
-                        if line:
-                            _para(body, line[:250], indent=2)
-                if issue.negotiation_position and not _has_placeholder(issue.negotiation_position):
-                    _para(body, f"협상 포지션: {issue.negotiation_position[:200]}", indent=1, italic=True)
-                if issue.related_clauses:
-                    _para(body, f"함께 수정할 조항: {', '.join(issue.related_clauses[:6])}", indent=1)
-                _blank(body)
+    # TOP 5 핵심 리스크 섹션은 폐지 — 바로 뒤 필수수정(HIGH) 섹션과 내용이
+    # 사실상 중복되어 문서 가독성을 해쳤다(변호사형 전체계약 판단 지시,
+    # 2026-08-31). `top_issues`는 더 이상 별도 섹션으로 렌더링하지 않는다.
 
     _separator(body)
 

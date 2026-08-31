@@ -196,8 +196,9 @@ class Revision76PresenceTest(unittest.TestCase):
     def test_our_role_supplier(self) -> None:
         self._assert_present("공급업자")
 
-    def test_top5_section(self) -> None:
-        self._assert_present("TOP 5")
+    def test_high_section(self) -> None:
+        # TOP 5 핵심 리스크 섹션은 폐지됨(필수수정 HIGH 섹션과 중복되어 삭제).
+        self._assert_present("필수수정")
 
     def test_mi001_present(self) -> None:
         self._assert_present("제5조 제1항")
@@ -421,16 +422,14 @@ class LegacyWriterBlockedTest(unittest.TestCase):
         self.assertNotIn("7) 조항별 구체적 수정안 부록", self.text)
 
     def test_new_section_1_present(self) -> None:
-        self.assertIn("1. 계약 구조 및 우리 측 포지션", self.text)
+        self.assertIn("1. 계약 구조 및 검토 결론", self.text)
 
     def test_new_section_2_present(self) -> None:
-        self.assertIn("2. TOP 5 핵심 리스크", self.text)
+        # TOP 5 핵심 리스크 섹션은 폐지됨 — 필수수정(HIGH)이 그 자리를 대신한다.
+        self.assertIn("2. 필수수정 조항", self.text)
 
     def test_new_section_3_present(self) -> None:
-        self.assertIn("3. 필수수정 조항", self.text)
-
-    def test_new_section_4_present(self) -> None:
-        self.assertIn("4. 권장수정 조항", self.text)
+        self.assertIn("3. 권장수정 조항", self.text)
 
 
 if __name__ == "__main__":
