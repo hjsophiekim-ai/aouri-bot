@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from runtime.review.contract_classifier import FURSYS_GROUP_NAMES, is_fursys_group
+from runtime.review.party_label_binding import bind_party_labels_to_entities, explicit_role_from_labels
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,31 @@ def infer_party_role(
             counterparty_is_large_standard_provider=False,
             signals=signals,
         )
+
+    _label_bind = bind_party_labels_to_entities(t, ent)
+    if _label_bind is not None:
+        _our_lbl, _cp_lbl = _label_bind
+        _explicit = explicit_role_from_labels(t, _our_lbl, _cp_lbl)
+        if _explicit == "supplier":
+            signals.append("explicit_label_self_declared_supplier")
+            return PartyRole(
+                our_role="supplier",
+                counterparty_role="buyer",
+                our_label=_our_lbl,
+                counterparty_label=_cp_lbl,
+                counterparty_is_large_standard_provider=False,
+                signals=signals,
+            )
+        if _explicit == "buyer":
+            signals.append("explicit_label_self_declared_buyer")
+            return PartyRole(
+                our_role="buyer",
+                counterparty_role="seller_or_supplier",
+                our_label=_our_lbl,
+                counterparty_label=_cp_lbl,
+                counterparty_is_large_standard_provider=False,
+                signals=signals,
+            )
 
     if contract_type_code == "testing_inspection_service" or _has_any(t, _TESTING_SERVICE_KW):
         our_role = "client"

@@ -202,7 +202,7 @@ def classify_contract_detailed(
         type_code, type_reasons = _classify_type_code(ct, t, filename or "")
     reasons.extend(type_reasons)
 
-    our_legal_role, counterparty_legal_role = _infer_legal_roles(type_code, ct, t)
+    our_legal_role, counterparty_legal_role = _infer_legal_roles(type_code, ct, t, ent)
     our_role_bucket, counterparty_role_bucket = _TYPE_TO_ROLE_BUCKET.get(type_code, ("unknown", "unknown"))
 
     override_role_bucket = _role_bucket_from_answers(ans)
@@ -531,6 +531,15 @@ def _detect_counterparty(text: str, our_party: str) -> str:
     t = text or ""
     our_lower = our_party.lower() if our_party else ""
 
+    # Pattern -1: "OO(이하 "갑"이라 한다)"류 정의 문장으로 회사명↔갑/을 라벨이
+    # 명시적으로 바인딩되는 경우 — 아래의 "을(회사명, 이하 ...)" 스타일
+    # 패턴들은 이 계약처럼 회사명이 괄호 앞에 오는 형식("㈜웹젠(이하 "갑"
+    # 이라 한다)")은 인식하지 못해 상대방명이 깨지거나 비게 된다.
+    from runtime.review.party_label_binding import bound_counterparty_name
+    _bound = bound_counterparty_name(t, our_party)
+    if _bound:
+        return _bound
+
     # Pattern 0: "을(수탁자): 주식회사 XXX" format (content production contracts)
     m = re.search(
         r"을\s*\((?:수탁자|대리점|을)\)\s*[:：]\s*(?:주식회사|㈜|㈜?\s*)?\s*([가-힣a-zA-Z0-9\s]{2,30}?)\s*(?:\(|$)",
@@ -592,8 +601,27 @@ def _detect_counterparty(text: str, our_party: str) -> str:
 
 
 def _infer_legal_roles(
-    type_code: str, contract_type: str, text: str
+    type_code: str, contract_type: str, text: str, entity: str = ""
 ) -> tuple[str, str]:
+    # purchase_supply/equipment_purchase_installation은 거래방향이 대칭적
+    # 이다 — 우리가 물품을 사는 쪽일 수도, 파는(제작·설치하는) 쪽일 수도
+    # 있어 type_code만으로는 판단할 수 없다("웹젠은 퍼시스로부터 가구를
+    # 구매한다"인데 퍼시스=buyer로 고정 분류되던 사고). 계약문에 "OO(이하
+    # "갑"이라 한다)"류 정의와 "매도인으로서" 자기선언 또는 "OO로부터 ...
+    # 구매한다" 같은 거래방향 문언이 명시되어 있으면 그 신호를 우선한다
+    # (변호사형 전체계약 판단 지시, 2026-08-31). party_role.py도 같은
+    # party_label_binding 모듈을 공유해 동일한 결론에 도달한다.
+    if type_code in ("purchase_supply", "equipment_purchase_installation"):
+        from runtime.review.party_label_binding import bind_party_labels_to_entities, explicit_role_from_labels
+        _bind = bind_party_labels_to_entities(text or "", entity or "")
+        if _bind is not None:
+            _our_lbl, _cp_lbl = _bind
+            _explicit = explicit_role_from_labels(text or "", _our_lbl, _cp_lbl)
+            if _explicit == "supplier":
+                return "supplier", "buyer"
+            if _explicit == "buyer":
+                return "buyer", "seller_or_supplier"
+
     if type_code in ("advertising_content_production", "content_production_service", "creative_agency_service"):
         return "도급인/발주자/콘텐츠 사용권자", "콘텐츠 제작 수탁자"
     if type_code == "consignment_sales_agency":
