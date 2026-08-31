@@ -21,6 +21,11 @@ from typing import Any
 
 from runtime.review.clause_extraction import ClauseChunk, find_clause_scoped_excerpt, find_all_clause_scoped_matches
 
+_RX_PENALTY_CUMULATIVE_DAMAGE = re.compile(
+    r"(지체상금|위약금)\s*외\s*실제\s*발생한?\s*손해액?을?\s*.{0,20}(손해배상으로)?\s*청구할\s*수\s*있다",
+    re.IGNORECASE | re.DOTALL,
+)
+
 _CLR_ITEMS: list[dict[str, Any]] = [
     {
         "id": "clr_fault_blind_exemption",
@@ -146,24 +151,29 @@ _CLR_ITEMS: list[dict[str, Any]] = [
     # 갑(발주자/구매자)이 작성한 표준양식에서 반복되는 패턴이며, 개별 조항이
     # 아니라 계약 전체의 "책임 불균형"을 만드는 핵심 조항군이다.
     {
+        # 같은 조항에 지체상금 무상한 패턴(_RX_LATE_PENALTY_RATE)이 함께
+        # 있으면 _apply_late_penalty_uncapped_check가 이 항목을 흡수해 하나의
+        # 클러스터 finding으로 합친다(변호사형 전체계약 판단 지시,
+        # 2026-08-31 — "지체상금+실손해+중복" 3요소를 하나의 HIGH로 판단).
+        # 여기 남겨두는 이유는 지체상금 요율이 없는(또는 다른 조항에 분리된)
+        # 계약에서도 이 패턴 단독으로 여전히 탐지되어야 하기 때문.
         "id": "clr_penalty_cumulative_with_actual_damage",
         "name": "지체상금·실손해 중복청구(누적 책임)",
-        "present": re.compile(
-            r"(지체상금|위약금)\s*외\s*실제\s*발생한?\s*손해액?을?\s*.{0,20}(손해배상으로)?\s*청구할\s*수\s*있다",
-            re.IGNORECASE | re.DOTALL,
-        ),
+        "present": _RX_PENALTY_CUMULATIVE_DAMAGE,
         "risk": "HIGH",
         "direction": "지체상금은 손해배상액의 예정(위약금)으로 정하고, 실손해를 별도로 중복 청구하지 못하도록 명시(또는 지체상금을 공제한 초과분만 청구 가능하도록 한정)",
-        "reason": (
-            "지체상금을 지급한 뒤에도 실제 발생한 손해액을 별도로 다시 청구할 수 있도록 하면, "
-            "동일한 지연에 대해 지체상금과 손해배상이 이중으로 누적되어 상한 없는 책임으로 이어질 수 있다. "
-            "특히 대금 상계 조항과 결합되면 지연 발생 시 회사에 중복·누적 책임이 발생하는 구조가 된다."
+        "reason": "지체상금을 지급한 뒤에도 실제 발생한 손해액을 별도로 다시 청구할 수 있어, 동일한 지연에 대해 지체상금과 손해배상이 이중으로 누적된다.",
+        "legal_business_reason": (
+            "상한 없는 지체상금에 실손해 청구까지 결합되면 지연 1건에 대한 총 배상액을 "
+            "사전에 예측·통제할 수 없고, 대금 상계 조항과 결합되면 정산 단계에서 회사가 "
+            "실제로 받을 대금이 예상보다 크게 줄어드는 유동성 리스크로 이어진다."
         ),
         "rewrite": (
             "지체상금은 지체로 인한 손해배상액의 예정으로 하며, 상대방은 지체상금을 초과하는 "
             "실손해가 지체상금 산정과 무관한 별도의 손해임을 구체적으로 입증한 경우에 한하여 "
             "그 초과분만을 추가로 청구할 수 있다."
         ),
+        "negotiation_position": "지체상금 요율 인하·총액 상한과 함께 3개 요소를 한 번에 묶어 협상 — 실손해 중복청구는 최소한 '지체상금 초과분 입증 시에만' 방식으로 제한 요청.",
         "clause_topic": "damage",
     },
     {
@@ -171,16 +181,23 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         "name": "계약금액 배수 위약벌",
         "present": re.compile(r"위약벌로서?\s*계약\s*금액의\s*(\d+)\s*배", re.IGNORECASE | re.DOTALL),
         "risk": "HIGH",
-        "direction": "위약벌을 폐지하거나, 손해배상액의 예정으로 전환하고 계약금액 이내로 상한을 설정",
-        "reason": (
-            "손해 전부 배상 의무와 별개로 계약금액의 수 배에 달하는 위약벌을 추가로 부과하면, "
+        # 수정 순서는 "삭제 → (삭제 어려우면) cap" 순으로 판단한다 — 첫
+        # 수정안부터 "계약금액 한도로 협의" cap을 제시하면 3배 위약벌이라는
+        # 출발점을 그대로 인정하는 꼴이 되어 협상 레버리지를 스스로 낮춘다
+        # (변호사형 전체계약 판단 지시, 2026-08-31).
+        "direction": "1순위: 위약벌 조항 삭제 후 실제 직접손해 배상으로 대체. 삭제가 어려운 경우에만 계약금액 이내 cap 협상",
+        "reason": "손해 전부 배상 의무와 별개로 계약금액의 수 배에 달하는 위약벌이 추가로 부과된다.",
+        "legal_business_reason": (
             "실제 손해 규모와 무관하게 계약금액 자체를 초과하는 금전적 리스크가 발생하고, "
-            "손해배상과 위약벌이 함께 누적되어 과도한 제재로 그 효력이 다투어질 수 있다."
+            "손해배상과 위약벌이 함께 누적되면 과도한 제재로 그 효력 자체가 다투어질 수 있다."
         ),
         "rewrite": (
-            "본 조 위반 시 손해배상 책임은 실손해를 한도로 하며, 위약벌은 계약금액을 초과하지 않는 "
-            "범위 내에서 상호 협의하여 정한다."
+            "본 조의 위약벌 조항은 삭제하고, 위반 당사자는 자신의 귀책사유와 상당인과관계 있는 "
+            "실제 발생 직접손해를 배상한다. (삭제가 불가능한 경우에 한하여 예비적으로: 위약벌은 "
+            "계약금액을 초과하지 않는 범위 내에서 상호 협의하여 정하고, 손해배상과 중복 청구하지 "
+            "아니한다.)"
         ),
+        "negotiation_position": "3배 위약벌 삭제를 1순위로 요청. 삭제 불가 시 현저한 감액 및 손해배상과의 중복 배제를 협상.",
         "clause_topic": "damage",
     },
     {
@@ -193,15 +210,17 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         ),
         "risk": "HIGH",
         "direction": "귀책사유 없는 지연(불가항력·상대방 협조 지연 등)은 해지 사유에서 제외하고, 우리 측 귀책사유가 있는 경우로 한정",
-        "reason": (
-            "우리 측 귀책사유가 없는 경우(불가항력, 상대방의 협조 지연 등)까지 상대방이 별도의 "
-            "최고절차 없이 즉시 계약을 해지할 수 있도록 하면, 이미 투입한 비용을 회수하지 못한 채 "
-            "일방적으로 계약관계에서 배제될 위험이 있다."
+        "reason": "우리 측 귀책사유가 없는 지연까지 상대방이 최고절차 없이 즉시 계약을 해지할 수 있다.",
+        "legal_business_reason": (
+            "불가항력이나 상대방의 협조 지연으로 인한 미인도까지 해지 사유가 되면, 이미 투입한 "
+            "비용을 회수하지 못한 채 일방적으로 계약관계에서 배제될 위험이 있고 정산·손해배상을 "
+            "다툴 협상력도 함께 잃는다."
         ),
         "rewrite": (
             "본 호에 따른 해지는 상대방의 고의 또는 과실로 인한 경우에 한하며, 불가항력 또는 "
             "상대방(발주자)의 귀책사유로 인한 지연에는 적용되지 아니한다."
         ),
+        "negotiation_position": "해지권 자체보다 '귀책사유 요건 추가'를 우선 요청 — 삭제가 어려우면 최소한 불가항력·상대방 귀책 지연은 예외로 명시.",
         "clause_topic": "termination",
     },
     {
@@ -213,15 +232,17 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         ),
         "risk": "HIGH",
         "direction": "편의해지 시 이미 투입한 비용(기투입 비용) 및 일실이익 상당액을 상대방이 보상하도록 명시",
-        "reason": (
-            "상대방의 경영상 이유 등 우리 측 귀책과 무관한 사유로도 사전 통지만으로 계약을 해지할 "
-            "수 있도록 하면서, 그로 인해 이미 투입한 비용을 보상하는 규정이 없으면 사업상 손실을 "
-            "고스란히 우리 측이 부담하게 된다."
+        "reason": "상대방의 경영상 이유 등 우리 측 귀책과 무관한 사유로도 사전 통지만으로 계약을 해지할 수 있다.",
+        "legal_business_reason": (
+            "편의해지 시 이미 투입한 비용을 보전받는 규정이 없어 사업상 손실을 고스란히 우리 측이 "
+            "부담하게 되며, 특히 이미 제작·발주가 진행 중인 물품에 대해서는 회수도 어려워 매몰 "
+            "비용 리스크가 크다."
         ),
         "rewrite": (
             "본 항에 따라 상대방이 해지하는 경우, 상대방은 해지 통지일까지 우리 측이 이미 지출·"
             "투입한 비용 및 이미 이행한 부분에 대한 정당한 대가를 지급하여야 한다."
         ),
+        "negotiation_position": "해지권 자체보다 기투입비용 및 완료분 대금 보전 확보를 우선 요청.",
         "clause_topic": "termination",
     },
     {
@@ -230,15 +251,16 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         "present": re.compile(r"자신의\s*비용과\s*책임으로\s*회수", re.IGNORECASE | re.DOTALL),
         "risk": "MEDIUM",
         "direction": "해지 시 이미 투입한 비용의 정산·보전 규정을 추가하고, 물품 회수비용은 해지 귀책 당사자가 부담하도록 명시",
-        "reason": (
-            "계약 해지·해제 시 이미 투입한 비용(제작·운송·설치 등)을 보전받지 못한 채, 회수한 "
-            "물품의 회수비용까지 우리 측이 부담하도록 하면 상대방 귀책 해지의 경우에도 손실이 "
-            "고스란히 우리 측에 귀속된다."
+        "reason": "해지·해제 시 이미 투입한 비용을 보전받지 못한 채 물품 회수비용까지 우리 측이 부담한다.",
+        "legal_business_reason": (
+            "상대방 귀책으로 해지되는 경우에도 회수비용을 우리가 부담하게 되면, 계약 불이행의 "
+            "책임 소재와 무관하게 물류·인건비 손실이 전액 우리 측에 귀속되는 결과가 된다."
         ),
         "rewrite": (
             "해지·해제에 대해 상대방에게 귀책사유가 있는 경우, 회수비용은 상대방이 부담하며, "
             "우리 측이 이미 투입한 비용은 상대방이 정산·보전한다."
         ),
+        "negotiation_position": "회수비용 부담 주체를 해지 귀책 당사자 기준으로 전환하는 최소수정 — 기투입비용 정산 조항 신설을 함께 요청.",
         "clause_topic": "termination",
     },
     {
@@ -249,16 +271,27 @@ _CLR_ITEMS: list[dict[str, Any]] = [
             re.IGNORECASE | re.DOTALL,
         ),
         "risk": "HIGH",
-        "direction": "하자책임도 우리 측 고의·과실이 있는 경우로 한정하고, 통상적 사용에 따른 자연마모·상대방 취급 부주의는 면책 사유로 명시",
-        "reason": (
-            "제품 하자로 인한 손해에 대해 귀책사유를 불문하고 책임을 지도록 하면, 원자재 결함· "
-            "제조상 불가피한 사유·상대방의 부적절한 취급으로 인한 하자까지 무과실 책임을 지게 되어 "
-            "책임 범위가 지나치게 넓다."
+        # 제조물책임법상 법정책임(강행규정)과 계약으로 추가·제한 가능한
+        # 계약상 책임을 구분한다 — "고의 또는 과실이 있는 경우에만 책임"으로
+        # 전부 제한하면 법정책임까지 배제하는 것으로 오인될 수 있고, 협상
+        # 상대방이 수용하기 어려운 과도한 면책으로 비칠 위험도 있다(변호사형
+        # 전체계약 판단 지시, 2026-08-31 — 항목 3·4).
+        "direction": "계약상 무과실책임 확대는 우리 측 고의·과실이 있는 경우로 한정하되, 제조물책임법 등 법정책임은 별도로 존재함을 carve-out으로 명시하고 상대방·제3자 귀책, 불가항력은 책임 범위에서 제외",
+        "reason": "제품 하자로 인한 손해에 대해 귀책사유를 불문하고 책임을 지도록 하는 계약상 무과실책임 확대 조항이다.",
+        "legal_business_reason": (
+            "원자재 결함·제조상 불가피한 사유처럼 우리 측 과실이 없는 하자까지 계약상 무과실 "
+            "책임을 지게 되어 범위가 지나치게 넓고, 반대로 이를 '고의 또는 과실이 있는 경우'로만 "
+            "전부 제한하면 제조물책임법 등에 따라 별도로 존재하는 법정책임까지 배제하려는 것으로 "
+            "오인되어 상대방이 수용하기 어려운 과도한 면책으로 비칠 수 있다."
         ),
         "rewrite": (
-            "하자로 인한 손해배상 책임은 하자가 우리 측의 고의 또는 과실에 기인한 경우에 한하며, "
-            "상대방 또는 사용자의 부적절한 사용·보관·개조로 인한 하자에는 적용되지 아니한다."
+            "을은 을의 고의 또는 과실로 발생한 하자로 인한 손해에 대하여 책임을 부담하되, 갑 "
+            "또는 제3자의 귀책사유, 통상적 사용에 따른 자연마모, 갑 또는 사용자의 부적절한 사용· "
+            "보관·개조, 불가항력 등 을의 책임 없는 사유로 인한 손해에는 적용되지 아니한다. 다만 "
+            "관련 법령(제조물책임법 등)에 따라 별도로 인정되는 법정책임은 이 조항으로 제외되지 "
+            "아니한다."
         ),
+        "negotiation_position": "무과실책임 확대는 반대하되, 제조물책임법상 법정책임까지 배제하려는 것으로 비치지 않도록 carve-out 문구를 함께 제시 — 최소수정으로 상대방 수용 가능성을 높인다.",
         "clause_topic": "damage",
     },
     {
@@ -270,15 +303,16 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         ),
         "risk": "HIGH",
         "direction": "제3자 청구에 대한 방어·대응 절차(통지·협조·비용 분담)를 먼저 규정하고, 면책은 우리 측 귀책이 확정된 경우로 한정",
-        "reason": (
-            "제3자가 손해배상을 청구하기만 하면 그 진위·귀책과 무관하게 상대방을 즉시 면책시켜야 "
-            "한다는 문언은, 청구 금액·정당성에 대한 다툼 기회 없이 방어권을 박탈하고 무제한 배상 "
-            "의무로 이어질 위험이 있다."
+        "reason": "제3자가 청구하기만 하면 그 진위·귀책과 무관하게 상대방을 즉시 면책시켜야 한다.",
+        "legal_business_reason": (
+            "청구 금액·정당성에 대한 다툼 기회 없이 방어권을 박탈당한 채 상대방이 지급한 배상금을 "
+            "그대로 구상당하면, 부당한 제3자 청구에도 우리가 사실상 무제한으로 노출된다."
         ),
         "rewrite": (
             "제3자의 청구에 대하여는 상대방으로부터 지체 없이 통지받아 방어에 참여할 권리를 가지며, "
             "우리 측의 귀책사유가 최종 확정된 부분에 한하여 배상 책임을 부담한다."
         ),
+        "negotiation_position": "즉시 면책 문구 삭제보다 '통지·방어참여권 확보'를 우선 요청 — 면책 자체를 없애기보다 우리가 다툴 기회를 넣는 최소수정.",
         "clause_topic": "damage",
     },
     {
@@ -290,14 +324,16 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         ),
         "risk": "MEDIUM",
         "direction": "지급거절·유예는 하자·미인도 부분에 상응하는 금액으로 한정하고, 나머지 부분의 대금은 정상 지급하도록 명시",
-        "reason": (
-            "일부 하자나 일부 미인도만 있어도 대금 전액의 지급을 거절·유예할 수 있도록 하면, "
-            "이미 정상 이행한 부분에 대한 대가까지 받지 못하는 유동성 리스크가 발생한다."
+        "reason": "일부 하자나 일부 미인도만 있어도 대금 전액의 지급을 거절·유예할 수 있다.",
+        "legal_business_reason": (
+            "이미 정상적으로 인도·이행한 부분에 대한 대가까지 지급이 보류되면, 소규모 하자 분쟁이 "
+            "전체 대금 회수 지연으로 확대되는 유동성 리스크가 발생한다."
         ),
         "rewrite": (
             "대금 지급의 거절·유예는 하자 또는 미인도 부분에 상응하는 금액에 한정하며, 나머지 "
             "정상 이행 부분에 대한 대금은 약정된 기한에 지급한다."
         ),
+        "negotiation_position": "전액 유예를 하자 상응 금액으로 한정하는 최소수정 — 정상 이행분 대금은 분리 지급 요청.",
         "clause_topic": "payment_settlement",
     },
     {
@@ -307,17 +343,24 @@ _CLR_ITEMS: list[dict[str, Any]] = [
             r"검수에?\s*누적하여?\s*(\d+)\s*회\s*이상\s*불합격.{0,70}(해지|해제)",
             re.IGNORECASE | re.DOTALL,
         ),
-        "risk": "MEDIUM",
-        "direction": "재검수 절차와 보완 기회를 명시하고, 즉시해지는 우리 측 귀책이 명백한 반복 불합격으로 한정",
-        "reason": (
+        # 경미한 불합격도 누적되고, 우리 측 귀책 여부와 무관하며, 시정
+        # 기회 없이 즉시 해지되는 3중 리스크가 겹치므로 실제 협상에서 반드시
+        # 고쳐야 할 HIGH로 재분류(변호사형 전체계약 판단 지시, 2026-08-31 —
+        # 항목 6·7). 종전 MEDIUM은 협상 우선순위를 과소평가한 것이었다.
+        "risk": "HIGH",
+        "direction": "① 중대한 하자로 인한 불합격에 한정, ② 우리 측 귀책사유 필요, ③ 상당한 시정기간 부여 — 세 요소를 함께 명시",
+        "reason": "경미한 불합격도 누적 가능하고, 우리 측 귀책 여부와 무관하며, 시정 기회 없이 즉시 해지될 수 있다.",
+        "legal_business_reason": (
             "검수 불합격이 상대방의 사양 변경·불명확한 기준 제시 등 우리 측 귀책이 아닌 사유로도 "
-            "발생할 수 있는데, 이 경우까지 귀책사유를 불문하고 최고절차 없이 즉시 해지할 수 있도록 "
-            "하면 정당한 보완 기회 없이 계약이 종료될 위험이 있다."
+            "발생할 수 있는데, 경미한 지적사항까지 누적되어 최고절차 없이 즉시 계약이 해지되면 "
+            "이미 투입한 비용을 회수할 기회조차 없이 거래관계가 끝날 수 있다."
         ),
         "rewrite": (
-            "검수 불합격이 우리 측 귀책사유로 인한 경우에 한하여, 재검수 기회를 부여한 후에도 "
+            "검수 불합격이 목적물의 사용목적 달성을 곤란하게 하는 중대한 하자로 인한 것이고 "
+            "우리 측 귀책사유로 인한 경우에 한하여, 상당한 시정기간을 부여한 재검수에서도 "
             "누적 2회 이상 불합격한 때에 해지할 수 있다."
         ),
+        "negotiation_position": "해지권 자체 삭제보다 '중대한 하자·우리측 귀책·시정기간 부여' 3요소 추가를 우선 요청 — 즉시해지 리스크를 실질적으로 낮추는 최소수정.",
         "clause_topic": "termination",
     },
     {
@@ -329,14 +372,13 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         ),
         "risk": "MEDIUM",
         "direction": "계약 범위를 명확히 정의하고, 추가 요구사항은 별도 서면 합의 및 대가 조정을 거치도록 명시",
-        "reason": (
-            "계약 범위(급부)에 상대방이 추가로 요구하는 사항을 포괄적으로 포함시키면, 대가 조정 "
-            "없이 업무 범위가 일방적으로 확대될 수 있다(scope creep)."
-        ),
+        "reason": "상대방이 추가로 요구하는 사항이 계약 범위(급부)에 포괄적으로 포함되어 있다.",
+        "legal_business_reason": "대가 조정 없이 업무 범위가 일방적으로 확대될 수 있어(scope creep), 실제 투입 비용이 대금에 반영되지 않는 구조가 된다.",
         "rewrite": (
             "계약 범위는 본 조에서 정한 사항으로 한정하며, 상대방의 추가 요구사항은 양 당사자의 "
             "서면 합의 및 그에 따른 대금 조정을 거친 경우에만 계약 범위에 포함된다."
         ),
+        "negotiation_position": "범위 포괄 문구 삭제보다 '서면합의·대금조정' 절차 신설을 우선 요청 — 추가요구 자체를 막기보다 대가를 받는 구조로 전환.",
         "clause_topic": "other",
     },
     {
@@ -345,14 +387,13 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         "present": re.compile(r"제반\s*사고.{0,140}일체의?\s*책임을?\s*부담", re.IGNORECASE | re.DOTALL),
         "risk": "MEDIUM",
         "direction": "책임 범위를 우리 측 이행 과정에서 발생한 사고로 한정하고, 상대방·제3자의 관리 부주의로 인한 사고는 제외",
-        "reason": (
-            "이행 과정에서 발생하는 '제반 사고'에 대해 포괄적으로 일체의 책임을 부담하도록 하면, "
-            "상대방 또는 제3자의 관리·감독 부주의로 발생한 사고까지 책임 범위에 포함될 수 있다."
-        ),
+        "reason": "이행 과정에서 발생하는 '제반 사고'에 대해 포괄적으로 일체의 책임을 부담한다.",
+        "legal_business_reason": "상대방 또는 제3자의 관리·감독 부주의로 발생한 사고까지 책임 범위에 포함될 수 있어, 우리 통제 밖의 사고에도 책임을 지는 구조가 된다.",
         "rewrite": (
             "본 조의 책임은 우리 측 또는 우리 측 피용인의 고의·과실로 발생한 사고에 한정하며, "
             "상대방 또는 제3자의 관리·감독상 귀책사유로 발생한 사고에는 적용되지 아니한다."
         ),
+        "negotiation_position": "포괄적 사고책임을 우리 측 귀책 범위로 한정하는 최소수정 — 산재보험 등 법정 보장 범위와 중복되지 않도록 명확화.",
         "clause_topic": "damage",
     },
 ]
@@ -479,8 +520,12 @@ def _apply_common_legal_risk_rules(
             "review_tier": "MUST" if risk == "HIGH" else "SUGGEST",
             "suggested_rewrite": item["rewrite"],
             "rewrite_reason": item["reason"],
+            "legal_business_reason": item.get("legal_business_reason") or item["reason"],
             "suggested_direction": [item["direction"]],
-            "negotiation_position": "상대방 반발 가능성이 있으나 법적 책임 범위 명확화 차원에서 협상 필요",
+            "negotiation_position": item.get(
+                "negotiation_position",
+                "상대방 반발 가능성이 있으나 법적 책임 범위 명확화 차원에서 협상 필요",
+            ),
             "confidence": 0.85,
             "is_common_legal_risk": True,
             "has_rewrite_change": True,
@@ -506,7 +551,11 @@ def _apply_late_penalty_uncapped_check(
     지체상금을 키워드만으로 탐지하지 않고, 일할 요율을 실제 계산하여 10일·
     30일 지연 시 계약금액 대비 몇 %에 달하는지 원문 인용에 함께 보여준다.
     상한(캡) 문구가 같은 조항 안에 없으면 무제한 누적 가능한 것으로 보아
-    HIGH로 판단한다.
+    HIGH로 판단한다. 같은 조항에 "지체상금 외 실손해도 청구 가능" 문구가
+    함께 있으면(clr_penalty_cumulative_with_actual_damage와 동일 조항)
+    "과도한 지체상금률 + 상한 부재 + 실손해 중복청구"를 개별 finding
+    2~3건으로 쪼개지 않고 하나의 HIGH risk cluster로 합쳐서 보여준다 —
+    수정안도 요율 인하·총액 상한·중복청구 제한 3요소를 함께 제시한다.
     """
     if "clr_late_penalty_rate_uncapped" in {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}:
         return
@@ -522,13 +571,55 @@ def _apply_late_penalty_uncapped_check(
         else:
             continue
         has_cap = bool(_RX_PENALTY_CAP.search(leaf_text))
+        has_cumulative = bool(_RX_PENALTY_CUMULATIVE_DAMAGE.search(leaf_text))
         art = str(getattr(c, "article_number", None) or (c.get("article_number") if isinstance(c, dict) else "") or "").strip() or None
         para = str(getattr(c, "paragraph_number", None) or (c.get("paragraph_number") if isinstance(c, dict) else "") or "").strip() or None
         display_path = str(getattr(c, "display_path", None) or (c.get("display_path") if isinstance(c, dict) else "") or "").strip() or None
         rate_str = f"{rate_pct:g}"
         ten_day = f"{rate_pct * 10:g}"
         thirty_day = f"{rate_pct * 30:g}"
-        title = f"{display_path} [지체상금율 미계산·상한 부재]" if display_path else "[공통 법률리스크] 지체상금율 미계산·상한 부재"
+
+        if has_cumulative:
+            # 같은 조항의 standalone 중복청구 finding은 이 클러스터로 흡수
+            # 되므로 제거 — 동일 이슈를 두 건으로 쪼개서 보여주지 않는다.
+            clause_results[:] = [
+                cr for cr in clause_results
+                if not (
+                    isinstance(cr, dict)
+                    and cr.get("clause_id") == "clr_penalty_cumulative_with_actual_damage"
+                    and (cr.get("display_path") or None) == display_path
+                )
+            ]
+            title = f"{display_path} [지체상금 무상한 + 실손해 중복청구]" if display_path else "[공통 법률리스크] 지체상금 무상한 + 실손해 중복청구"
+            problem = f"지체일수 당 {rate_str}%의 지체상금에 실손해까지 별도로 청구할 수 있어 책임이 중복된다."
+            legal_reason = (
+                f"10일 지연 시 계약금액의 약 {ten_day}%, 30일 지연 시 약 {thirty_day}%의 지체상금이 "
+                "발생하는데 상한이 없고, 여기에 실손해까지 중복 청구 가능해 공급자의 경제적 부담을 "
+                "사전에 예측·통제할 수 없다."
+            )
+            rewrite = (
+                f"① 지체상금은 지체일수 당 대금의 {rate_str}%보다 낮은 요율로 인하한다.\n"
+                "② 지체상금 누계액은 대금의 10%를 초과할 수 없다.\n"
+                "③ 지체상금은 지체로 인한 손해배상액의 예정으로 하며, 상대방은 지체상금을 "
+                "초과하는 실손해가 지체상금 산정과 무관한 별도의 손해임을 구체적으로 입증한 "
+                "경우에 한하여 그 초과분만을 추가로 청구할 수 있다."
+            )
+            direction = "① 일 지체상금률 인하, ② 지체상금 총액 상한 설정, ③ 실손해 중복청구 제한 — 세 요소를 함께 협상"
+            negotiation = "요율 인하와 총액 cap은 반드시 요청. 실손해 중복청구는 최소한 초과손해 입증 방식으로 제한."
+        else:
+            title = f"{display_path} [지체상금율 미계산·상한 부재]" if display_path else "[공통 법률리스크] 지체상금율 미계산·상한 부재"
+            problem = f"지체일수 당 {rate_str}%의 지체상금에 누계 상한이 없다."
+            legal_reason = (
+                f"10일 지연 시 계약금액의 약 {ten_day}%, 30일 지연 시 약 {thirty_day}%에 달하는데, "
+                "상한(캡) 규정이 없어 지연이 길어질수록 배상액이 무제한으로 누적될 수 있다."
+            )
+            rewrite = (
+                f"지체상금은 지체일수 당 대금의 {rate_str}%로 하되, 지체상금 누계액은 대금의 "
+                "10%를 초과할 수 없다."
+            )
+            direction = "지체상금 누계 상한(예: 대금의 10%) 설정"
+            negotiation = "지체상금율 자체보다 '상한 부재'가 협상 포인트 — 상한 신설을 우선 요구"
+
         clause_results.append({
             "clause_id": "clr_late_penalty_rate_uncapped",
             "article_number": art,
@@ -544,21 +635,11 @@ def _apply_late_penalty_uncapped_check(
             "must_fix": not has_cap,
             "approval_required": not has_cap,
             "review_tier": "MUST" if not has_cap else "SUGGEST",
-            "suggested_rewrite": (
-                f"지체상금은 지체일수 당 대금의 {rate_str}%로 하되, 지체상금 누계액은 대금의 "
-                "10%를 초과할 수 없다."
-            ),
-            "rewrite_reason": (
-                f"지체일수 당 대금의 {rate_str}%로 계산되어, 10일 지연 시 대금의 {ten_day}%, "
-                f"30일 지연 시 대금의 {thirty_day}%에 달한다. "
-                + (
-                    "상한(캡) 규정이 없어 지연이 길어질수록 배상액이 무제한으로 누적될 수 있다."
-                    if not has_cap
-                    else "다만 상한 문구가 확인되어 완전 무제한은 아니므로 실제 상한 수준을 확인해야 한다."
-                )
-            ),
-            "suggested_direction": ["지체상금 누계 상한(예: 대금의 10%) 설정"],
-            "negotiation_position": "지체상금율 자체보다 '상한 부재'가 협상 포인트 — 상한 신설을 우선 요구",
+            "suggested_rewrite": rewrite,
+            "rewrite_reason": problem,
+            "legal_business_reason": legal_reason,
+            "suggested_direction": [direction],
+            "negotiation_position": negotiation,
             "confidence": 0.85,
             "is_common_legal_risk": True,
             "has_rewrite_change": True,

@@ -64,15 +64,41 @@ class TestWebzenEquipmentPurchaseGoldStandard(unittest.TestCase):
         self.assertIn(clause_id, self.by_id, f"{clause_id} not found in clause_results at all")
         return str(self.by_id[clause_id].get("risk_tier") or "").upper()
 
+    # ── 당사자 지위 (변호사형 전체계약 판단 지시, 2026-08-31 항목 1·12) ──────
+
+    def test_our_party_role_is_supplier_not_buyer(self):
+        """퍼시스는 매도인/공급자(을)이고 웹젠이 구매자/발주자(갑)다 —
+        "웹젠은 퍼시스로부터 가구를 구매한다"는 문언을 반대로 읽으면 안 된다."""
+        from runtime.review.party_role import infer_party_role
+        from runtime.review.contract_classifier import classify_contract_detailed
+
+        party = infer_party_role(
+            entity="퍼시스", contract_type="물품공급 및 설치계약서", text=self.text,
+            answers={}, contract_type_code="equipment_purchase_installation",
+        )
+        self.assertEqual(party.our_role, "supplier")
+        self.assertEqual(party.counterparty_role, "buyer")
+
+        detailed = classify_contract_detailed(
+            entity="퍼시스", contract_type="물품공급 및 설치계약서", text=self.text,
+            filename="01.물품공급 및 설치 계약서_퍼시스_외부용.pdf",
+        )
+        self.assertEqual(detailed.our_legal_role, "supplier")
+        self.assertIn("웹젠", detailed.counterparty)
+
     # ── Priority 1: 반드시 HIGH ─────────────────────────────────────────────
 
-    def test_late_penalty_rate_uncapped_is_high(self):
-        """제6조 제5항: 지체상금 일 1%(10/1000), 상한 없음 → HIGH."""
+    def test_late_penalty_cluster_is_high(self):
+        """제6조 제5·6항: 지체상금 일 1%(10/1000, 상한 없음) + 실손해 별도청구가
+        하나의 HIGH risk cluster(clr_late_penalty_rate_uncapped)로 합쳐져야
+        한다 — 지체상금·실손해·상한부재 3요소를 개별 finding으로 쪼개지 않는다."""
         self.assertEqual(self._tier("clr_late_penalty_rate_uncapped"), "HIGH")
-
-    def test_penalty_cumulative_with_actual_damage_is_high(self):
-        """제6조 제6항: 지체상금 외 실손해 별도청구(중복·누적 책임) → HIGH."""
-        self.assertEqual(self._tier("clr_penalty_cumulative_with_actual_damage"), "HIGH")
+        finding = self.by_id["clr_late_penalty_rate_uncapped"]
+        rewrite = str(finding.get("suggested_rewrite") or "")
+        self.assertIn("10%", rewrite, "수정안에 지체상금 총액 상한 요소가 없음")
+        self.assertIn("초과하는", rewrite, "수정안에 실손해 중복청구 제한 요소가 없음")
+        # 흡수되었으므로 standalone finding으로는 더 이상 존재하지 않아야 한다.
+        self.assertNotIn("clr_penalty_cumulative_with_actual_damage", self.by_id)
 
     def test_penalty_multiple_of_contract_amount_is_high(self):
         """제18조 제5항: 손해 전부 배상 + 계약금액 3배 위약벌 → HIGH."""
