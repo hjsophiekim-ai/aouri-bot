@@ -121,6 +121,45 @@ def bind_party_labels_to_entities(text: str, entity: str) -> tuple[str, str] | N
     return None
 
 
+_RX_ROLE_WORD = re.compile(_LABEL_ALT)
+_ROLE_WORD_WINDOW = 12
+
+
+def role_word_near_entity(text: str, entity: str) -> str | None:
+    """Fallback for recital formats that state the role directly next to the
+    company name instead of inside an "(이하 ...)" bracket — e.g. "매도인
+    퍼시스를 (을)이라 칭한다". Returns 'supplier'/'buyer' when a role noun is
+    found within a short window of our entity/Fursys-brand mention — the
+    closest such role word wins; None when none is found."""
+    t = text or ""
+    needles = list(_FURSYS_GROUP_TOKENS)
+    entity = (entity or "").strip()
+    if entity:
+        needles.append(entity)
+    best_role: str | None = None
+    best_dist: int | None = None
+    for needle in needles:
+        if not needle:
+            continue
+        for m in re.finditer(re.escape(needle), t):
+            start = max(0, m.start() - _ROLE_WORD_WINDOW)
+            end = min(len(t), m.end() + _ROLE_WORD_WINDOW)
+            window = t[start:end]
+            anchor = m.start() - start
+            for rm in _RX_ROLE_WORD.finditer(window):
+                role = rm.group(0)
+                if role in ("갑", "을", "병", "정") or role not in (_SUPPLIER_SIDE_LABELS | _BUYER_SIDE_LABELS):
+                    continue
+                dist = abs(rm.start() - anchor)
+                if best_dist is None or dist < best_dist:
+                    best_dist, best_role = dist, role
+    if best_role in _SUPPLIER_SIDE_LABELS:
+        return "supplier"
+    if best_role in _BUYER_SIDE_LABELS:
+        return "buyer"
+    return None
+
+
 def explicit_role_from_labels(text: str, our_label: str, counterparty_label: str) -> str | None:
     """Return 'supplier' or 'buyer' for our_label — first from the label
     word itself when it is already a role noun (발주자/공급자/매도인/...),

@@ -5,7 +5,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from runtime.review.contract_classifier import FURSYS_GROUP_NAMES, is_fursys_group
-from runtime.review.party_label_binding import bind_party_labels_to_entities, explicit_role_from_labels
+from runtime.review.party_label_binding import (
+    bind_party_labels_to_entities, explicit_role_from_labels, role_word_near_entity,
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,38 @@ def infer_party_role(
                 counterparty_is_large_standard_provider=False,
                 signals=signals,
             )
+    else:
+        # "(이하 ...)" 정의문 없이 "매도인 퍼시스를 (을)이라 칭한다"처럼
+        # 역할 명사가 회사명 바로 옆에 오는 형식에 대한 fallback.
+        _near = role_word_near_entity(t, ent)
+        if _near == "supplier":
+            signals.append("role_word_near_entity_supplier")
+            return PartyRole(
+                our_role="supplier", counterparty_role="buyer", our_label=None,
+                counterparty_label=None, counterparty_is_large_standard_provider=False,
+                signals=signals,
+            )
+        if _near == "buyer":
+            signals.append("role_word_near_entity_buyer")
+            return PartyRole(
+                our_role="buyer", counterparty_role="seller_or_supplier", our_label=None,
+                counterparty_label=None, counterparty_is_large_standard_provider=False,
+                signals=signals,
+            )
+
+    if contract_type_code == "nda_confidentiality":
+        # NDA는 통상 상호적(mutual)이라 buyer/supplier류 방향성 role로
+        # 강제 분류하면 오히려 오해를 만든다 — 아래 whole-document
+        # 키워드 휴리스틱(렌탈/개발 등)으로 넘어가지 않도록 여기서 확정.
+        signals.append("nda_confidentiality_neutral_role")
+        return PartyRole(
+            our_role="party",
+            counterparty_role="party",
+            our_label=None,
+            counterparty_label=None,
+            counterparty_is_large_standard_provider=False,
+            signals=signals,
+        )
 
     if contract_type_code == "testing_inspection_service" or _has_any(t, _TESTING_SERVICE_KW):
         our_role = "client"

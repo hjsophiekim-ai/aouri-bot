@@ -123,6 +123,7 @@ _TYPE_TO_ROLE_BUCKET: dict[str, tuple[str, str]] = {
     "ai_search_marketing": ("service_recipient", "service_provider"),
     "rental": ("buyer", "supplier"),
     "construction": ("ordering_party", "contractor"),
+    "nda_confidentiality": ("party", "party"),
     "general": ("unknown", "unknown"),
 }
 
@@ -311,14 +312,84 @@ def _has(text: str, *needles: str) -> bool:
     return any(n.lower() in t for n in needles)
 
 
+_RX_ASCII_WORD = re.compile(r"^[a-z0-9][a-z0-9 ]*[a-z0-9]$|^[a-z0-9]$")
+
+
+def _has_in(haystack: str, *s: str) -> bool:
+    for n in s:
+        n_low = n.lower()
+        if not n_low:
+            continue
+        if _RX_ASCII_WORD.match(n_low):
+            # 순수 영문/숫자 키워드는 단어 경계로 매칭한다 — bare substring
+            # 매칭은 "lease"가 "release" 안에서, "sow"가 다른 영단어 안에서
+            # 우연히 걸리는 등 영문 계약서에서 오분류를 일으킨다(예: NDA에
+            # "release"라는 단어가 있다고 rental로 분류됨). 한글 키워드는
+            # 조사가 바로 붙는 경우가 많아 기존처럼 substring 매칭 유지.
+            if re.search(rf"\b{re.escape(n_low)}\b", haystack):
+                return True
+        elif n_low in haystack:
+            return True
+    return False
+
+
 def _classify_type_code(
     contract_type: str, text: str, filename: str
 ) -> tuple[str, list[str]]:
     combined = (contract_type + "\n" + text + "\n" + filename).lower()
+    # 문서 제목 영역 — 국문 계약서는 관례상 표제에 계약 종류를 명시한다
+    # ("비밀유지계약서", "컨설팅 계약서" 등). 본문 어딘가의 약한 단일
+    # 키워드보다 표제가 훨씬 신뢰도 높은 신호이므로, 오탐이 잦은 특수
+    # 유형(NDA 등)은 표제 신호를 필수 조건으로 요구한다.
+    title_zone = (contract_type + "\n" + text[:200] + "\n" + filename).lower()
     reasons: list[str] = []
 
     def has(*s: str) -> bool:
-        return any(n.lower() in combined for n in s)
+        return _has_in(combined, *s)
+
+    def has_title(*s: str) -> bool:
+        return _has_in(title_zone, *s)
+
+    # ── Step -2: NDA/비밀유지계약 — 문서 전체가 비밀유지를 다루는 경우만 확정 ──
+    # 물품공급·대리점 계약 등 대부분의 상용 계약에도 비밀유지 조항이 1개
+    # 정도는 있는 게 정상이다 — "비밀정보"라는 단어가 문서 어딘가에 한두
+    # 번 나온다고 전체를 NDA로 분류하면, 그 계약의 진짜 유형(물품공급 등)에
+    # 맞는 리뷰가 오히려 스킵된다. 핵심 용어("confidential information"/
+    # "비밀정보"/"기밀정보")가 문서 전체에 걸쳐 반복적으로(예: 15회 이상)
+    # 나타나는 밀도로 "이 문서 자체가 비밀유지에 관한 것"인지 먼저 걸러내고,
+    # 그 위에 구조적 신호(당사자 구분/반환·파기/비밀유지계약 명칭 등) 2개
+    # 이상이 더해질 때만 확정한다.
+    _conf_term_count = combined.count("confidential information") + combined.count("비밀정보") + combined.count("기밀정보")
+    _nda_structural_signals = [
+        (
+            has("disclosing party", "receiving party", "공개 당사자", "수령 당사자", "제공자", "수령자")
+            or (has("provider") and has("receiver") and has("confidential"))
+        ),
+        has("non-disclosure", "nondisclosure", "non disclosure", "비밀유지", "기밀유지"),
+        has("permitted disclosure", "허용된 공개", "제3자에게 공개"),
+        has("return or destroy", "return the confidential information", "반환 또는 파기", "반환하거나 파기", "즉시 파기"),
+        has("confidentiality agreement", "confidentiality declaration", "비밀유지계약", "비밀유지약정", "비밀유지서약"),
+    ]
+    _nda_structural_count = sum(1 for s in _nda_structural_signals if s)
+    # 경로 1: 표제가 스스로 NDA/비밀유지계약이라고 선언 — 국문 계약서는
+    # 관례상 표제에 계약 종류를 명시하므로(예: "비밀유지서약서") 이 신호는
+    # "비밀정보"라는 단어를 안 쓰는 문서(대신 "정보"로만 지칭하는 서약서
+    # 등)에도 적용된다. 구조 신호 1개 이상으로만 corroborate한다.
+    _title_says_nda = has_title(
+        "non-disclosure", "nondisclosure", "non disclosure",
+        "confidentiality agreement", "confidentiality declaration",
+        "비밀유지계약", "비밀유지약정", "비밀유지서약", "비밀유지확약", "nda",
+    )
+    if _title_says_nda and _nda_structural_count >= 1:
+        reasons.append(f"nda_confidentiality_title_signal_{_nda_structural_count}")
+        return "nda_confidentiality", reasons
+    # 경로 2: 표제에 명시가 없어도, "비밀정보"류 핵심 용어가 문서 전체에
+    # 걸쳐 반복적으로(예: 15회 이상) 나타나는 밀도 + 구조 신호 2개 이상이면
+    # 확정한다 — 컨설팅/공급계약처럼 confidentiality 조항이 1개 있을 뿐인
+    # 문서는 이 밀도 기준을 넘지 않는다.
+    if _conf_term_count >= 15 and _nda_structural_count >= 2:
+        reasons.append(f"nda_confidentiality_term_density_{_conf_term_count}_signals_{_nda_structural_count}")
+        return "nda_confidentiality", reasons
 
     # ── Step -1: HARD FORCE — dealer_rental_service from body text ───────────
     # 아래 3가지 문구가 모두 또는 2가지 이상 있으면 무조건 dealer_rental_service_contract
@@ -476,6 +547,33 @@ def _classify_type_code(
         reasons.append("distribution_resale")
         return "distribution_resale", reasons
 
+    # 물품 거래구조 신호(구매/공급/납품/대금/검수/하자/소유권) — 독립
+    # 신호가 3개 이상 일치하면 "자문"/"SOW" 같은 약한 단일 키워드보다
+    # supply/purchase 계열을 우선한다. 장비공급계약서가 본문 어딘가의
+    # 부수적 "SOW"/"컨설팅" 언급 때문에 advisory_service로 오분류되던
+    # 문제(단일 키워드 우선순위 문제, 계약유형·회사명과 무관한 일반
+    # 판단 기준) 방지.
+    # 영문 신호는 "payment"/"warranty"/"title"처럼 어떤 계약에서나 흔히
+    # 쓰이는 단어 대신, 물품거래 계약에서만 통상 나타나는 복합 어구로
+    # 한정한다 — 그렇지 않으면 NDA의 통상적인 면책·소유권 조항 몇 개만
+    # 겹쳐도 물품공급계약으로 오분류된다.
+    _goods_trade_signals = [
+        has("구매", "매매", "purchase order", "purchase agreement", "purchase price"),
+        has("공급", "supply agreement", "equipment supply"),
+        has("납품", "delivery date", "delivery of goods"),
+        has("대금", "계약금액", "contract price", "purchase price"),
+        has("검수", "acceptance inspection", "goods inspection"),
+        has("하자", "defect liability", "warranty period"),
+        has("소유권", "title to the goods", "transfer of ownership"),
+    ]
+    _goods_trade_count = sum(1 for s in _goods_trade_signals if s)
+    if _goods_trade_count >= 3:
+        if has("장비", "설치", "시운전", "equipment", "installation"):
+            reasons.append(f"equipment_purchase_installation_strong_{_goods_trade_count}signals")
+            return "equipment_purchase_installation", reasons
+        reasons.append(f"purchase_supply_strong_{_goods_trade_count}signals")
+        return "purchase_supply", reasons
+
     if has("자문", "컨설팅", "consulting", "sow", "statement of work") and not has_dealer:
         reasons.append("advisory_service")
         return "advisory_service", reasons
@@ -513,8 +611,11 @@ def _classify_type_code(
         reasons.append("ai_search_marketing_generic")
         return "ai_search_marketing", reasons
 
-    # Weak app/dev (only when no dealer)
-    if not has_dealer and has("개발", "유지보수", "saas", "api 연동"):
+    # Weak app/dev (only when no dealer) — "개발" 단독은 노하우·기술을
+    # 언급하는 거의 모든 계약(NDA 포함)에서 우연히 나타날 수 있는 약한
+    # 단일 키워드이므로, 최소 2개 이상의 독립 신호가 있을 때만 확정한다.
+    _weak_dev_signals = [has("개발"), has("유지보수"), has("saas"), has("api 연동")]
+    if not has_dealer and sum(1 for s in _weak_dev_signals if s) >= 2:
         reasons.append("software_weak")
         return "software_app_development", reasons
 
@@ -612,15 +713,22 @@ def _infer_legal_roles(
     # (변호사형 전체계약 판단 지시, 2026-08-31). party_role.py도 같은
     # party_label_binding 모듈을 공유해 동일한 결론에 도달한다.
     if type_code in ("purchase_supply", "equipment_purchase_installation"):
-        from runtime.review.party_label_binding import bind_party_labels_to_entities, explicit_role_from_labels
+        from runtime.review.party_label_binding import (
+            bind_party_labels_to_entities, explicit_role_from_labels, role_word_near_entity,
+        )
         _bind = bind_party_labels_to_entities(text or "", entity or "")
+        _explicit = None
         if _bind is not None:
             _our_lbl, _cp_lbl = _bind
             _explicit = explicit_role_from_labels(text or "", _our_lbl, _cp_lbl)
-            if _explicit == "supplier":
-                return "supplier", "buyer"
-            if _explicit == "buyer":
-                return "buyer", "seller_or_supplier"
+        if _explicit is None:
+            # "(이하 ...)" 정의문 없이 "매도인 퍼시스를 (을)이라 칭한다"처럼
+            # 역할 명사가 회사명 바로 옆에 오는 형식에 대한 fallback.
+            _explicit = role_word_near_entity(text or "", entity or "")
+        if _explicit == "supplier":
+            return "supplier", "buyer"
+        if _explicit == "buyer":
+            return "buyer", "seller_or_supplier"
 
     if type_code in ("advertising_content_production", "content_production_service", "creative_agency_service"):
         return "도급인/발주자/콘텐츠 사용권자", "콘텐츠 제작 수탁자"
@@ -648,6 +756,8 @@ def _infer_legal_roles(
         return "renter", "rental_provider"
     if type_code == "construction":
         return "ordering_party", "contractor"
+    if type_code == "nda_confidentiality":
+        return "계약당사자(비밀유지)", "계약당사자(비밀유지)"
     return "unknown", "unknown"
 
 
