@@ -3371,6 +3371,32 @@ def build_clause_level_result(
     _is_construction_class = (_contract_class == "construction")
     _is_project_install_class = (_contract_class == "project_installation")
 
+    # [Layer 0 — Contract Legal Map] requirement.md 2026-08-28 / 변호사형
+    # 전체계약 판단(2026-09-01): 개별 조항 검토를 시작하기 전에 계약 전체를
+    # 한 번 읽고 당사자·거래구조·의무구조·해지구조·책임구조 등을 먼저
+    # 구조화한다. AI가 있으면 실제 AI 호출로 채우고(계약당 1회), 없으면
+    # 기존 regex 기반 4필드만으로 축소판을 반환한다 — 어느 쪽이든 이후
+    # Layer 1(공통 법률효과)·Layer 2(유형별) 조항 검토가 이 결과를 공유
+    # 컨텍스트로 사용한다.
+    # party/역할 판정보다 먼저 실행해야 아래에서 그 결과로 override할 수 있다.
+    clauses, clause_report = extract_clauses(text)
+    from runtime.review.contract_legal_map import build_contract_legal_map
+    _legal_map = build_contract_legal_map(
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_timeout_sec=ai_timeout_sec,
+        ai_max_tokens=ai_max_tokens,
+        ai_temperature=ai_temperature,
+        entity=str(entity),
+        contract_type=str(contract_type),
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+        text=str(text or ""),
+        clauses=clauses,
+    )
+    from runtime.review.contract_overview import build_contract_overview
+    _contract_overview = build_contract_overview(clauses=clauses, full_text=str(text or ""))
+    _contract_overview_dict = {**_contract_overview.to_dict(), **_legal_map.to_dict()}
+
     # [REMOVED] 관련 법령 retrieval 영구 비활성화 — requirement.md > Section Removal Specs
     law_service = None
 
@@ -3405,6 +3431,20 @@ def build_clause_level_result(
         entity=str(entity), contract_type=str(contract_type), text=str(text), answers=answers,
         contract_type_code=_canonical_profile.contract_type,
     )
+    # [Layer 0 우선 원칙] rule 기반 classifier/party_role이 처음 보는
+    # 계약유형(라이선스·임대차 등)에서 당사자 방향(공급자/구매자)을 반대로
+    # 판정하는 사례가 hold-out 검증에서 발견되어, Contract Legal Map이 AI로
+    # 실행되었고 확신도가 high일 때만 이 축(provider/recipient)을 우선하는
+    # source of truth로 삼는다. AI 미실행/저확신/판정불가 시 기존 rule 결과를
+    # 그대로 유지 — 조용한 override가 아니라 meta.legal_map_role_override로
+    # 항상 기록된다.
+    from runtime.review.legal_map_role_override import apply_legal_map_role_override
+    _canonical_profile, party, _role_override_audit = apply_legal_map_role_override(
+        canonical_profile=_canonical_profile,
+        party=party,
+        legal_map_dict=_legal_map.to_dict(),
+        legal_map_source=_legal_map.source,
+    )
     review_posture = infer_review_posture(party=party, contract_type=str(contract_type), text=str(text))
     review = service.analyze(
         ReviewInput(
@@ -3417,30 +3457,6 @@ def build_clause_level_result(
         )
     )
     _hard_block_out_of_scope_rules(review, _contract_class)
-    clauses, clause_report = extract_clauses(text)
-    # [Layer 0 — Contract Legal Map] requirement.md 2026-08-28 / 변호사형
-    # 전체계약 판단(2026-09-01): 개별 조항 검토를 시작하기 전에 계약 전체를
-    # 한 번 읽고 당사자·거래구조·의무구조·해지구조·책임구조 등을 먼저
-    # 구조화한다. AI가 있으면 실제 AI 호출로 채우고(계약당 1회), 없으면
-    # 기존 regex 기반 4필드만으로 축소판을 반환한다 — 어느 쪽이든 이후
-    # Layer 1(공통 법률효과)·Layer 2(유형별) 조항 검토가 이 결과를 공유
-    # 컨텍스트로 사용한다.
-    from runtime.review.contract_legal_map import build_contract_legal_map
-    _legal_map = build_contract_legal_map(
-        ai_provider=ai_provider,
-        ai_model=ai_model,
-        ai_timeout_sec=ai_timeout_sec,
-        ai_max_tokens=ai_max_tokens,
-        ai_temperature=ai_temperature,
-        entity=str(entity),
-        contract_type=str(contract_type),
-        contract_type_code=str(_canonical_profile.contract_type or ""),
-        text=str(text or ""),
-        clauses=clauses,
-    )
-    from runtime.review.contract_overview import build_contract_overview
-    _contract_overview = build_contract_overview(clauses=clauses, full_text=str(text or ""))
-    _contract_overview_dict = {**_contract_overview.to_dict(), **_legal_map.to_dict()}
     derived = review.get("derived_context") if isinstance(review, dict) else None
     prof = infer_contract_profile(contract_type=str(contract_type), text=str(text or ""))
     frc = build_final_review_context(
@@ -5684,6 +5700,7 @@ def build_clause_level_result(
     executive_summary = generate_executive_summary(clause_results, clause_conflicts)
 
     meta["contract_legal_map"] = _legal_map.to_dict()
+    meta["legal_map_role_override"] = _role_override_audit
     meta["semantic_mismatches"] = [
         cr.get("semantic_mismatch")
         for cr in clause_results

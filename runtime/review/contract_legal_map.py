@@ -43,6 +43,14 @@ UNIVERSAL_FIELDS: tuple[str, ...] = (
     "survival_obligations",
     "amendment_structure",
     "key_deliverables",
+    # 우리 회사가 이 계약의 핵심 급부를 "제공하는 쪽(provider)"인지 "받는
+    # 쪽(recipient)"인지 — 기존 rule 기반 classifier/party_role.py가 처음
+    # 보는 계약유형(라이선스/임대차/투자계약 등)에서 방향을 반대로 판정하는
+    # 사례가 hold-out 검증에서 발견되어, 이 축만큼은 Layer 0(AI)이 확신할
+    # 때 우선하는 source of truth가 되도록 별도 필드로 분리했다
+    # (runtime/review/legal_map_role_override.py가 실제 override를 적용).
+    "our_role_direction",
+    "our_role_direction_confidence",
 )
 
 # NDA류 계약일 때만 추가로 요청하는 확장 필드.
@@ -71,7 +79,22 @@ _SYSTEM_PROMPT = """당신은 계약서 전체를 처음부터 끝까지 읽고 
 필수 필드: parties, our_party, counterparty, party_roles, contract_purpose,
 primary_obligations, payment_flow, term, termination_structure,
 liability_structure, indemnity_structure, third_party_liability,
-unilateral_rights, survival_obligations, amendment_structure, key_deliverables.
+unilateral_rights, survival_obligations, amendment_structure, key_deliverables,
+our_role_direction, our_role_direction_confidence.
+
+our_role_direction은 반드시 아래 세 값 중 하나만 사용하십시오(다른 표현 금지):
+- "provider": 우리 회사(our_party)가 이 계약의 핵심 급부(재화, 용역, 자금,
+  사용권, 공간, 기술 등 무엇이든)를 상대방에게 제공/공급/대여/제조/부여하는
+  쪽이며, 상대방이 그 대가(대금·사용료·임차료 등)를 우리에게 지급하는 구조.
+- "recipient": 반대로 우리 회사가 그 핵심 급부를 상대방으로부터 받거나
+  구매·임차·사용하며, 우리가 그 대가를 상대방에게 지급하는 구조.
+- "mutual_or_neutral": 방향성이 없는 계약(비밀유지계약 등 상호형)이거나,
+  자금 흐름과 급부 방향이 다자간이라 단일 축으로 판단할 근거가 부족한 경우.
+our_role_direction_confidence는 "high"(원문에 대금 지급 방향·급부 제공 방향이
+명확히 서술됨) / "medium" / "low"(추정에 가까움) 중 하나. 확신이 없으면
+절대 "high"를 쓰지 마십시오 — 이 필드는 다른 자동 분류기 결과를 덮어쓰는 데
+쓰이므로, 근거가 약하면 "medium"/"low"로 낮추는 것이 "high"로 잘못 답하는
+것보다 안전합니다.
 
 이 계약이 비밀유지계약(NDA)류라면 다음 필드도 함께 채우십시오(NDA가 아니면
 전부 null): mutual_or_one_way(상호형인지 일방형인지), provider_receiver_roles
@@ -178,4 +201,11 @@ def build_contract_legal_map(
     for k in ("contract_purpose", "term", "payment_flow"):
         if not fields.get(k) and regex_fields.get(k):
             fields[k] = regex_fields[k]
+    # our_role_direction/confidence는 rule-based classifier/party_role 결과를
+    # 덮어쓰는 데 쓰이는 필드이므로, 지정된 enum 값이 아니면 무조건 버린다
+    # (환각으로 인한 임의 override를 원천 차단).
+    if fields.get("our_role_direction") not in ("provider", "recipient", "mutual_or_neutral"):
+        fields["our_role_direction"] = None
+    if fields.get("our_role_direction_confidence") not in ("high", "medium", "low"):
+        fields["our_role_direction_confidence"] = None
     return ContractLegalMap(fields=fields, source="ai", is_nda=is_nda)

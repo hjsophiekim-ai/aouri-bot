@@ -1,0 +1,214 @@
+LICENSE AGREEMENT
+THIS AGREEMENT is made effective this January 23rd, 2026 between:
+FURSYS INC.
+Fursys Building
+45-1, Ogum-dong 311 Ogeum-ro Songpa-gu
+Seoul, 100-011
+South Korea
+(“Licensor”)
+- and -
+TEKNION LIMITED
+1150 Flint Road
+Downsview, Ontario
+M3J 2J5
+(“Teknion”)
+WHEREAS Licensor is a well-known designer and developer of quality office and home furniture products is the holder of the rights regarding the furniture, through self-design or licenses;
+AND WHEREAS Teknion is a leading Canadian designer, manufacturer and distributor of commercial furniture to customers around the world;
+AND WHEREAS Licensor would like to grant to Teknion, and Teknion wishes to acquire, a license to assemble, market and distribute certain Products (as defined below) in the Territory (as defined below);
+THEREFORE in consideration of mutual promises set forth below, it is agreed as follows:
+1. License
+a. “Products” means those seating, table and accessory furniture products designed, manufactured and marketed by Licensor and set out in Attachment A to this Agreement. The parties may mutually agree to amend this list from time to time and shall document such amendments in writing.
+b. Licensor grants to Teknion an exclusive license to assemble, market, distribute and service the Products in the Territory.
+i. Licensor shall be the sole and exclusive manufacturer of the Products and any components thereof during the Term of this Agreement. Teknion shall not appoint or engage any third-party manufacturer for the Product without Licensor’s prior written consent.
+c. Licensor shall supply the Products at the prices set out in Attachment A to this Agreement and shall supply Teknion with invoices per specific order. All prices listed shall be in United States Dollars (USD) for Products purchased from Licensor. Licensor shall be entitled to change its prices for such components once each calendar year, with its first change occurring at the earliest eighteen (18) months from the effective date of this Agreement. Notice of price increases must be provided with ninety (90) days advance written notice to Teknion; orders placed and accepted before the price increase shall be honoured at the effective price at the time of order placement. All orders with Licensor shall be placed through separate orders and delivery will be ex works. Any arrangements contemplated under subparagraphs (i) and (ii) below shall only be effective if expressly agreed in writing by the parties.
+i. Where large volume projects may justify additional discounting or promotional pricing, Licensor and Teknion shall discuss and agree upon appropriate terms as required, on a project by project basis.
+ii. In the event of changes in government rules and regulations, the parties mutually agree that they shall use reasonable commercial efforts to minimize impacts of revisions to duties, import surtaxes and tariffs where applicable. This may include alternate sourcing for components and materials with more favourable import treatment. This shall be discussed on a case by case basis where necessary.
+Exchange rate review: the parties agree to evaluate the component prices per chair should the applicable exchange rate of the Korean Won and United States dollar vary by more than ten percent (10%) of the baseline exchange rate to be established six (6) months after execution of this Agreement. At that time, the parties shall discuss in good faith possible adjustments to mitigate any impacts on supply.
+d. The parties anticipate that a specific component mold will need to be purchased by Teknion for the supply by Licensor to Teknion. The mold shall be quoted and approved prior to purchase by Teknion, and shall be owned solely by Teknion. All initial costs associated with the manufacture of the mold shall be borne by Teknion, an estimate of which is set out in Attachment B. The mold shall be marked “PROPERTY OF TEKNION,” kept separate from other molds owned or used by Licensor, and used solely for the manufacture of components supplied to Teknion.
+Possession / no return during Term. Notwithstanding Teknion’s ownership of the Mold, Licensor shall retain exclusive possession, custody and control of the Mold during the Term for purposes of manufacturing and supplying the components/Products under this Agreement. Teknion shall have no right to request the return, removal, or transfer of physical possession of the Mold during the Term, except as may be required by applicable law.
+Audit. Teknion may, subject to Licensor’s prior approval in each instance, and upon at least ten (10) business days’ prior written notice, conduct a spot audit solely to verify the presence, condition, marking, segregation, storage, and permitted use of the Mold(s) owned by Teknion under this Agreement, and to confirm that production using such Mold(s) is being conducted in accordance with the applicable specifications and this subsection (and for the avoidance of doubt, not for the purpose of auditing Licensor’s general manufacturing processes, facilities, or other production lines unrelated to the Mold(s)). Any such audit shall be conducted no more than once (1) per calendar year, during normal business hours, at a time mutually agreed by the parties, and in a manner that does not unreasonably interfere with Licensor’s operations, and shall be subject to Licensor’s reasonable safety, security, and confidentiality policies. Teknion’s representatives shall be bound by appropriate confidentiality obligations. All costs and expenses of the audit (including travel and professional fees) shall be borne solely by Teknion.
+e.
+f.
+i. In the event that Teknion requests any modification, enhancement, or change to the mold, Licensor may invoice Teknion for the reasonable and documented costs incurred in connection with such modification, subject to Teknion’s prior written approval.
+ii. Notwithstanding the foregoing, Licensor may perform emergency repairs or maintenance to the mold without prior written approval where reasonably necessary to prevent production disruption, safety risks, or material damage, and shall promptly notify Teknion and provide reasonable documentation of the work performed.
+iii. Use of Mold. The mold shall be used solely by Licensor for the manufacture of the Products supplied to Teknion under this Agreement, and Teknion shall not manufacture or cause to be manufactured any products using the mold.
+iv. Termination Due to Licensor’s Fault. In the event that this Agreement is terminated due to the fault or material breach of Licensor, Licensor shall purchase the mold from Teknion by paying the depreciated value of the tooling cost.
+v. Termination Not Attributable to Licensor. In the event that this Agreement is terminated or expires for reasons not attributable to Licensor, ownership of the mold shall be transferred to Licensor without charge
+g. The license granted by Licensor may include, to the extent reasonably necessary for Teknion to market, sell and support the Products under this Agreementaccess to the Products’ design documentation, technical and material specifications, electronic drawings that Licensor, in its sole discretion, elects to provide that Licensor, in its sole discretion, elects to provide (collectively, the “Technical Materials”). Licensor shall provide such Technical Materials and related assistance in a commercially reasonable manner, subject to Licensor’s reasonable confidentiality, security and export-control policies, and provided that (i) no transfer of ownership in any intellectual property, know-how or Technical Materials is granted or implied, (ii) the Technical Materials may be used solely for the purposes of performing this Agreement and not for any other purpose (including reverse engineering, development of competing products, or manufacture by any third party), (iii) Teknion shall not disclose the Technical Materials to any third party except to its representatives and contractors on a need-to-know basis who are bound by written confidentiality obligations at least as protective as those herein, and (iv) Licensor shall not be required to disclose any information that constitutes Licensor’s trade secrets or proprietary manufacturing processes unless otherwise expressly agreed in writing by the parties.
+h.
+i. The Products will need to meet prevailing industry standards in Licensor’s current market which are listed in Attachment C. If additional testing or certification in any given market in the Territory is required and has not been completed by Licensor, Teknion shall conduct testing as required; however, in the event that the Products do not pass, Licensor will assist with modifications to ensure that the Products pass subsequent testing.
+j. Design Rights and Restrictions. Nothing in this Agreement shall be construed as granting Teknion any ownership interest in or license to use the design rights of Licensor except as strictly necessary for the marketing, distribution, and sale of the Products supplied by Licensor under this Agreement. All design rights relating to the Products, including any improvements, modifications, or derivative designs, shall remain exclusively vested in Licensor. Teknion shall not, directly or indirectly, reproduce, manufacture, or cause to be manufactured any products incorporating or substantially similar to Licensor’s designs, whether using the mold or otherwise, except for Products supplied by Licensor under this Agreement. The restrictions set forth in this clause shall survive the termination or expiration of this Agreement for any reason.
+2. Territory
+a. The “Territory” means, collectively, as follows:
+i. with respect to the Products generally, the United States and Canada;
+ii. with respect to the Products generally, India,excluding (A) Licensor’s Global Accounts (as defined below), and (B) any sales by Licensor to its Global Accounts for delivery into India (whether directly or through Licensor’s authorized channels). For purposes hereof, “Global Accounts” means end-customer accounts that Licensor services on a global or regional basis pursuant to Licensor’s global account program and that are identified by Licensor in writing from time to time. Licensor shall provide Teknion with an initial list of Global Accounts as of the Effective Date, and may update such list no more than once per calendar quarter (and in any event upon Teknion’s reasonable request). Any account added to the list shall be effective upon written notice to Teknion and shall apply prospectively only;;
+iii. solely with respect to Products equipped with the Teknion-exclusive armrest (i.e., an armrest design and specification provided or approved in writing by Teknion and not offered by Licensor generally), Mexico, Central and South America, and the Caribbean, provided that Teknion’s rights in such territories shall be non-exclusive, and provided further that nothing herein shall restrict Licensor from marketing or selling Products that are not equipped with the Teknion-exclusive armrest in such territories..
+b. The annual sales targets shall be as set forth in Attachment D. If, following the initial eighteen (18) month period, Teknion fails to achieve at least seventy percent (70%) of the applicable annual sales target for any given year, Licensor may, upon written notice to Teknion, convert the exclusive rights granted in the Territory under this Agreement to non-exclusive rights.
+c. Notwithstanding subparagraph a. above, Teknion will also be granted a limited license to market and sell the Products, directly or through its dealer network, on a project by project, case by case basis in locations outside of the Territory. For clarity, Teknion must provide project information in writing to Licensor with a request to serve the specific dealer and/or end customer outside the Territory. Any such project shall be subject to the prior written approval of Licensor, and Licensor shall have the sole discretion to grant or withhold such approval.
+d.
+e. In the event of sales or opportunities outside of the Territory, the terms and conditions of such sales will be mutually agreed in advance between the parties on a case-by-case basis.
+3. Payment Terms
+a. The payment terms for invoices issued pursuant to this Agreement are as follows:
+i. forty-five (45) days from date of invoice by Licensor, provided that invoices shall not be issued prior to Products being shipped.
+ii. If Teknion fails to make payment within forty-five (45) days from the date of invoice issued by Licensor, overdue amounts shall accrue interest at the rate of six percent (6%) per annum until paid. Licensor shall have the right to suspend delivery of the Products until such overdue amounts, including accrued interest, are paid in full.
+b. Teknion shall maintain books and records in sufficient detail to accurately determine and verify the accuracy of payments under this Agreement. Licensor will have the right, not more than once per year, upon reasonable notice to Teknion, to audit (or have audited) by a chartered accountant reasonably acceptable to Teknion, which for the purposes of this section, means the accountant has not performed work on behalf of one of the parties, and, during Teknion’s normal business hours, such books and records to the extent they relate to the Products. The costs and expenses of any such audit shall be borne by Licensor unless the inspection discloses that payments are deficient by more than ten percent (10%), in which case Teknion shall reimburse Licensor its reasonable out-of-pocket expenses incurred in such inspection. Teknion and its affiliates, as applicable, shall retain their records relating to payments for a period of three (3) years after such payment is made.
+4. Term and Termination
+a. The initial term of this Agreement shall be five (5) years and six (6) months commencing from the date of execution of this Agreement. Unless either party provides written notice of termination at least thirty (30) days prior to the expiration of the then-current term, this Agreement shall automatically renew for successive one (1) year terms.
+b. Either party may terminate this Agreement if the other party commits a material breach of this Agreement and does not remedy such breach within thirty (30) days after receiving written notice of the breach.
+c. If either party is placed in bankruptcy, or becomes insolvent, or makes an assignment for the benefit of creditors, or if its business is placed in the hands of a receiver or a trustee, or it commits any other act of bankruptcy or insolvency, then the other party may immediately terminate this Agreement.
+d. Termination for Convenience. Either party may terminate this Agreement for convenience upon not less than one hundred eighty (180) days’ prior written notice to the other party. Any termination for convenience by Teknion shall not relieve Teknion of its payment obligations for Products delivered or for purchase orders accepted by Licensor prior to the effective date of termination.
+e. In the event of termination of this Agreement, whether by notice or by expiration of its term, all rights and duties granted and assumed hereunder shall terminate. Notwithstanding the foregoing, Teknion may sell its entire inventory of the Products which had been purchased prior to the date of termination or expiration for a period of one (1) year after the effective date of termination. Additionally, Licensor shall commit to fulfilling any purchase orders issued by Teknion prior to the date of termination, as well as fulfilling any quotations for the Products issued by Teknion prior to the date of termination and accepted after such date. The ownership and disposition of any molds purchased or paid for by Teknion shall be governed by Section 1 (License), subsection d(iii), d(iv), and d(v) of this Agreement.
+5. Branding and Marketing
+a. The Products shall be branded with Teknion’s mark, including packaging where required. The direction for such branding shall be provided by Teknion.
+b. Teknion shall be responsible for the marketing of the Products in the Territory; however, Licensor will assist with marketing by providing Teknion with pre-existing documentation, literature and photography as attached in Attachment E.
+c. Teknion shall use any materials provided by Licensor solely for the purpose of marketing and promoting the Products under this Agreement and shall not use such materials for any other purpose. Teknion shall not disclose or provide such materials to any third party without the prior written consent of Licensor.
+6. Indemnification, Warranty and Insurance
+a. Licensor represents and warrants that it is not aware of any deficiencies in the design and construction of the Products nor of any infringement by the Products upon the rights of any person, nor is it aware of any patents or other intellectual property rights of any person in the Territory which may be infringed by the Products, nor has any claim with respect to any of the foregoing being made by a third party in any country against the Licensor.
+b. Licensor shall defend, indemnify, and hold harmless Teknion and its affiliates and their respective directors, officers, employees, shareholders and agents (collectively "Indemnities") from and against any and all losses, which any Indemnitee may suffer or incur by reason of any third party claim of harm or injury or product recall arising out of, related to, or in connection with the design of the Products, except to the extent such claim or recall arises out of, relates to, or results from: (i) misuse, abuse, negligent or improper use, or failure to follow instructions, warnings, or maintenance requirements by any dealer, customer, end user, installer, or other third party; (ii) improper installation, assembly, handling, storage, transportation, or maintenance after delivery to Teknion (or its dealer/customer), other than as expressly directed in writing by Licensor; (iii) any modification, alteration, repair, or rework not authorized in writing by Licensor; (iv) combination or use of the Products with non-Licensor components or products where such claim would not have arisen but for such combination or use; or (v) labeling, marketing claims, instructions for use, or other materials not provided or approved in writing by Licensor; (vi) any defect, non-conformity, damage, loss, or claim arising out of or resulting from final packaging, labeling, repackaging, kitting, warehousing, handling, shipment/distribution, installation, assembly, mounting, or on-site integration performed by or on behalf of Teknion, its affiliates, dealers, installers, or other third parties after delivery of the Products/components by Licensor, except to the extent such claim is directly caused by Licensor’s failure to comply with written packaging specifications expressly agreed by the parties
+For greater certainty, Licensor’s obligations under this subsection apply only to the extent the claim is caused by a defect in design and/or manufacture attributable to Licensor, and shall be reduced in proportion to the extent of any contributing acts or omissions described above. The above is without prejudice to any other rights or remedies the parties may have under the applicable laws.
+c. The Licensor shall defend, indemnify, and hold harmless the Indemnities from and against any and all losses, which any Indemnitee may suffer or incur by reason of any third party claim of intellectual property infringement, alleged or otherwise, arising out of, related to, or in connection with the Products, except to the extent such claim arises out of or results from: (i) any modification or alteration of the Products not authorized in writing by Licensor; (ii) combination of the Products with any other product, component, software, or system not supplied by Licensor where the claim would not have arisen but for such combination; or (iii) use of the Products outside the scope of the specifications or instructions provided by Licensor. The above is without prejudice to any other rights or remedies the parties may have under the applicable laws. Teknion shall provide prompt notice to Licensor if they become aware of any potential infringement of the Product’s intellectual property.
+d.
+e. The components provided by Licensor shall bear a warranty as provided in Attachment F.
+f. Within thirty (30) days of the commencement of sales of the Products and until two (2) years after termination of this Agreement for any reason, each party shall:
+i. procure and maintain at its own expense an insurance policy including general liability, errors and omissions in at least up to the amount of one million (1,000,000) United States dollars, or its equivalent, per occurrence; and
+ii. upon request, a party shall deliver to the other party certificates evidencing such insurance and their status as an additional insured; and
+iii. should a party at any time neglect or refuse to provide the required insurance, or should such insurance be cancelled, the other party shall have the right to procure such insurance and the cost thereof shall be deducted from monies then due to the party that failed to procure such insurance.
+g. Teknion acknowledges that any intellectual property right, including copyright and possible design rights, regarding the Products belong to Licensor or the designers whom Licensor has obtained the necessary licenses from. Teknion warrants that it will not, both during the term of this Agreement and after termination of this Agreement produce or sell products that only differ on details and have a substantially identical design. Licensor shall have no obligation to register design rights for the Products. Teknion shall not file or cause to be filed any application for design rights relating to the Products without the prior written consent of Licensor.
+7. Intellectual Property Rights
+a. Exclusive Ownership of Intellectual Property. 
+All intellectual property rights relating to the Products, including but not limited to design rights, copyrights, patents, trademarks, trade dress, technical documentation, drawings, specifications, and any other proprietary rights, are and shall remain the sole, exclusive, and irrevocable property of Licensor. Nothing in this Agreement shall be interpreted or construed as granting Teknion any ownership interest in such intellectual property rights.
+b. No Transfer or Implied License. 
+Except for the limited rights expressly granted under this Agreement, no license, right, title, or interest in or to Licensor’s intellectual property rights is granted to Teknion, whether by implication, estoppel, or otherwise.
+c. Limited Use for Distribution. 
+Teknion may use Licensor’s intellectual property solely to the extent necessary for the marketing, promotion, distribution, and sale of the Products supplied by Licensor under this Agreement, and for no other purpose.
+d. Restriction on Reproduction and Manufacturing. 
+Teknion shall not, directly or indirectly: 
+reproduce, copy, adapt, or modify the Products or their designs;
+manufacture, or cause to be manufactured, any products incorporating or substantially similar to Licensor’s designs;
+use Licensor’s intellectual property for the development, production, or commercialization of competing products.
+e. Derivative Works and Improvements. 
+Any improvements, modifications, derivative works, or developments relating to the Products or their designs shall belong exclusively to Licensor.
+f. Survival. 
+The provisions of this Section shall survive the expiration or termination of this Agreement for any reason.
+8. Confidentiality
+a. Each party shall keep strictly confidential and shall not disclose to any third party any confidential or proprietary information disclosed by the other party in connection with this Agreement. Confidential Information includes, without limitation, any information relating to the Products, designs, technical data, specifications, drawings, business plans, pricing, marketing strategies, customer information, and any other information that is marked as confidential or that should reasonably be understood to be confidential given the nature of the information and the circumstances of disclosure.
+b. Each party shall use such Confidential Information solely for the purpose of performing its obligations under this Agreement and shall not use such information for any other purpose without the prior written consent of the disclosing party.
+c. Each party shall ensure that its employees, affiliates, contractors, and agents who have access to such Confidential Information are bound by confidentiality obligations no less restrictive than those set forth herein, and shall be responsible for any breach of this clause by such persons.
+d. Upon the termination or expiration of this Agreement for any reason, each party shall promptly return or destroy all Confidential Information of the other party, including all copies thereof, and upon written request shall certify in writing, signed by an authorized officer, that such return or destruction has been completed.
+e. The obligations set forth in this clause shall survive the termination or expiration of this Agreement for any reason.
+9. Miscellaneous
+a. No Agency: Each party is an independent contractor. Neither is the agent of the other, and neither is liable for any debts or obligations of the other nor can either party create any obligation which binds the other.
+b. Severability: If any term of this Agreement is held by a court of competent jurisdiction to be invalid or unenforceable or of effect, then the remainder of this Agreement shall in any case continue in force, and the parties shall use their best efforts to replace such term with a term that is valid and as nearly possible achieves the intent of the invalid term.
+c. Waiver: A waiver of any breach of any provision of this Agreement shall not be considered as a continuing waiver of other breaches of the same or other provisions of this Agreement.
+d. Notices: All notices and payments required or permitted to be given under this Agreement shall be in writing and shall be considered properly given if sent by registered air mail, courier, or e-mail to the parties at their addresses as set forth above, or at such other addresses as the parties may in writing advise from time to time. Any notices sent by courier or email shall be deemed given when received, and notices sent by registered air mail shall be deemed given ten (10) days after being mailed if there is no postal interruption in effect which would delay delivery. The contact email addresses for each party are as follows:
+Licensor
+Teknion
+Main Contact:
+With a copy to:
+Assignment: Neither party may assign or transfer this Agreement, in whole or in part, without the prior written consent of the other party, and such consent may be granted or withheld at the sole discretion of the other party . For so long as the exclusivity granted under this Agreement remains in effect, and solely within the Territory, Licensor shall not grant to any competitor of Teknion any rights that are inconsistent with such exclusivity with respect to the Products under this Agreement. For clarity, nothing herein shall restrict Licensor from granting rights or selling products outside the Territory or with respect to products that are not the Products covered by this Agreement.
+e. .
+f. Governing Law: This Agreement shall be governed by the laws of Singapore, without regard to its conflict of laws principles. Any dispute, controversy, or claim arising out of or in connection with this Agreement, including any question regarding its existence, validity, interpretation, performance, breach, or termination (a “Dispute”), shall be finally resolved by arbitration administered by the Singapore International Arbitration Centre (“SIAC”) in accordance with the SIAC Rules in force when the Notice of Arbitration is submitted. The seat (legal place) of arbitration shall be Singapore. The arbitration shall be conducted in English by three (3) arbitrators. The arbitral award shall be final and binding on the parties, and judgment upon the award may be entered in any court of competent jurisdiction.
+g. Entire Agreement: This Agreement incorporates the entire understanding of the parties relating to the Products, and can be modified only by written agreement signed by a duly authorized officer of each party. In the event of a conflict between this Agreement and any other document, including the terms and conditions supplied by each party, this Agreement will supercede.
+IN WITNESS WHEREOF this Agreement has been duly executed by the parties under the hands of their properly authorized officers.
+FURSYS INC.
+By:
+Title:
+(Authorized Signing Officer)
+TEKNION LIMITED
+By:_____________________________________ c/s
+Title:
+(Authorized Signing Officer)
+Attachment A
+The “Product” shall be as follows:
+The Fursys T20 chair, which shall have the following:
+ Existing product;
+ Target price of $85-$90 USD.
+T20
+The Fursys T21 chair, which is substantially similar to the Fursys T20 chair pictured below with the following differences:
+ Exclusive subject to this Agreement;
+ Height adjustable arms;
+ Seat slider;
+ Lumbar support;
+ Target price of $95-$100 USD.
+Product list + Product component price list to be provided
+Minimum order quantity of 400 units.
+Lead time to be provided.
+Attachment B
+Tooling Investment
+The parties acknowledge that Teknion will make an upfront investment in connection with the manufacture of molds and related tooling for the Products, in the approximate amount of $ 224,940 USD.
+Such amount shall be paid by Teknion immediately upon execution of this Agreement.
+If Teknion fails to make such payment, Licensor shall have the right to terminate this Agreement upon written notice.
+Such investment is made to support product development and commercialization and does not, by itself, create any minimum purchase obligation, guaranteed volume, or sales commitment, unless otherwise expressly agreed in writing by the parties.
+No.
+Description
+Cost (USD)
+1
+Back frame
+92,581
+Back total:
+92,581
+1
+Arm cover L/R
+39,699
+2
+Arm lever L/R
+18,262
+3
+Arm post L/R
+51,160
+4
+Armrest structural rod L/R
+23,237
+Armrest total:
+132,359
+Total:
+224,940
+Attachment C
+Existing Product Testing Standards
+ ANSI/BIFMA X5.1
+ #5 Backrest Strength Test – Static (Type I & II)
+ #6 Backrest Strength Test – Static (Type III)
+ #7 Drop Test – Dynamic
+ #9 Tilt Mechanism Test – Cyclic
+ #10 Seating Durability Test – Cyclic
+ #10 Front Corner Load–Ease Test – Cyclic – off-center
+ #11 Stability Test
+ #12 Arm Strength Test – Vertical – Static
+ #13 Arm Strength Test – Horizontal – Static
+ #14 Backrest Durability Test – Cyclic (Type I)
+ #15 Backrest Durability Test – Cyclic (Type II & III)
+ #20 Arm Durability Test – Cyclic
+Attachment D
+Commercial Planning Assumptions (MOQ / Volume Outlook)
+The parties acknowledge that, for purposes of commercial planning, production planning, and capacity considerations, Teknion has provided the following estimated volume outlook for the Products.
+1. Initial Period (Non-Binding) 
+The volume indicated for the initial eighteen (18) month period following the Effective Date is for planning purposes only and shall not constitute a minimum purchase obligation, guaranteed volume, or binding sales target.
+2. Binding Annual Volume Targets 
+Following the initial eighteen (18) month period, the annual volume levels set forth below shall constitute the annual sales targets for the purposes of evaluating the continuation of the exclusivity granted under this Agreement.
+If Teknion fails to achieve at least seventy percent (70%) of the applicable annual volume target for any given year after the initial eighteen (18) month period, Licensor shall have the right, upon written notice to Teknion, to convert the exclusive rights granted under this Agreement into non-exclusive rights.
+3. Adjustment of Volume Targets 
+The parties may, by prior written agreement entered into after the expiration of the initial eighteen (18) month period, review and adjust the binding annual volume targets set forth in this Attachment. 
+Any such adjustment shall be made in good faith taking into account market conditions, production capacity, and commercial performance.
+Indicative Volume Outlook:
+- Initial 18-month period: 7,000 units (non-binding)
+- Year 2: 10,000 units
+- Year 3: 15,000 units
+- Year 4: 20,000 units
+- Year 5: 25,000 units
+Attachment E
+Fursys Marketing Materials
+Licensor shall make available to Teknion certain marketing materials relating to the Products, which may include, without limitation:
+(i) product images (including cut images and lifestyle images),
+(ii) product description materials such as specification sheets and brochures,
+(iii) rendering files,
+(iv) excerpts from existing marketing catalogs,
+(v) product stories and design concept summaries, and
+(vi) technical feature descriptions.
+Teknion shall be permitted to adapt, edit, translate, and otherwise modify such marketing materials solely for the purpose of marketing and promoting the Products within the scope of this Agreement.
+All marketing materials provided by Licensor shall remain the property of Licensor. Upon expiration or termination of this Agreement for any reason, Teknion shall cease all use of such marketing materials and, upon Licensor’s reasonable request, promptly remove or destroy any copies thereof, except to the extent required to be retained by applicable law.
+Attachment F
+Component Warranty
+The warranty applicable to the Products and components supplied under this Agreement shall be consistent with Teknion’s standard product warranty, currently ten (10) years, subject to the terms, conditions, and limitations to be mutually agreed in writing by the parties prior to the commencement of commercial sales.
+As a condition of supply to Teknion, Licensor must execute and comply with Teknion’s Supplier Quality Manual, which will be provided under separate cover.
+
+Page 16 of 16

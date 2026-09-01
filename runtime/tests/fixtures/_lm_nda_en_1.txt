@@ -1,0 +1,78 @@
+NON DISCLOSURE AND CONFIDENTIALITY DECLARATION
+The undersigned:
+1. ‘’Fursys, Inc.,’’ having its principal address at ‘’311, Ogeum-ro, Songpa-gu, Seoul, Republic of Korea,’’ legally represented by ‘’Kwangho Park,’’ President of Fursys, hereinafter referred to as: “Fursys”, or Party;
+2. [Ahrend], Koninklijke Ahrend B.V., a private limited liability company having its registered office at Laarderhoogtweg 25, 1101 EB Amsterdam, the Netherlands, hereinafter referred to as: “Ahrend “or a “Party”;
+Each a “Party” and collectively the “Parties.”
+WHEREAS, the Parties wish to explore a potential business relationship and, in connection therewith, may disclose to each other certain confidential and proprietary information;
+NOW, THEREFORE, in consideration of the mutual promises and covenants contained herein, the Parties agree as follows:
+whereas
+a. (Purpose) The Parties wish to discuss and explore a business co-operation relating to [ Project ] (“Project”). For the purposes of this clause, "the Project" shall mean the potential OEM production by Fursys, Inc. of Ahrend’s Remode task chair, whereby Fursys manufactures the product on behalf of Ahrend. In connection with the Project one party may disclose certain information to the other that the party disclosing desires the party receiving the information to treat the information as confidential. The party disclosing the information shall be described in this Agreement as the Provider and the party receiving this information shall be described as the Receiver.
+b.
+c. 
+In this clause, "affiliates" shall mean the following company; any entity that directly or indirectly controls, is controlled by, or is under common control with Provider.
+d. In connection with the Project, Fursys will need access to certain valuable information from Ahrend and/or the Group relating to the Project; in particular, and Ahrend and/or the Group will provide Fursys with knowledge, information, materials and documentation pertaining to the Remode task chair, sources and trademarks which is proprietary and confidential to Ahrend; and
+e. Ahrend wishes to protect and secure confidentiality of all commercial, financial, business and other information provided by Ahrend and the Group to Fursys in connection with the Project.
+f. In connection with the Project, Fursys may disclose to Ahrend certain confidential information — including, without limitation, proprietary data, patents, and manufacturing technologies — that is owned or controlled by Fursys or its affiliates within the Fursys Group. Fursys seeks to ensure that all such information disclosed by Fursys remains protected and confidential.
+g.
+AGREES as follows
+Article 1: Definition
+1.1 Confidential Information shall mean any information, including but not limited to commercial, financial, business and other information, including but not limited to technical data, know-how, technology, operating or manufacturing procedures or trade secrets, that derives economic value, actual or potential, from not being generally known to, and not being readily ascertainable by proper means by, other persons who can obtain economic value from its disclosure or use, disclosed by or on behalf of a party (the “Provider”) to the other party (the “Receiver”) from time to time, whether orally or in written or electronic or any other form, and all notes, analyses, compilations, studies, or other documents that contain or otherwise reflect such information.
+Confidential Information includes, but is not limited to, the information listed and annexed in Schedule 1 (in the case of Ahrend) and Schedule 2 (in the case of Fursys), and also includes any other information disclosed in connection with the Project which is identified or marked by the Provider as “confidential” or “proprietary”, or which by its nature or the circumstances of its disclosure, the Receiver knew or ought reasonably to have known to be confidential.
+Confidential Information shall not include any information that:
+1.1
+a. which Receiver can prove by documentary evidence to have been in Receiver possession prior to first receipt either directly or indirectly of the same from Provider and/or its Affiliates;
+b. which Receiver can prove by documentary evidence that before or after the disclosure it was or became part of the public domain by publication or otherwise through no breach of this Declaration Receiver;
+c. which Receiver can prove by documentary evidence was received by Receiver from a third party having the right to disclose such information and not known by Receiver to be subject to any restriction as to the disclosure of such information, or
+d. is independently developed by or for Receiver, verifiable by written documentation, without use of any Confidential Information provided by Provider.
+1. Specific information will not be deemed to be within any of the foregoing exceptions if it is merely embraced by more general information available on a non-confidential basis or lawfully in Receiver possession. In addition, any combination of features will not be deemed within any of the foregoing exceptions unless the combination itself and its principle of operation are embraced by corresponding information, which is within one of the foregoing exceptions.
+2.
+3. Article 2: Use of Confidential Information
+2
+2.1 In consideration of Provider/or its Affiliates agreeing to supply, and so supplying, the Confidential Information to Receiver and agreeing to enter into discussions with Receiver, Receiver hereby undertake and agree as follows:
+a) to hold the Confidential Information in confidence and not to disclose or permit it to be made available to any person, firm or company, without our prior written consent with the exception of Receiver directors, officers, employees and professional advisers who need to know the Confidential Information for the purposes of the Project, who are fully aware in advance of Receiver obligations under this Declaration and who, in the case of Receiver advisers, agree in writing to comply with the confidentiality obligations imposed herein as if they were a recipient of the information themselves;
+b) to use the Confidential Information only for the Project and not to use the Confidential Information to gain any advantage at the expense of Provider;
+c) to ensure that each person to whom disclosure of Confidential Information is made is fully aware in advance of Receiver obligations under this Declaration;
+d) upon written demand from Provider or its Affiliates either to return the Confidential Information and any copies of it or to confirm to Provider or its respective Affiliate in writing that, save as required by law or regulation, it has been destroyed. Receiver shall not be required to return reports, notes or other material prepared by Receiver or on Receiver behalf which incorporate Confidential Information (“Secondary Information”) provided that the Secondary Information is kept confidential;
+e) to keep confidential and not to reveal to any person, firm or company the fact of our investigation into the Project, or that discussions or negotiations are taking place or have taken place between Provider and/or the Group and Receiver in connection with the Project and the Project itself;
+2.2 Nothing in this Declaration shall prohibit the disclosure of any Confidential Information which Receiver are required by law or any regulatory or government authority to disclose, provided that Receiver shall notify Provider as soon as possible regarding the timing, content and manner of any disclosure required by law and shall only disclose the minimum information required by law.
+2.3 Receiver agree that Receiver are under an obligation of confidentiality that is owed to Provider with respect to Confidential Information. Provider believes, and the Receiver hereby agree, that Confidential Information has significant commercial value that would be diminished by unauthorized disclosure. Accordingly, the commitments of confidentiality in this Declaration have been and are a condition to Provider’s willingness to engage the Receiver to the Project. Receiver agree that Receiver shall not use any advantages derivable from Confidential Information in Receiver own business or affairs, and will not use Confidential Information except for the Project.
+4.
+5. Article 3: Property
+3
+3.1 Receiver have no right to copy, reproduce, display or in any other way make any use of the Provider’s intellectual property rights (including, without limitation, trade name, designs, copyrights, patents and trademarks) without Provider’s previous written consent after full disclosure. This Declaration does not grant any right, assignment, grant or license to any Party to use these rights.
+3.2 Without the authorization of Provider, Receiver shall expressly refrain from manufacturing and/or selling (directly or indirectly) the Remode task chair or any products substantially similar to the Remode task chair for Receiver own use or sale or distribution to any third parties, including, without limitation, to any customers of Provider or any other distributors, under any circumstances.
+6.
+7. Article 4: Liability
+4
+8. Receiver acknowledge and agree that the unauthorized disclosure or use of the Confidential Information by Receiver is likely to cause irreparable harm to Provider and the Group for which Provider or the Group may have no adequate remedy at law. In the event of any threatened or actual use or disclosure of the Confidential Information in violation of the provisions of this Declaration, Provider and its Affiliates shall, without prejudice to any other remedy available hereunder or at law, be entitled to injunctive relief in order to protect its business interests and the confidential nature of the Confidential Information.
+9. Article 5: Warranty.
+5
+10. All information disclosed by Provider and its Affiliates hereunder is provided on an “AS IS” basis, without any warranty whatsoever, express, implied or otherwise, regarding its accuracy, completeness, performance, fitness of the information for a particular purpose, non-infringement of third party rights, or otherwise. Provider nor the Group shall be liable for any direct, special, incidental, consequential or other damages as may result from the use by Receiver or any of affiliates of any information disclosed by Provider and the Group.
+11.
+12. Article 6: Penalty.
+6
+13. In the event of any breach by the Receiving Party of any of the obligations referred to in this Agreement, the Receiving Party shall, without notice of default being required, pay to Provider for each such breach, a penalty equal to an amount of RMB 200,000 plus a penalty of RMB 4000 for each day such breach occurs and continues. The penalty per day applies to each day from the day the violation commences until the day the violation ends. The penalty accrues to Provider without prejudice to its other rights under the law, including a right to compensation insofar as the damage due to the breach exceeds the amount of the penalty. This penalty shall serve as a minimum compensation and shall be deducted from any actual damages claimed by Provider. Provider retains the right to claim additional damages if the actual loss exceeds the penalty amount. The payment of the penalty does not release the Receiving Party from their ongoing confidentiality obligations under this Agreement. The Receiving Party agrees that this penalty is a reasonable pre-estimate of the minimum damage that would be suffered in the event of a breach and is not intended as a punishment.
+14. Article 7: Miscellaneous
+7
+7.1 Survival of Termination Receiver obligations under this Declaration that by their nature would continue beyond expiration, termination or cancellation of this Declaration (including, without limitation, the obligation of confidentiality, the warranties, ownership and property rights) shall survive any such expiration, termination or cancellation.
+7.2 Independent contractors Receiver are and intend to remain an independent contractor. Nothing in this Declaration shall be construed as an agency, joint venture or partnership between Receiver and Provider. It is acknowledged and agreed that the disclosure and receipt of the Confidential Information hereunder shall by no means result in any obligation on the part of Receiver or Provider or any of its Affiliates to enter into any further agreement or realize any transaction with the other with respect to the subject matter hereof or otherwise.
+7.3 Term This declaration is made and entered into as of the date of signature (the “Effective Date”) and will terminate after two (2) years from the effective date.
+7.4 Assign Receiver shall not have the right to, and shall not, assign, transfer or encumber any of Receiver’s rights and/or obligations hereunder without the prior written consent of Provider. However, Receiver shall have the right to assign its rights hereunder to any person, firm or corporation acquiring substantially all of its business and assets to which this Declaration relates, without the written consent of Provider. Any assignment of this Declaration that is made in violation of this paragraph shall be void ab initio (that is, null and void to begin with) and shall have no legal effect.
+7.5 Authorization and electronic signature This Declaration shall be signed by Receiver’s authorized representative. An Electronic signature shall be considered as effective and binding as an original signature. In the event that an Electronic signature is, for any reason whatsoever, not recognized by any relevant person, entity or authority in any applicable jurisdiction, Receiver undertake, upon request by Provider, to promptly provide a handwritten signature on any relevant document.
+7.6 Entire Agreement This Declaration embodies the entire understanding between the Receiver and Provider respecting the subject matter of this Declaration and supersedes any and all prior negotiations, correspondence, understandings and agreements between the parties respecting the subject matter of this Declaration. This Declaration shall not be modified except by a writing duly executed on behalf of the party against whom such modification is sought to be enforced.
+7.7 Applicable law This Declaration shall be governed and construed in accordance with the laws of the Netherlands. Any dispute arising in connection with this Declaration shall exclusively be submitted to the competent court in Amsterdam.
+ACKNOWLEDGED AND AGREED
+On behalf of Fursys, Inc.
+_________________________________________
+Name: Kwangho Park
+Title: President of Fursys
+Date:
+Annex – Schedule 1 NON DISCLOSURE AND CONFIDENTIALITY DECLARATION of Ahrend
+1. Bill of materials
+2. Technical drawings
+3. Technical drawings of production molds
+Annex – Schedule 2 NON DISCLOSURE AND CONFIDENTIALITY DECLARATION of Fursys
+1. Bill of materials
+2.  Technical drawings
+3. All pricing information related to the chair
+(Version 20241213) - 1 of 4 -
