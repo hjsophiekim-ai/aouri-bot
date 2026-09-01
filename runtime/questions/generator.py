@@ -232,6 +232,7 @@ def generate_questions(
     clause_results: list[dict] | None = None,
     max_questions: int = 7,
     review_focus: str | None = None,
+    contract_type_code: str = "",
 ) -> list[Question]:
     """Public entry point. Always leads with the classification-confirmation
     questions (Q-TYPE-001/Q-ROLE-001) when auto-classification confidence is
@@ -239,6 +240,14 @@ def generate_questions(
     from _generate_questions_inner(). This guarantees the confirmation
     questions are never crowded out or skipped by one of the many internal
     early-return branches below.
+
+    `contract_type_code`: the canonical type code from
+    `contract_classifier.classify_contract_detailed()`, when the caller has
+    already computed it — passed through to `_generate_questions_inner()` so
+    downstream question templates defer to it instead of re-guessing the
+    contract type from the raw `contract_type` label or bare text keywords
+    (2026-09-01 — a stale/wrong raw label was found producing 대리점 질문
+    for an NDA). When omitted, behaves as before (text/label-based only).
     """
     lead = _build_type_confirmation_questions(entity=entity, contract_type=contract_type, text=contract_text or "")
     remaining = max(0, max_questions - len(lead))
@@ -247,6 +256,7 @@ def generate_questions(
         law_topics=law_topics, contract_text=contract_text,
         clause_results=clause_results, max_questions=remaining,
         review_focus=review_focus,
+        contract_type_code=contract_type_code,
     ) if remaining > 0 else []
     lead_ids = {q.question_id for q in lead}
     return lead + [q for q in rest if q.question_id not in lead_ids]
@@ -308,6 +318,13 @@ def _build_type_confirmation_questions(*, entity: str, contract_type: str, text:
     ]
 
 
+_APP_DEV_INCOMPATIBLE_TYPE_CODES = frozenset({
+    "nda_confidentiality", "testing_inspection_service", "dealer_rental_service_contract",
+    "consignment_sales_agency", "dealer_agency", "distribution_resale",
+    "direct_customer_sales_support", "construction",
+})
+
+
 def _generate_questions_inner(
     entity: str,
     contract_type: str,
@@ -317,6 +334,7 @@ def _generate_questions_inner(
     clause_results: list[dict] | None = None,
     max_questions: int = 7,
     review_focus: str | None = None,
+    contract_type_code: str = "",
 ) -> list[Question]:
     detected = set(detected_rule_ids or [])
     ctype = contract_type or ""
@@ -325,7 +343,7 @@ def _generate_questions_inner(
     text = contract_text or ""
     clause_rule_ids = _extract_rule_ids(clause_results)
     jur = classify_jurisdiction_profile(text=text, entity=ent, contract_type=ctype, filename=None)
-    prof = infer_contract_profile(contract_type=ctype, text=text)
+    prof = infer_contract_profile(contract_type=ctype, text=text, canonical_type_code=contract_type_code)
     focus = parse_user_focus_issues(review_focus)
     focus_codes = {x.code for x in focus if hasattr(x, "code")}
 
@@ -373,22 +391,27 @@ def _generate_questions_inner(
     dealer_cost_present = _has_any(text, ["판촉", "판매장려금", "광고비", "반품", "리베이트", "수수료", "비용 전가", "비용전가"])
     if dealer_cost_present:
         dealer_present = True
+    # 텍스트에 "위탁"/"유통" 같은 단어가 우연히 있어도, canonical-aware
+    # profile(infer_contract_profile — 대리점 관련 판단의 single source of
+    # truth)이 실제로는 대리점 구조가 아니라고 판단하면 억제한다 — NDA에
+    # "위탁" 한 단어가 있다고 대리점 질문이 나오는 오염 방지(2026-09-01).
+    dealer_present = dealer_present and prof.profile == "dealer_consignment"
     dealer_cost_details_present = _has_any(text, ["상한", "정산", "증빙", "사전 서면", "서면 합의", "서면합의"])
     onsite_present = _has_any(text, ["설치", "시공", "현장", "작업", "공사", "물류센터"])
     safety_present = _has_any(text, ["산업안전", "중대재해", "안전관리", "보호구", "작업중지"])
     inspection_present = _has_any(text, ["검수", "검사", "시운전", "성능시험", "인수", "재검수"])
     subcontract_present = _has_any(text, ["재위탁", "하도급", "협력업체", "외주"])
     subcontract_approval_present = _has_any(text, ["사전 승인", "사전승인", "서면 승인", "서면승인", "승인"])
-    app_dev_present = (
-        _has_any(
-            ctype,
-            ["앱개발", "소프트웨어개발", "SI", "유지보수", "SaaS", "API"],
-        )
-        or _has_any(
-            text,
-            ["앱 개발", "소프트웨어 개발", "시스템 개발", "개발 용역", "SaaS", "API 연동", "소스코드", "산출물", "SLA"],
-        )
+    # raw contract_type 라벨(ctype) substring 매칭은 쓰지 않는다 — 실제
+    # 문서 본문 신호(text)만 보고, canonical 분류가 구조적으로 앱개발과
+    # 양립 불가능한 유형(NDA/시험용역/대리점 등)이라고 확정하면 억제한다
+    # (시험계약에서 설치/개발 질문이 나오는 오염 방지, 2026-09-01).
+    app_dev_present = _has_any(
+        text,
+        ["앱 개발", "소프트웨어 개발", "시스템 개발", "개발 용역", "SaaS", "API 연동", "소스코드", "산출물", "SLA"],
     )
+    if contract_type_code and contract_type_code in _APP_DEV_INCOMPATIBLE_TYPE_CODES:
+        app_dev_present = False
     ambiguity_markers = [
         "별도 협의",
         "추후 협의",

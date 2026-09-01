@@ -5,6 +5,7 @@ from typing import Any
 
 from runtime.rules.loader import RuleLoader
 from runtime.review.jurisdiction import classify_jurisdiction_profile
+from runtime.review.priority_map import infer_contract_profile
 from runtime.review.user_focus import parse_user_focus_issues
 
 
@@ -46,6 +47,11 @@ class ReviewInput:
     filename: str | None = None
     answers: dict[str, Any] | None = None
     review_focus: str | None = None
+    # canonical 분류기(contract_classifier.classify_contract_detailed())의
+    # contract_type — 있으면 raw contract_type 라벨의 부분 문자열 매칭보다
+    # 우선한다. 빈 문자열이면(caller가 아직 canonical 값을 계산하지 않은
+    # 경우) 기존 동작(text/label 기반)으로 그대로 폴백한다.
+    contract_type_code: str = ""
 
 
 class RuleQueryService:
@@ -63,10 +69,22 @@ class RuleQueryService:
             return False
         return any(self._contains_ci(text, kw) for kw in keywords)
 
-    def _derive_contract_types_from_text(self, text: str, *, contract_type_hint: str | None = None) -> list[str]:
+    def _is_dealer_like(self, *, contract_type: str, text: str, contract_type_code: str = "") -> bool:
+        """대리점/위탁/유통 판정의 single source of truth — priority_map.py의
+        infer_contract_profile()(canonical_type_code를 우선 신뢰)을 그대로
+        재사용한다. 이 서비스 안에서 예전에 3곳이 각자 raw contract_type
+        문자열을 substring 매칭하던 것을 이 helper 하나로 통합했다
+        (2026-09-01, stale 라벨로 인한 오분류 방지)."""
+        return infer_contract_profile(
+            contract_type=contract_type, text=text, canonical_type_code=contract_type_code,
+        ).profile == "dealer_consignment"
+
+    def _derive_contract_types_from_text(
+        self, text: str, *, contract_type_hint: str | None = None, contract_type_code: str = "",
+    ) -> list[str]:
         out: list[str] = []
         hint = (contract_type_hint or "").strip()
-        hint_is_dealer = any(k in hint for k in ("대리점", "유통", "위탁"))
+        hint_is_dealer = self._is_dealer_like(contract_type=hint, text="", contract_type_code=contract_type_code)
         dealer_in_text = self._any_keyword(text, ["대리점", "dealer", "distributor", "consignment", "위탁거래"])
 
         strong_app_dev = self._any_keyword(
@@ -173,6 +191,7 @@ class RuleQueryService:
         answers = review_input.answers or {}
         entity_input = review_input.entity or "all"
         contract_type_input = review_input.contract_type or "all"
+        contract_type_code = review_input.contract_type_code or ""
         text = review_input.text or ""
 
         if answers.get("Q-002-overseas") == "yes":
@@ -188,7 +207,9 @@ class RuleQueryService:
         if answers.get("Q-009-ad-model") == "yes":
             additional_contract_types_by_questions.append("광고/마케팅/협찬")
 
-        additional_contract_types_by_text = self._derive_contract_types_from_text(text, contract_type_hint=contract_type_input)
+        additional_contract_types_by_text = self._derive_contract_types_from_text(
+            text, contract_type_hint=contract_type_input, contract_type_code=contract_type_code,
+        )
         jur = classify_jurisdiction_profile(text=text, entity=entity_input, contract_type=contract_type_input, filename=review_input.filename)
         focus = parse_user_focus_issues(review_input.review_focus)
 
@@ -243,8 +264,9 @@ class RuleQueryService:
                         rule["context_expanded_by_text"] = True
                 if rid == "ACT-004" and jur.kind == "domestic_korea":
                     rule = dict(rule)
-                    ct0 = str(contract_type_input or "")
-                    is_dealer0 = any(k in ct0 for k in ("대리점", "유통", "위탁"))
+                    is_dealer0 = self._is_dealer_like(
+                        contract_type=str(contract_type_input or ""), text=text, contract_type_code=contract_type_code,
+                    )
                     focus_txt = str(review_input.review_focus or "")
                     wants_dispute = any(k in focus_txt for k in ("관할", "준거법", "분쟁", "중재", "조정"))
                     if is_dealer0 and not wants_dispute:
@@ -268,7 +290,9 @@ class RuleQueryService:
                         rule["context_expanded_by_text"] = True
                 checklist_rules.append(rule)
 
-        is_dealer = any(k in str(contract_type_input or "") for k in ("대리점", "유통", "위탁"))
+        is_dealer = self._is_dealer_like(
+            contract_type=str(contract_type_input or ""), text=text, contract_type_code=contract_type_code,
+        )
         has_strong_app_dev = self._any_keyword(
             text,
             [

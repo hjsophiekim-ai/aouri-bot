@@ -109,6 +109,8 @@ def create_session(
     ]
     pre = bundle.review
     detected_ids = [r.get("rule_id") for r in pre.get("matched_rules", []) if isinstance(r.get("rule_id"), str)]
+    _detailed_profile = bundle.meta.get("detailed_contract_profile") if isinstance(bundle.meta, dict) else None
+    _canonical_type_code = str(_detailed_profile.get("contract_type") or "") if isinstance(_detailed_profile, dict) else ""
     qs = generate_questions(
         entity=entity,
         contract_type=contract_type,
@@ -118,6 +120,7 @@ def create_session(
         clause_results=bundle.clause_results,
         max_questions=5,
         review_focus=review_focus,
+        contract_type_code=_canonical_type_code,
     )
 
     now = _utc_now_iso()

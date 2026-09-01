@@ -1525,6 +1525,9 @@ def create_handler(service: RuleQueryService):
                         contract_law_search = None
                 if isinstance(contract_law_search, dict) and isinstance(contract_law_search.get("queries"), list):
                     law_topics = [str(x) for x in contract_law_search.get("queries") if isinstance(x, str)]
+                _canonical_type_code_for_q = ""
+                if isinstance(clause_meta, dict) and isinstance(clause_meta.get("detailed_contract_profile"), dict):
+                    _canonical_type_code_for_q = str(clause_meta["detailed_contract_profile"].get("contract_type") or "")
                 qs = generate_questions(
                     entity,
                     contract_type,
@@ -1534,6 +1537,7 @@ def create_handler(service: RuleQueryService):
                     clause_results=review_result.get("clause_results") if isinstance(review_result, dict) else None,
                     max_questions=5,
                     review_focus=(review_focus if isinstance(review_focus, str) else None),
+                    contract_type_code=_canonical_type_code_for_q,
                 )
                 try:
                     # ── legal-team pipeline: mandatory issues → severity → guardrail → new writer ──
@@ -1561,8 +1565,11 @@ def create_handler(service: RuleQueryService):
                         "dealer_agency", "dealer_rental_service_contract",
                     }
                     # isr_*/sppc_* 딜러 계약 hard gate: dealer_rental은 완전 제거, 나머지는 LOW 강제
+                    # canonical 분류(_ct_code)만 신뢰한다 — raw contract_type
+                    # 라벨의 부분 문자열 매칭은 stale 라벨에 오염될 수 있어
+                    # 제거함(2026-09-01).
                     _SUPPRESS_PREFIXES = ("isr_", "sppc_", "pi_", "svc_")
-                    if _ct_code in _DEALER_CODES or any(k in contract_type for k in ("대리점", "위탁판매", "렌탈대리점")):
+                    if _ct_code in _DEALER_CODES:
                         from runtime.review.clause_level import (
                             apply_dealer_rental_final_gate as _dlr_gate,
                             _DEALER_RENTAL_HARD_BLOCKED_IDS as _DLR_BLOCKED,
@@ -1789,6 +1796,10 @@ def create_handler(service: RuleQueryService):
                 contract_law_search = None
             if isinstance(contract_law_search, dict) and isinstance(contract_law_search.get("queries"), list):
                 law_topics = [str(x) for x in contract_law_search.get("queries") if isinstance(x, str)]
+            try:
+                _dp2 = _classify_detailed(entity=entity, contract_type=contract_type, text=contract_text)
+            except Exception:
+                _dp2 = None
             qs = generate_questions(
                 entity,
                 contract_type,
@@ -1797,10 +1808,10 @@ def create_handler(service: RuleQueryService):
                 contract_text=contract_text,
                 clause_results=clause_results,
                 max_questions=7,
+                contract_type_code=(_dp2.contract_type if _dp2 is not None else ""),
             )
             try:
-                _dp2 = _classify_detailed(entity=entity, contract_type=contract_type, text=contract_text)
-                _ct2 = _dp2.contract_type
+                _ct2 = _dp2.contract_type if _dp2 is not None else ""
                 _cr_list2 = _inject_mandatory_issues(
                     full_text=contract_text, clause_results=list(clause_results),
                     contract_type_code=_ct2, is_counterparty_form=True,
@@ -1808,7 +1819,10 @@ def create_handler(service: RuleQueryService):
                 )
                 _DEALER_CODES2 = {"consignment_sales_agency", "direct_customer_sales_support", "dealer_agency", "dealer_rental_service_contract"}
                 _SUPPRESS2 = ("isr_", "sppc_", "pi_", "svc_")
-                if _ct2 in _DEALER_CODES2 or any(k in contract_type for k in ("대리점", "위탁판매")):
+                # canonical 분류(_ct2)만 신뢰한다 — raw contract_type 라벨의
+                # "대리점"/"위탁판매" 부분 문자열 매칭은 stale 라벨에 오염될
+                # 수 있어 제거함(2026-09-01, priority_map.py와 동일 원칙).
+                if _ct2 in _DEALER_CODES2:
                     from runtime.review.clause_level import apply_dealer_rental_final_gate as _dlr_gate2
                     if _ct2 == "dealer_rental_service_contract":
                         _cr_list2 = _dlr_gate2(_cr_list2, _ct2)
@@ -1979,6 +1993,15 @@ def create_handler(service: RuleQueryService):
             filename = body.get("filename")
             review_focus = body.get("review_focus")
 
+            # canonical 분류를 이 핸들러 전체(rule 매칭·법령검색·사전질문
+            # 생성)에서 단일 source of truth로 공유한다 — UI가 넘긴 raw
+            # contract_type 라벨은 stale할 수 있어 이 값 하나만 믿지 않는다
+            # (2026-09-01).
+            try:
+                _canonical_type_code = _classify_detailed(entity=str(entity), contract_type=str(contract_type), text=str(text)).contract_type
+            except Exception:
+                _canonical_type_code = ""
+
             try:
                 review = service.analyze(
                     ReviewInput(
@@ -1988,6 +2011,7 @@ def create_handler(service: RuleQueryService):
                         filename=filename,
                         answers=None,
                         review_focus=(review_focus if isinstance(review_focus, str) else None),
+                        contract_type_code=_canonical_type_code,
                     )
                 )
             except Exception as exc:
@@ -2045,6 +2069,7 @@ def create_handler(service: RuleQueryService):
                     clause_results=clause_bundle.clause_results,
                     max_questions=5,
                     review_focus=(review_focus if isinstance(review_focus, str) else None),
+                    contract_type_code=_canonical_type_code,
                 )
             except Exception as exc:
                 _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
@@ -2055,10 +2080,13 @@ def create_handler(service: RuleQueryService):
             if is_ai_enabled(cfg) and q_items:
                 try:
                     provider = create_ai_provider(cfg)
+                    # raw contract_type 라벨 substring 매칭 제거 — 실제 본문
+                    # 신호(text) + canonical 분류 기준 양립가능 여부로 판단
+                    # (2026-09-01, questions/generator.py와 동일 원칙).
+                    from runtime.questions.generator import _APP_DEV_INCOMPATIBLE_TYPE_CODES as _APP_DEV_BAD_CODES
                     app_dev_hint = any(
-                        k in str(contract_type or "")
-                        for k in ("앱개발", "소프트웨어개발", "SI", "유지보수", "SaaS", "API")
-                    ) or any(k in str(text or "") for k in ("앱 개발", "소프트웨어 개발", "시스템 개발", "SLA", "소스코드", "산출물"))
+                        k in str(text or "") for k in ("앱 개발", "소프트웨어 개발", "시스템 개발", "SLA", "소스코드", "산출물")
+                    ) and _canonical_type_code not in _APP_DEV_BAD_CODES
                     if app_dev_hint and clause_bundle.clauses:
                         headings = [str(c.title or "") for c in clause_bundle.clauses if str(c.title or "").strip()][:18]
                     else:
