@@ -6,9 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from runtime.ai.dotenv import load_dotenv, resolve_dotenv_paths
-
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from runtime.project_paths import DOCS_REPO_ROOT as REPO_ROOT
 
 
 @dataclass(frozen=True)

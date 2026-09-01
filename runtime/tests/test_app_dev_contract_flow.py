@@ -10,6 +10,8 @@ from runtime.review.clause_level import build_clause_level_result
 from runtime.rules.loader import RuleLoader
 from runtime.services.query_service import RuleQueryService
 
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "app_dev_contract.txt"
+
 
 class AppDevContractFlowTest(unittest.TestCase):
     @classmethod
@@ -19,7 +21,7 @@ class AppDevContractFlowTest(unittest.TestCase):
         cls.service = RuleQueryService(loader)
 
     def test_classify_contract_type_app_dev(self) -> None:
-        text = Path("runtime/tests/fixtures/app_dev_contract.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         res = classify(entity=None, contract_type=None, text=text, filename="앱 개발 용역 계약서.docx")
         self.assertIn("앱개발/소프트웨어개발", res.contract_type)
 
@@ -37,7 +39,7 @@ class AppDevContractFlowTest(unittest.TestCase):
         self.assertFalse(any("모델" in q for q in qs))
 
     def test_app_dev_rules_produce_clause_results(self) -> None:
-        text = Path("runtime/tests/fixtures/app_dev_contract.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         bundle = build_clause_level_result(
             service=self.service,
             entity="일룸/데스커",

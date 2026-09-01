@@ -13,6 +13,8 @@ from runtime.review.docx_writer import build_revision_docx
 from runtime.rules.loader import RuleLoader
 from runtime.services.query_service import RuleQueryService
 
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "lg_purchase_installation.txt"
+
 
 class BuyerFavorableRegressionV2Test(unittest.TestCase):
     @classmethod
@@ -30,7 +32,7 @@ class BuyerFavorableRegressionV2Test(unittest.TestCase):
         self.assertTrue(any(".D" in x for x in ids))
 
     def test_purchase_installation_queries_prioritize_civil_and_safety_laws(self) -> None:
-        text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         qobjs = _derive_queries(entity="퍼시스", contract_type="장비공급/설치/시운전", text=text, matched_rules=[], scope="contract")
         qs = [q.get("query") for q in qobjs if isinstance(q.get("query"), str)]
         self.assertTrue(any("민법" in q for q in qs))
@@ -38,7 +40,7 @@ class BuyerFavorableRegressionV2Test(unittest.TestCase):
         self.assertFalse(any("대리점법" in q for q in qs))
 
     def test_redline_docx_marks_only_changed_tokens(self) -> None:
-        text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         bundle = build_clause_level_result(
             service=self.service,
             entity="퍼시스",

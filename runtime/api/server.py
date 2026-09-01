@@ -60,9 +60,7 @@ from runtime.law.cache import JsonFileCache
 from runtime.law.config import load_law_api_config
 from runtime.law.search_service import LawSearchService
 from runtime.env_debug import env_status
-
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
+from runtime.project_paths import DOCS_REPO_ROOT as REPO_ROOT
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:

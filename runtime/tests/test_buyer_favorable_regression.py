@@ -8,6 +8,8 @@ from runtime.review.docx_writer import build_revision_docx
 from runtime.rules.loader import RuleLoader
 from runtime.services.query_service import RuleQueryService
 
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "lg_purchase_installation.txt"
+
 
 class BuyerFavorableRegressionTest(unittest.TestCase):
     @classmethod
@@ -17,7 +19,7 @@ class BuyerFavorableRegressionTest(unittest.TestCase):
         cls.service = RuleQueryService(loader)
 
     def test_lg_equipment_purchase_installation_posture(self) -> None:
-        text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         bundle = build_clause_level_result(
             service=self.service,
             entity="퍼시스",
@@ -38,7 +40,7 @@ class BuyerFavorableRegressionTest(unittest.TestCase):
         self.assertTrue(pr.get("our_role") in ("buyer", "ordering_party", "neutral", "unknown"))
 
     def test_favorable_safety_clause_not_unnecessarily_rewritten(self) -> None:
-        text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         bundle = build_clause_level_result(
             service=self.service,
             entity="퍼시스",
@@ -60,7 +62,7 @@ class BuyerFavorableRegressionTest(unittest.TestCase):
             self.assertFalse(isinstance(sr, str) and sr.strip())
 
     def test_one_sided_liability_or_disclaimer_is_rewritten_in_buyer_favorable_direction(self) -> None:
-        text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         bundle = build_clause_level_result(
             service=self.service,
             entity="퍼시스",
@@ -88,14 +90,14 @@ class BuyerFavorableRegressionTest(unittest.TestCase):
     def test_dealer_act_not_inferred_for_lg_purchase_installation(self) -> None:
         from runtime.law.search_service import _derive_queries
 
-        text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         qobjs = _derive_queries(entity="퍼시스", contract_type="장비공급/설치/시운전", text=text, matched_rules=[], scope="contract")
         qs = [q.get("query") for q in qobjs if isinstance(q.get("query"), str)]
         self.assertFalse(any("대리점법" == t for t in qs))
         self.assertTrue(any("민법" in t for t in qs))
 
     def test_redline_docx_has_mixed_color_runs(self) -> None:
-        text = Path("runtime/tests/fixtures/lg_purchase_installation.txt").read_text(encoding="utf-8")
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
         bundle = build_clause_level_result(
             service=self.service,
             entity="퍼시스",
