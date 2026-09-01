@@ -31,14 +31,20 @@ def get_priority_topics(entity: str) -> list[str]:
     return []
 
 
-def get_priority_topics_with_context(*, entity: str, contract_type: str, text: str) -> list[str]:
+def get_priority_topics_with_context(
+    *, entity: str, contract_type: str, text: str, contract_type_code: str = "",
+) -> list[str]:
     topics = get_priority_topics(entity)
     ct = contract_type or ""
     t = text or ""
     app_dev_hint = any(k in ct for k in ("앱개발", "소프트웨어개발", "SI", "유지보수", "SaaS", "API")) or any(
         k in t for k in ("앱 개발", "소프트웨어 개발", "시스템 개발", "개발 용역", "소스코드", "산출물", "SLA", "유지보수", "오픈소스", "API 연동")
     )
-    dealer_hint = any(k in ct for k in ("대리점", "유통", "위탁")) or any(k in t for k in ("대리점", "위탁판매", "판매장려금", "판촉", "리베이트"))
+    # canonical-aware 판정만 신뢰(raw contract_type 라벨 substring 매칭
+    # 제거, 2026-09-01) — priority_map.infer_contract_profile을 재사용해
+    # "대리점법"을 topics에 남길지 판단하는 단일 helper로 통합한다.
+    from runtime.review.priority_map import infer_contract_profile as _profile_check
+    dealer_hint = _profile_check(contract_type=ct, text=t, canonical_type_code=contract_type_code).profile == "dealer_consignment"
     if app_dev_hint:
         topics = [x for x in topics if x not in ("표시광고", "소비자보호", "모델계약", "대리점법")]
         topics = ["민법 도급 손해배상", "저작권법", "부정경쟁방지법", "개인정보보호법"] + topics

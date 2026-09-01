@@ -804,10 +804,12 @@ def create_handler(service: RuleQueryService):
                 _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
                 return
             from runtime.review.clause_level import apply_dealer_rental_final_gate as _deep_gate
+            _detailed_profile0 = bundle.meta.get("detailed_contract_profile") if isinstance(bundle.meta, dict) else None
+            _ct_code0 = str(_detailed_profile0.get("contract_type") or "") if isinstance(_detailed_profile0, dict) else ""
             result = dict(bundle.review)
             result["mode"] = "deep"
-            _deep_cr = _deep_gate(bundle.clause_results, str(contract_type or ""))
-            if str(contract_type or "") == "dealer_rental_service_contract" and text:
+            _deep_cr = _deep_gate(bundle.clause_results, _ct_code0)
+            if _ct_code0 == "dealer_rental_service_contract" and text:
                 try:
                     from runtime.review.professional_assessment import run_professional_assessment as _prof_assess
                     _prof = _prof_assess(text=str(text), entity=str(entity or "퍼시스"))
@@ -830,6 +832,7 @@ def create_handler(service: RuleQueryService):
                         scope="contract",
                         max_per_type=2,
                         time_budget_sec=2.0,
+                        contract_type_code=_ct_code0,
                         context={
                             "review_posture": (bundle.meta.get("review_posture") if isinstance(bundle.meta, dict) else None),
                             "party_role": (bundle.meta.get("party_role") if isinstance(bundle.meta, dict) else None),
@@ -1509,6 +1512,9 @@ def create_handler(service: RuleQueryService):
                 law_topics = None
                 if law_service is not None:
                     try:
+                        _canonical_type_code_for_law = ""
+                        if isinstance(clause_meta, dict) and isinstance(clause_meta.get("detailed_contract_profile"), dict):
+                            _canonical_type_code_for_law = str(clause_meta["detailed_contract_profile"].get("contract_type") or "")
                         contract_law_search = law_service.search_for_review(
                             entity=entity,
                             contract_type=contract_type,
@@ -1516,6 +1522,7 @@ def create_handler(service: RuleQueryService):
                             matched_rules=review_result.get("matched_rules") if isinstance(review_result, dict) else None,
                             scope="contract",
                             max_per_type=2,
+                            contract_type_code=_canonical_type_code_for_law,
                             context={
                                 "review_posture": (clause_meta.get("review_posture") if isinstance(clause_meta, dict) else None),
                                 "party_role": (clause_meta.get("party_role") if isinstance(clause_meta, dict) else None),
@@ -1764,6 +1771,11 @@ def create_handler(service: RuleQueryService):
             contract_type = str(meta.get("contract_type") or "all")
             filename = meta.get("filename")
             contract_text = "\n".join(str(c.get("text") or "") for c in original_clauses if isinstance(c, dict))
+            try:
+                _dp2 = _classify_detailed(entity=entity, contract_type=contract_type, text=contract_text)
+            except Exception:
+                _dp2 = None
+            _ct_code_for_this_block = _dp2.contract_type if _dp2 is not None else ""
             review = service.analyze(
                 ReviewInput(
                     entity=entity,
@@ -1771,6 +1783,7 @@ def create_handler(service: RuleQueryService):
                     text=contract_text,
                     filename=filename,
                     answers=None,
+                    contract_type_code=_ct_code_for_this_block,
                 )
             )
             detected_rule_ids = [
@@ -1791,15 +1804,12 @@ def create_handler(service: RuleQueryService):
                         matched_rules=review.get("matched_rules") if isinstance(review, dict) else None,
                         scope="contract",
                         max_per_type=2,
+                        contract_type_code=_ct_code_for_this_block,
                     )
             except Exception:
                 contract_law_search = None
             if isinstance(contract_law_search, dict) and isinstance(contract_law_search.get("queries"), list):
                 law_topics = [str(x) for x in contract_law_search.get("queries") if isinstance(x, str)]
-            try:
-                _dp2 = _classify_detailed(entity=entity, contract_type=contract_type, text=contract_text)
-            except Exception:
-                _dp2 = None
             qs = generate_questions(
                 entity,
                 contract_type,
@@ -1808,10 +1818,10 @@ def create_handler(service: RuleQueryService):
                 contract_text=contract_text,
                 clause_results=clause_results,
                 max_questions=7,
-                contract_type_code=(_dp2.contract_type if _dp2 is not None else ""),
+                contract_type_code=_ct_code_for_this_block,
             )
             try:
-                _ct2 = _dp2.contract_type if _dp2 is not None else ""
+                _ct2 = _ct_code_for_this_block
                 _cr_list2 = _inject_mandatory_issues(
                     full_text=contract_text, clause_results=list(clause_results),
                     contract_type_code=_ct2, is_counterparty_form=True,
@@ -2028,6 +2038,7 @@ def create_handler(service: RuleQueryService):
                     matched_rules=review.get("matched_rules") if isinstance(review, dict) else None,
                     scope="contract",
                     max_per_type=3,
+                    contract_type_code=_canonical_type_code,
                 )
             except Exception as exc:
                 law_search = {"enabled": False, "note": "law search failed", "error": sanitize_error_message(str(exc))}

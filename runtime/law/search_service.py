@@ -46,6 +46,7 @@ class LawSearchService:
         max_per_type: int = 3,
         time_budget_sec: float = 3.5,
         context: dict[str, Any] | None = None,
+        contract_type_code: str = "",
     ) -> dict[str, Any]:
         if not self._cfg.enabled or not self._cfg.api_key:
             return {
@@ -65,9 +66,10 @@ class LawSearchService:
             matched_rules=matched_rules or [],
             scope=scope,
             context=context,
+            contract_type_code=contract_type_code,
         )
         queries = [q["query"] for q in qobjs if isinstance(q.get("query"), str) and q["query"].strip()]
-        profile = _infer_contract_profile(contract_type=str(contract_type or ""), text=str(text or ""))
+        profile = _infer_contract_profile(contract_type=str(contract_type or ""), text=str(text or ""), canonical_type_code=contract_type_code)
         query_limit = 4 if scope == "contract" else 4
         if scope == "contract" and profile == "app_dev":
             query_limit = 4
@@ -303,12 +305,13 @@ def _derive_queries(
     matched_rules: list[dict[str, Any]],
     scope: str,
     context: dict[str, Any] | None = None,
+    contract_type_code: str = "",
 ) -> list[dict[str, str]]:
     ct = (contract_type or "").strip()
     txt = (text or "")
     out: list[dict[str, str]] = []
 
-    profile = _infer_contract_profile(contract_type=ct, text=txt)
+    profile = _infer_contract_profile(contract_type=ct, text=txt, canonical_type_code=contract_type_code)
     if scope == "clause":
         out.extend(_derive_clause_queries(profile=profile, text=txt, matched_rules=matched_rules, context=context))
     if scope == "contract" and profile == "purchase_installation":
@@ -334,11 +337,16 @@ def _derive_queries(
         if any(k in txt for k in ("이용자", "회원", "결제", "통신판매", "서비스 제공")):
             out.append({"query": "전자상거래법 통신판매 소비자", "reason_code": "contract_profile:app_dev"})
     elif scope == "contract":
-        for t in get_priority_topics_with_context(entity=entity, contract_type=contract_type, text=text):
+        for t in get_priority_topics_with_context(entity=entity, contract_type=contract_type, text=text, contract_type_code=contract_type_code):
             out.append({"query": t, "reason_code": "entity_priority"})
 
     if profile != "purchase_installation":
-        if "대리점" in ct or "유통" in ct or "위탁" in ct:
+        # canonical-aware 판정만 신뢰(raw contract_type 라벨 substring 매칭
+        # 제거, 2026-09-01) — NDA 등에 "위탁" 한 단어가 있다고 대리점법을
+        # 검색하지 않도록 한다. 법령검색 결과일 뿐 clause_results/severity는
+        # 건드리지 않으므로 review finding 자체는 영향받지 않는다.
+        from runtime.review.priority_map import infer_contract_profile as _canonical_profile_check2
+        if _canonical_profile_check2(contract_type=ct, text=txt, canonical_type_code=contract_type_code).profile == "dealer_consignment":
             out.extend([{"query": "대리점법", "reason_code": "contract_type:dealer"}, {"query": "공정거래", "reason_code": "contract_type:dealer"}])
     if "하도급" in ct or "도급" in ct or "공사" in ct:
         out.extend([{"query": "하도급법", "reason_code": "contract_type:subcontract"}, {"query": "공정거래", "reason_code": "contract_type:subcontract"}])
@@ -560,10 +568,26 @@ def _fallback_contract_queries(*, profile: str, text: str, matched_rules: list[d
     return out
 
 
-def _infer_contract_profile(*, contract_type: str, text: str) -> str:
+def _infer_contract_profile(*, contract_type: str, text: str, canonical_type_code: str = "") -> str:
     ct = contract_type or ""
     t = text or ""
     low = (ct + "\n" + t).lower()
+
+    # canonical 분류가 명확히 대리점류가 아니라고 판단하면(예: NDA), 아래
+    # 텍스트 키워드 휴리스틱보다 우선해 "dealer" 분기를 건너뛴다 — raw
+    # contract_type 라벨에 "위탁"/"유통" 등이 우연히 섞여 법령검색이
+    # 무관한 대리점법/공정거래로 오염되는 것을 방지한다(2026-09-01).
+    # 이 helper는 review finding(clause_results)에는 관여하지 않고 법령
+    # 검색어 선택에만 쓰이므로, 여기서의 판단은 리뷰 결과 자체를 삭제·
+    # 왜곡하지 않는다.
+    from runtime.review.priority_map import infer_contract_profile as _canonical_profile_check
+    _canonical_says_dealer = _canonical_profile_check(
+        contract_type=ct, text=t, canonical_type_code=canonical_type_code,
+    ).profile == "dealer_consignment"
+    if canonical_type_code and not _canonical_says_dealer:
+        skip_dealer_branch = True
+    else:
+        skip_dealer_branch = False
 
     def has_any(needles: list[str]) -> bool:
         return any(n.lower() in low for n in needles if n)
@@ -589,7 +613,7 @@ def _infer_contract_profile(*, contract_type: str, text: str) -> str:
     if has_any(["운영대행", "위탁운영", "운영위탁", "공간운영", "매장운영", "라운지", "시설관리", "관리용역", "운영용역", "서비스위탁"]) and not has_app_dev_strong():
         return "operations"
 
-    if has_any(["대리점", "유통", "위탁판매", "판매대행"]) or has_any(["판매장려금", "판촉", "리베이트", "대리점거래"]):
+    if not skip_dealer_branch and (has_any(["대리점", "유통", "위탁판매", "판매대행"]) or has_any(["판매장려금", "판촉", "리베이트", "대리점거래"])):
         return "dealer"
 
     if has_any(["앱개발", "소프트웨어개발", "si", "saas"]) or has_app_dev_strong():

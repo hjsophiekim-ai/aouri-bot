@@ -4318,6 +4318,7 @@ def build_clause_level_result(
                     matched_rules=rr,
                     scope="clause",
                     max_per_type=max_clause_law_items,
+                    contract_type_code=str(_canonical_profile.contract_type or ""),
                     context={
                         "party_role": party.to_dict(),
                         "review_posture": review_posture,
