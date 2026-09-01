@@ -1113,8 +1113,14 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         .filter(it => {
           if (!it) return false;
           if (it.dedup_suppressed || it.keep_as_is) return false;
-          // 체크리스트 권고 항목은 항상 표시
-          if (it.is_checklist_item) return true;
+          // 체크리스트(누락 구조 탐지) 항목도 서버가 이미 계산한 risk_tier를
+          // 존중한다 — 서버(_apply_checklist_item_priority_demotion)가 관련
+          // 없다고 판단해 LOW로 강등한 항목을 여기서 무조건 다시 노출하면
+          // Word/DOCX(같은 risk_tier 기준으로 필터링)와 화면이 어긋난다.
+          if (it.is_checklist_item) {
+            const ctier = String(it.risk_tier || '').toUpperCase();
+            return ctier === 'HIGH' || ctier === 'MEDIUM' || !!it.user_focus_hit || !!it.factual_hit;
+          }
           const tier = String(it.risk_tier || '').toUpperCase();
           const isHighRisk = tier === 'HIGH' || !!it.approval_required || !!it.high_risk;
           const isMedium   = tier === 'MEDIUM';

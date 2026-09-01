@@ -1962,20 +1962,56 @@ def _apply_checklist_item_priority_demotion(
         cr["_checklist_demoted"] = True
 
 
+def _has_tangible_goods_obligation_signal(
+    legal_map: dict[str, Any] | None,
+    contract_class: str,
+    contract_nature: str,
+    canonical_type_code: str = "",
+) -> bool:
+    """실제로 물품·제조물·설치 급부 의무가 있는 계약에서만 True를 반환한다.
+
+    canonical_type_code == "nda_confidentiality"는 단순 이름 매칭이 아니라
+    contract_classifier.py가 여러 구조 신호(제목/정의조항/반환폐기 등)로
+    확정한 canonical 판정이다 — NDA는 구조상 물품공급·제조·설치 의무 자체가
+    성립할 수 없으므로, AI 유무와 무관하게 항상 차단한다(원문 서두의
+    프로젝트 설명에 "가구 구매 및 설치"가 언급되어 전체텍스트 스캔이
+    오탐한 실사례, 2026-09-01).
+
+    NDA 외의 다른 유형(자문/라이선스/임대차/투자계약 등)에 대해서는 이름을
+    하드코딩하지 않는다 — 대신 Contract Legal Map이 실제 AI로 계약 전체를
+    읽은 경우(_legal_map_source == "ai"), 그 primary_obligations/key_
+    deliverables/contract_purpose 요약에 물품/설치 신호가 있는지를 기존
+    전체텍스트 스캔 결과와 AND로 교차검증해, 전체텍스트 스캔만으로는 잡지
+    못하는 다른 유형의 오탐도 걸러낸다. AI가 없으면(regex 축소판은
+    부정확할 수 있어) 기존 전체텍스트 스캔 결과를 그대로 신뢰한다.
+    """
+    if canonical_type_code == "nda_confidentiality":
+        return False
+    text_scan_says_yes = contract_class == "project_installation" or contract_nature == "제조물공급"
+    lm = legal_map or {}
+    if lm.get("_legal_map_source") == "ai":
+        lm_text = " ".join(str(lm.get(k) or "") for k in ("primary_obligations", "key_deliverables", "contract_purpose"))
+        lm_says_yes = bool(_NATURE_PRODUCT_SUPPLY_KW.search(lm_text) or _SUBSTANCE_TANGIBLE_KW.search(lm_text))
+        return text_scan_says_yes and lm_says_yes
+    return text_scan_says_yes
+
+
 def _apply_industry_specific_review(
     clause_results: list[dict[str, Any]],
     full_text: str,
     contract_class: str,
     contract_nature: str,
     contract_type_code: str = "",
+    legal_map: dict[str, Any] | None = None,
 ) -> None:
     """[STEP 4] 가구·설비·제조물 계약 12개 항목 자동 점검.
-    project_installation 또는 제조물공급 계약에서 누락 항목을 탐지한다.
-    dealer_rental_service_contract는 제조물/산업안전 항목이 불필요하므로 완전 스킵.
+    Contract Legal Map상 실제 물품·제조·설치 급부가 있는 계약에서만
+    누락 항목을 탐지한다. dealer_rental_service_contract는 제조물/산업
+    안전 항목이 구조상 불필요하므로 완전 스킵.
     """
     if contract_type_code == "dealer_rental_service_contract":
         return
-    if contract_class != "project_installation" and contract_nature != "제조물공급":
+    if not _has_tangible_goods_obligation_signal(legal_map, contract_class, contract_nature, contract_type_code):
         return
     text = str(full_text or "")
 
@@ -4879,7 +4915,11 @@ def build_clause_level_result(
             )
 
     # ── [STEP 4] Industry-Specific Legal Reasoning (가구·설비·제조물 12개 항목) ──
-    _apply_industry_specific_review(clause_results, str(text or ""), _contract_class, _contract_nature, str(contract_type or ""))
+    _apply_industry_specific_review(
+        clause_results, str(text or ""), _contract_class, _contract_nature,
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+        legal_map=_legal_map.to_dict(),
+    )
 
     # ── [Contextual Awareness] Contract Nature Lock ────────────────────────
     _apply_contract_nature_lock(clause_results, _contract_nature)

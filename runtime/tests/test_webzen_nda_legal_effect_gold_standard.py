@@ -174,6 +174,19 @@ class TestWebzenNdaLegalEffectGoldStandard(unittest.TestCase):
             self.assertNotIn("미수금", blob, f"제10조 finding이 미수금/지급보증으로 오분류됨: {blob!r}")
             self.assertNotIn("지급보증", blob, f"제10조 finding이 미수금/지급보증으로 오분류됨: {blob!r}")
 
+    def test_no_industry_specific_goods_checklist_leaked_into_nda(self):
+        """실사례(2026-09-01): 이 NDA의 목적 조항 서두("집무실 가구 구매 및
+        설치 업무")가 전체텍스트 키워드 스캔(_classify_contract_type_by_
+        substance)을 오염시켜 _contract_class가 "project_installation"으로
+        오분류된다 — 실제로 확인됨. 이 상태에서도 industry-specific
+        제조물/설치 체크리스트(isr_*)가 raw clause_results에 전혀 생성되지
+        않아야 한다(Contract Legal Map의 실제 급부 요약에는 물품·제조·설치
+        신호가 없으므로)."""
+        from runtime.review.clause_level import _classify_contract_type as _cc
+        self.assertEqual(_cc("비밀유지협약서(NDA)", self.text, "x.pdf"), "project_installation")
+        isr_ids = [str(cr.get("clause_id") or "") for cr in self.crs if str(cr.get("clause_id") or "").startswith("isr_")]
+        self.assertEqual(isr_ids, [], f"NDA에 무관한 제조물/설치 체크리스트가 생성됨: {isr_ids}")
+
     def test_no_unsolicited_new_obligation_suggestions_at_high_or_medium(self):
         """PL보험·매뉴얼·안전인증 등 '없는 조항 신설' 체크리스트 항목은
         NDA에도 우리 회사의 새 의무로 자진 제안되면 안 된다."""
