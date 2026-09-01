@@ -59,6 +59,7 @@ class TestWebzenNdaLegalEffectGoldStandard(unittest.TestCase):
         )
         cls.crs = [cr for cr in bundle.clause_results if isinstance(cr, dict)]
         cls.by_id = {str(cr.get("clause_id") or ""): cr for cr in cls.crs}
+        cls.meta = bundle.meta
 
     def _tier(self, clause_id: str) -> str:
         self.assertIn(clause_id, self.by_id, f"{clause_id} not found in clause_results at all")
@@ -68,6 +69,19 @@ class TestWebzenNdaLegalEffectGoldStandard(unittest.TestCase):
 
     def test_contract_type_is_nda(self):
         self.assertEqual(self.detailed.contract_type, "nda_confidentiality")
+
+    def test_dealer_profile_not_triggered_by_stale_contract_type_label(self):
+        """실사례(2026-09-01): UI가 넘긴 contract_type 라벨이 실제로는
+        "대리점/위탁/유통"이라는 무관한 stale 값이었는데, 그 문자열에
+        "대리점"이 부분 포함되어 있다는 이유만으로 dealer_consignment
+        profile로 오분류되어 조 번호 8/9/10=정산 하드코딩 체크리스트가
+        NDA의 반환·양도금지 조항에 엉뚱한 "정산" 문구를 주입했다. canonical
+        분류기(nda_confidentiality)가 이 라벨보다 우선해야 한다."""
+        from runtime.review.priority_map import infer_contract_profile
+        prof = infer_contract_profile(
+            contract_type="대리점/위탁/유통", text=self.text, canonical_type_code="nda_confidentiality",
+        )
+        self.assertEqual(prof.profile, "general")
 
     def test_our_role_is_not_forced_into_fixed_bucket(self):
         """양사가 정보별로 제공자/수신자가 바뀌는 상호 NDA이므로, 퍼시스를
@@ -99,6 +113,31 @@ class TestWebzenNdaLegalEffectGoldStandard(unittest.TestCase):
         """제6조 제6항: 이 계약(NDA) 위반만으로 관련 정식 계약을 해지·해제
         가능 → MEDIUM 이상."""
         self.assertIn(self._tier("clr_breach_triggers_related_contract_termination"), ("MEDIUM", "HIGH"))
+
+    def test_related_contract_termination_escalates_to_high_when_no_safeguards(self):
+        """제6조 제6항 원문에는 위반의 중대성 제한/귀책사유 요건/시정기간·
+        최고 절차가 전혀 없다(2026-09-01 실사례 — 실제 앱 사용 중 이 finding
+        자체가 최종 리뷰 결과에서 통째로 사라진 사고가 있었음). 세 보호장치가
+        전부 없으면 MEDIUM 고정이 아니라 HIGH로 격상되어야 한다."""
+        cr = self.by_id["clr_breach_triggers_related_contract_termination"]
+        self.assertEqual(str(cr.get("risk_tier")).upper(), "HIGH")
+        self.assertEqual(cr.get("original_effect_tags"), ["cross_default"])
+
+    def test_related_contract_termination_survives_into_final_filtered_output(self):
+        """clr_breach_triggers_related_contract_termination이 raw clause_
+        results에 존재하는 것만으로는 부족하다 — output_filter의 병합
+        로직이 "제6조"라는 article 단위 display_path만 보고 같은 조 안의
+        서로 다른 항(①최선노력/⑤제3자연대/⑥관련계약해지) 3건을 하나로
+        뭉개 2건을 조용히 삭제하는 사고가 실제로 있었다(2026-09-01). 이
+        finding이 실제로 사용자가 보는 최종 출력(high/medium_issues_
+        filtered)에 살아남는지 직접 확인한다."""
+        final_ids = {
+            str(i.get("clause_id") or "")
+            for i in (self.meta.get("high_issues_filtered") or []) + (self.meta.get("medium_issues_filtered") or [])
+        }
+        self.assertIn("clr_breach_triggers_related_contract_termination", final_ids)
+        self.assertIn("clr_third_party_joint_liability_regardless_of_selection_fault", final_ids)
+        self.assertIn("clr_best_efforts_standard_of_care_ambiguous", final_ids)
 
     def test_ethics_morality_overbreadth_cluster_detected_high(self):
         """제12조: 사생활 영역까지 포함하는 광범위 품위의무 + 최고절차 없는

@@ -12,7 +12,19 @@ class ContractProfile:
         return {"profile": self.profile, "evidence": list(self.evidence)}
 
 
-def infer_contract_profile(*, contract_type: str, text: str) -> ContractProfile:
+def infer_contract_profile(*, contract_type: str, text: str, canonical_type_code: str = "") -> ContractProfile:
+    # [2026-09-01 실사례] contract_type은 UI가 넘긴 자유 텍스트 라벨일 뿐이라
+    # 실제 계약 내용과 무관하게 stale/잘못된 값("대리점/위탁/유통")이 들어올
+    # 수 있다 — 순수 NDA 문서인데 이 라벨에 "대리점"이 부분 문자열로 들어있어
+    # dealer_consignption profile로 오분류되고, 그 결과 이 프로필 전용 조항
+    # 번호 기반(8/9/10=정산, 14=인력, 11/17=광고비) 체크리스트가 NDA의 무관한
+    # 조항(반환/양도금지 등)에 엉뚱한 "정산" 문구를 주입하는 사고가 실제로
+    # 발생했다. runtime.review.contract_classifier(전체 텍스트를 구조적으로
+    # 분석하는 canonical 분류기)가 이미 nda_confidentiality로 확정했다면,
+    # 이 라벨 기반 substring 매칭보다 그 결과를 우선한다.
+    if canonical_type_code == "nda_confidentiality":
+        return ContractProfile(profile="general", evidence=["canonical_nda_override"])
+
     ct = (contract_type or "")
     t = (text or "")
     ev: list[str] = []

@@ -501,18 +501,25 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         "clause_topic": "other",
     },
     {
+        # 법률효과 관점의 명칭: cross_default / related_contract_termination —
+        # "해지"라는 단어가 아니라 "한 계약의 위반이 다른 계약의 종료·기한
+        # 이익상실·제재로 확산되는 구조"인지가 실질이므로, 계약유형·문언과
+        # 무관하게 아래 present 정규식(위반→타 계약 종료/기한이익상실/제재)
+        # 전부에 공통 적용된다(2026-09-01, 실제 NDA 제6조 제6항 누락 사례
+        # 이후 일반화).
         "id": "clr_breach_triggers_related_contract_termination",
-        "name": "본계약(부수계약) 위반만으로 관련 본계약 해지 가능",
+        "name": "본계약(부수계약) 위반만으로 관련 계약 해지·기한이익상실·제재",
         "present": re.compile(
-            r"(계약상의|본\s*계약).{0,20}(위반|불이행).{0,60}(정식\s*계약|관련된?\s*계약).{0,20}(해지|해제)",
+            r"(계약상의|본\s*계약).{0,20}(위반|불이행).{0,60}(정식\s*계약|관련된?\s*계약)"
+            r".{0,20}(해지|해제|기한(?:의)?\s*이익(?:을)?\s*상실|제재(?:를)?\s*(?:가할|받을|부과))",
             re.DOTALL,
         ),
         "risk": "MEDIUM",
-        "direction": "본계약(비밀유지 등 부수계약) 위반이 중대한 경우로 한정하고, 시정기회를 부여한 후에도 시정되지 않을 때에 한하여 관련 본계약 해지 사유가 되도록 제한",
-        "reason": "이 계약(비밀유지 등 부수계약) 위반만으로, 위반의 중대성이나 시정기회 없이 관련된 본계약(정식 계약)까지 해지·해제될 수 있다.",
+        "direction": "본계약(비밀유지 등 부수계약) 위반이 중대한 경우로 한정하고, 시정기회를 부여한 후에도 시정되지 않을 때에 한하여 관련 계약 해지·기한이익상실·제재 사유가 되도록 제한",
+        "reason": "이 계약(비밀유지 등 부수계약) 위반만으로, 위반의 중대성이나 귀책사유·시정기회 요건 없이 관련된 본계약(정식 계약)까지 해지·해제되거나 기한이익상실·제재로 이어질 수 있다.",
         "legal_business_reason": (
-            "경미한 위반까지 본계약 위반 사유가 되어 관련된 본 거래(정식 계약) 전체가 해지될 수 있으면, "
-            "부수적인 의무 위반이 핵심 거래관계 상실이라는 불균형한 결과로 이어질 위험이 있다."
+            "경미한 위반까지 본계약 위반 사유가 되어 관련된 본 거래(정식 계약) 전체가 해지·기한이익상실 등으로 "
+            "이어질 수 있으면, 부수적인 의무 위반이 핵심 거래관계 상실이라는 불균형한 결과로 이어질 위험이 있다."
         ),
         "rewrite": (
             "이 계약을 중대하게 위반하고, 상당한 기간을 정한 시정 요구에도 불구하고 시정되지 아니한 경우에 "
@@ -520,6 +527,7 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         ),
         "negotiation_position": "관련계약 해지권 삭제보다 '중대한 위반 + 시정기회' 요건 추가를 우선 요청 — 경미한 위반으로 핵심 거래 전체가 흔들리지 않도록 하는 최소수정.",
         "clause_topic": "termination",
+        "legal_effect_tags": ["cross_default"],
     },
     {
         "id": "clr_ethics_morality_termination_waiver_cluster",
@@ -650,6 +658,8 @@ def _apply_common_legal_risk_rules(
                 article_number = None
         risk = item["risk"]
         clause_title = f"{display_path} [{item['name']}]" if display_path else f"[공통 법률리스크] {item['name']}"
+        _effect_tags = item.get("legal_effect_tags")
+        _effect_tags = list(_effect_tags) if isinstance(_effect_tags, list) else []
         clause_results.append({
             "clause_id": item["id"],
             "article_number": article_number,
@@ -684,8 +694,10 @@ def _apply_common_legal_risk_rules(
             "user_focus_hit": False,
             "factual_hit": False,
             "ai_deep_reviewed": False,
+            **({"original_effect_tags": _effect_tags, "rewrite_effect_tags": _effect_tags} if _effect_tags else {}),
         })
 
+    _apply_cross_default_severity_check(clause_results)
     _apply_termination_vs_term_check(clause_results, text, clauses)
     _apply_late_penalty_uncapped_check(clause_results, text, clauses)
     _apply_confidentiality_survival_undefined_check(clause_results, clauses)
@@ -875,6 +887,57 @@ def _apply_late_penalty_uncapped_check(
             "ai_deep_reviewed": False,
         })
         return
+
+
+_RX_CROSS_DEFAULT_MATERIALITY_LIMIT = re.compile(r"중대(?:하게|한)")
+_RX_CROSS_DEFAULT_FAULT_REQUIREMENT = re.compile(r"고의\s*(?:또는|/|,)?\s*과실|귀책\s*사유")
+_RX_CROSS_DEFAULT_CURE_PERIOD = re.compile(
+    r"(?:상당한|일정한?)\s*기간을?\s*정(?:하여|한)|시정\s*(?:요구|기회|되지)|최고(?:하였음에도|절차)"
+)
+
+
+def _apply_cross_default_severity_check(clause_results: list[dict[str, Any]]) -> None:
+    """변호사형 전체계약 판단 지시 후속(2026-09-01, NDA 제6조 제6항 실사례) —
+    clr_breach_triggers_related_contract_termination(cross_default /
+    related_contract_termination 법률효과)이 매칭된 문구에 실제로 보호장치
+    (① 위반의 중대성 제한, ② 귀책사유 요건, ③ 시정기간/최고 절차)가 있는지
+    확인해 심각도를 동적으로 조정한다 — 정적 MEDIUM 고정이 아니라, 세 가지
+    보호장치가 전부 없으면(경미한 위반도 곧바로 핵심 상거래계약 종료로
+    이어질 수 있는 구조) HIGH로 격상하고, 전부 있으면(이미 안전하게 제한된
+    조항) 협상 우선순위를 낮춘다."""
+    for cr in clause_results:
+        if not isinstance(cr, dict) or cr.get("clause_id") != "clr_breach_triggers_related_contract_termination":
+            continue
+        excerpt = str(cr.get("original_text") or "")
+        has_materiality = bool(_RX_CROSS_DEFAULT_MATERIALITY_LIMIT.search(excerpt))
+        has_fault = bool(_RX_CROSS_DEFAULT_FAULT_REQUIREMENT.search(excerpt))
+        has_cure = bool(_RX_CROSS_DEFAULT_CURE_PERIOD.search(excerpt))
+        safeguards_present = sum((has_materiality, has_fault, has_cure))
+        if safeguards_present == 0:
+            # 5개 확인요소가 전부 부재: 중대성 제한 없음, 귀책사유 요건 없음,
+            # 시정기간/최고 절차 없음 → 해당 계약 외 다른 본계약까지 종료
+            # 되며, 경미한 위반도 핵심 상거래계약 종료로 이어질 수 있는 구조.
+            cr["risk_tier"] = "HIGH"
+            cr["severity"] = "HIGH"
+            cr["high_risk"] = True
+            cr["must_fix"] = True
+            cr["approval_required"] = True
+            cr["review_tier"] = "MUST"
+            cr["display_kind"] = "redline"
+            cr["legal_business_reason"] = (
+                "위반의 중대성 제한, 귀책사유 요건, 시정기간·최고 절차 중 어느 것도 없어 "
+                "경미한 위반만으로도 관련된 정식 계약(핵심 상거래관계)이 곧바로 해지·종료될 수 있다."
+            )
+        elif safeguards_present >= 3:
+            # 세 요건이 모두 이미 문구에 있음 — 협상 우선순위를 낮춘다(이미
+            # 안전하게 제한된 조항이므로 must_fix 대상은 아님).
+            cr["risk_tier"] = "LOW"
+            cr["severity"] = "LOW"
+            cr["high_risk"] = False
+            cr["must_fix"] = False
+            cr["approval_required"] = False
+            cr["review_tier"] = "NOTE"
+            cr["display_kind"] = "guidance"
 
 
 def _apply_termination_vs_term_check(

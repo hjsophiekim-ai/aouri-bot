@@ -169,6 +169,16 @@ def is_valid_issue(
 
 # ─── Deduplication ────────────────────────────────────────────────────────────
 
+def _identity_snippet(text: str) -> str:
+    """Normalize original_text down to a short, comparable fingerprint —
+    strip whitespace/quotes/leading item numbers so two quotes of the exact
+    same passage compare equal even with minor formatting differences."""
+    import re as _re
+    t = _re.sub(r'["\'“”‘’\s]+', "", text or "")
+    t = _re.sub(r"^\d+[.\)]", "", t)
+    return t[:40]
+
+
 def _clause_identity_key(issue: ReviewIssue) -> tuple[str, str, str] | None:
     # Prefer the already-formatted display_path string ("제5조 제2항 1호")
     # over the separate article/paragraph/item fields: a clause_result whose
@@ -179,8 +189,18 @@ def _clause_identity_key(issue: ReviewIssue) -> tuple[str, str, str] | None:
     # unrelated. display_path is normalized identically by every producer
     # (clause_extraction._display_path), so an exact string match is exactly
     # as precise as the tuple when both are present.
+    #
+    # [2026-09-01 실사례] rule-engine(clr_*) 항목은 article 단위까지만
+    # display_path를 채우고 paragraph_number는 비워두는 경우가 많다 — 그
+    # 결과 같은 조(예: "제6조") 안에서 서로 다른 항(①의 최선노력 기준,
+    # ⑤의 제3자 연대책임, ⑥의 관련계약 해지)을 각각 가리키는 완전히 다른
+    # findings 3건이 전부 "같은 조항"으로 뭉쳐져 2건이 조용히 사라지는
+    # 사고가 실제 NDA 리뷰에서 발생했다. paragraph_number가 비어 있을 때는
+    # 인용된 원문 스니펫으로 대신 구분해, 진짜 같은 문장을 가리키는 경우만
+    # 병합되도록 한다.
     if issue.display_path:
-        return (issue.display_path, "", "")
+        para = issue.paragraph_number or _identity_snippet(issue.original_text)
+        return (issue.display_path, para, issue.item_number)
     if not issue.article_number:
         return None
     return (issue.article_number, issue.paragraph_number, issue.item_number)

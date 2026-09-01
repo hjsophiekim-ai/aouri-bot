@@ -3458,7 +3458,10 @@ def build_clause_level_result(
     )
     _hard_block_out_of_scope_rules(review, _contract_class)
     derived = review.get("derived_context") if isinstance(review, dict) else None
-    prof = infer_contract_profile(contract_type=str(contract_type), text=str(text or ""))
+    prof = infer_contract_profile(
+        contract_type=str(contract_type), text=str(text or ""),
+        canonical_type_code=str(_canonical_profile.contract_type or ""),
+    )
     frc = build_final_review_context(
         entity=str(entity),
         contract_type=str(contract_type),
@@ -4005,6 +4008,13 @@ def build_clause_level_result(
                 cr["must_fix"] = False
                 cr["review_tier"] = "SUGGEST"
             elif a in (8, 9, 10) or ("정산" in title or "상계" in title or "공제" in title):
+                # 내용 가드: 조 번호가 8/9/10이라는 이유만으로 주입하지 않는다
+                # — 실제 정산/공제/상계 문구가 있을 때만(payment_settlement
+                # 분기와 동일 가드). 2026-09-01: dealer_consignment로 잘못
+                # 분류된 문서에서 이 번호 매칭만으로 반환·양도금지 조항에
+                # 무관한 "정산" 문구가 주입된 사고 재발 방지.
+                if not _SETTLEMENT_GUARD.search(ot):
+                    continue
                 _key = f"settlement_{_an}"
                 if _key in _seen_articles_for_dealer:
                     continue
