@@ -138,21 +138,16 @@ class CanonicalContractTypeSingleSourceOfTruthTest(unittest.TestCase):
                     f"[{label}] classify_contract_detailed 직접호출과 파이프라인 내부 canonical 값이 불일치",
                 )
 
-                # DOCX/PDF가 UI에 없는 조항을 새로 만들어내면 안 된다(canonical
-                # contract_type 불일치로 인한 오분류라면 이 방향으로 나타난다).
-                # 반대 방향(UI에는 있는데 DOCX엔 없는 조항)은 output_filter의
-                # 제목 기반 dedup(같은 rule이 여러 조항에 매칭되면 rule 자체의
-                # 정적 issue_title이 동일해 병합되는 pre-existing 이슈, 이번
-                # 11개 항목 작업과 무관)으로 설명되는 경우가 있어 별도 표로만
-                # 남기고 여기서 강하게 단언하지 않는다.
-                self.assertTrue(
-                    r["docx_paths"].issubset(r["ui_visible_paths"]),
-                    f"[{label}] DOCX/PDF에만 있는 조항 발견(=UI에 없는데 DOCX에 나타남, canonical 불일치 의심): "
-                    f"{r['docx_paths'] - r['ui_visible_paths']}",
+                # UI와 DOCX/PDF는 완전히 일치해야 한다(2026-09-02 지시 —
+                # "앞으로 DOCX 기준으로 UI 화면과 일치시켜줘"). clause_level.py
+                # 의 "UI/DOCX 일치 강제" 단계가 output_filter의 dedup 결과를
+                # dedup_suppressed로 되먹여, 같은 rule이 여러 조항에 매칭돼
+                # DOCX에서 병합·누락된 조항은 UI에서도 동일하게 숨겨진다.
+                self.assertEqual(
+                    r["ui_visible_paths"], r["docx_paths"],
+                    f"[{label}] UI 노출 HIGH/MEDIUM 조항과 DOCX/PDF 조항이 불일치: "
+                    f"UI-only={r['ui_visible_paths'] - r['docx_paths']}, DOCX-only={r['docx_paths'] - r['ui_visible_paths']}",
                 )
-                _ui_only = r["ui_visible_paths"] - r["docx_paths"]
-                if _ui_only:
-                    print(f"  [{label}] UI에만 있고 DOCX에 없는 조항(사전 존재하는 rule-title dedup 이슈로 추정): {_ui_only}")
 
                 # NDA에서는 제조물/설치/대리점 추가권고(isr_*) 0건
                 if label == "NDA":
@@ -165,6 +160,33 @@ class CanonicalContractTypeSingleSourceOfTruthTest(unittest.TestCase):
                 print(f"[{label}] canonical={r['canonical_code']!r} questions={len(r['questions'])} "
                       f"ui_high_medium={len(r['ui_visible_paths'])} docx_high_medium={len(r['docx_paths'])} "
                       f"law_queries={len(r['law_queries'])}")
+
+
+class UiDocxConsistencyFeedbackTest(unittest.TestCase):
+    """2026-09-02 지시: "UI에는 있는데 DOCX에는 없는 조항을 모두 삭제해줘.
+    앞으로 DOCX기준으로 UI 화면과 일치시켜줘." — 실사례(webzen_equipment_
+    purchase_install.txt)로 dedup_suppressed 되먹임이 실제로 동작하는지
+    직접 확인한다. 이 계약은 동일한 rule(ACT-003, "정산식·차감사유·증빙
+    필수화")이 KR-4/KR-6/KR-11/KR-12 네 조항에 매칭되어 output_filter의
+    제목 기반 dedup이 KR-11만 남기고 나머지 3개를 병합·제거한다."""
+
+    def test_docx_deduped_clauses_are_marked_suppressed_for_ui(self) -> None:
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        text = (FIXTURES_DIR / "webzen_equipment_purchase_install.txt").read_text(encoding="utf-8")
+        bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="물품공급/구매/매매", text=text, filename="x.pdf",
+            answers=None, review_focus=None, law_service=None,
+            ai_provider=None, ai_model=None, ai_timeout_sec=None, ai_max_tokens=None, ai_temperature=None,
+        )
+        by_id = {str(cr.get("clause_id") or ""): cr for cr in bundle.clause_results if isinstance(cr, dict)}
+        self.assertFalse(bool(by_id["KR-11"].get("dedup_suppressed")), "dedup 대표(KR-11)는 숨겨지면 안 된다")
+        for cid in ("KR-4", "KR-6", "KR-12"):
+            self.assertTrue(
+                bool(by_id[cid].get("dedup_suppressed")),
+                f"{cid}는 DOCX dedup에서 병합·제거됐으므로 UI에서도 dedup_suppressed=True여야 한다",
+            )
 
 
 if __name__ == "__main__":

@@ -5656,6 +5656,27 @@ def build_clause_level_result(
         _filtered_output = {}
         _low_count_in_output = 0
 
+    # ── [UI/DOCX 일치 강제] ───────────────────────────────────────────────
+    # output_filter의 dedup(같은 조항 병합 + 같은 rule의 정적 issue_title
+    # 충돌로 인한 병합)이 제거한 항목은 UI에서도 동일하게 숨긴다 — "UI에는
+    # 나오는데 DOCX/PDF에는 없는" 조항이 남지 않도록, DOCX가 최종 채택한
+    # HIGH/MEDIUM id 집합을 canonical 기준으로 삼아 그 밖의 HIGH/MEDIUM
+    # clause_results를 dedup_suppressed로 되먹임한다. UI(internal_demo_
+    # chat_ui.py 등)는 이미 dedup_suppressed를 항상 존중하므로 이 필드
+    # 하나로 두 화면이 같은 최종 findings를 보게 된다(2026-09-02).
+    if _filtered_output:
+        _docx_visible_ids = {
+            str(i.clause_id) for i in (_filtered_output.get("high", []) + _filtered_output.get("medium", []))
+        }
+        for cr in clause_results:
+            if not isinstance(cr, dict):
+                continue
+            if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+                continue
+            _ui_tier = str(cr.get("risk_tier") or "").upper()
+            if _ui_tier in ("HIGH", "MEDIUM") and str(cr.get("clause_id") or "") not in _docx_visible_ids:
+                cr["dedup_suppressed"] = True
+
     # ── [Final Self-Check] requirement.md > Self-Check gate ─────────────────
     # 결과를 반환하기 전 마지막으로 재검증한다: 계약유형/역할이 이 리뷰 전체에서
     # 일관되게 쓰였는지, 유형과 무관한 문구가 남아있지 않은지, 원문-문제점-수정안이
