@@ -65,6 +65,12 @@ _ANSWER_ROLE_TO_LOCAL: dict[str, tuple[str, str]] = {
     "we_are_dealer": ("dealer", "supplier"),
 }
 
+_CANONICAL_SERVICE_RECIPIENT_TYPE_CODES = frozenset({
+    "advisory_service", "software_app_development", "ai_search_marketing",
+    "store_operation_outsourcing", "creative_agency_service",
+    "content_production_service", "advertising_content_production",
+})
+
 _TESTING_SERVICE_KW = [
     "시험연구원", "시험기관", "검사기관", "공인시험", "공인검사",
     "인증기관", "교정기관", "시험성적서", "검사성적서",
@@ -182,6 +188,29 @@ def infer_party_role(
             signals=signals,
         )
 
+    if contract_type_code in _CANONICAL_SERVICE_RECIPIENT_TYPE_CODES:
+        # 이 그룹(자문/용역/개발/마케팅 등)은 아래 whole-document 키워드
+        # 휴리스틱과 달리 방향성이 대칭적이지 않다 — 아우리봇을 쓰는 회사
+        # (가구 제조사)는 이런 유형에서 거의 항상 서비스를 받는 쪽(client)
+        # 이므로, canonical 분류가 이미 이 유형으로 확정했다면 아래 25개
+        # 키워드 분기로 다시 추측하지 않는다(2026-09-01 — "계약유형이
+        # 바뀌어도 downstream에서 역할을 다시 추측하지 않게" 요청 반영).
+        # purchase_supply/equipment_purchase_installation/rental/dealer_*
+        # 처럼 실제로 방향이 뒤집힐 수 있는 유형은 여기 포함하지 않는다
+        # (v5.1에서 이미 겪은 "type_code만으로 방향 고정" 사고 재발 방지 —
+        # 그 유형들은 계속 아래 label-binding/키워드 로직이 판단한다).
+        our_role = "client"
+        counterparty_role = "service_provider"
+        signals.append("canonical_service_recipient_type_override")
+        return PartyRole(
+            our_role=our_role,
+            counterparty_role=counterparty_role,
+            our_label=None,
+            counterparty_label=None,
+            counterparty_is_large_standard_provider=False,
+            signals=signals,
+        )
+
     is_our_fursys_group = _entity_has_fursys_group(ent, t)
 
     if is_our_fursys_group:
@@ -278,11 +307,18 @@ def infer_party_role(
     )
 
 
-def infer_review_posture(*, party: PartyRole, contract_type: str, text: str) -> str:
+def infer_review_posture(*, party: PartyRole, contract_type: str, text: str, contract_type_code: str = "") -> str:
     if party.our_role in ("buyer", "ordering_party"):
         return "buyer_favorable"
     if party.our_role in ("seller", "supplier", "contractor", "rental_provider"):
         return "seller_favorable"
+    if contract_type_code == "nda_confidentiality":
+        # NDA는 구조상 매수/매도 방향성 자체가 없다 — party.our_role이
+        # "party"(중립)로 이미 확정된 경우, 아래 텍스트 스캔 폴백(예: NDA
+        # 서두의 프로젝트 설명에 우연히 "구매"/"설치"가 언급된 경우)이
+        # buyer_favorable로 잘못 뒤집지 않도록 여기서 확정한다
+        # (2026-09-01, canonical_type_code를 우선하는 원칙 일관 적용).
+        return "neutral"
     if _looks_like_purchase_installation(contract_type, text):
         return "buyer_favorable"
     if _looks_like_app_dev(contract_type, text):

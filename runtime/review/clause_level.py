@@ -3481,7 +3481,10 @@ def build_clause_level_result(
         legal_map_dict=_legal_map.to_dict(),
         legal_map_source=_legal_map.source,
     )
-    review_posture = infer_review_posture(party=party, contract_type=str(contract_type), text=str(text))
+    review_posture = infer_review_posture(
+        party=party, contract_type=str(contract_type), text=str(text),
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+    )
     review = service.analyze(
         ReviewInput(
             entity=entity,
