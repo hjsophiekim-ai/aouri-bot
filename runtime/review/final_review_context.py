@@ -60,7 +60,27 @@ def build_final_review_context(
         merged[o.code] = o
     review_objectives = list(merged.values())
     jur = classify_jurisdiction_profile(text=text, entity=entity, contract_type=contract_type, filename=filename)
-    prof = infer_contract_profile(contract_type=contract_type, text=text)
+
+    # canonical 분류(classify_contract_detailed)를 먼저 계산해, 뒤이은
+    # infer_contract_profile()이 raw contract_type 라벨 대신 이 값을
+    # 우선 신뢰하도록 한다(2026-09-01) — 이전엔 이 함수가 detailed_prof를
+    # infer_contract_profile() 호출 18줄 뒤에 계산해놓고도 넘겨주지 않아,
+    # canonical 값이 바로 옆에 있는데도 쓰이지 못하고 있었다.
+    detailed_prof: DetailedContractProfile | None = None
+    try:
+        detailed_prof = classify_contract_detailed(
+            entity=entity,
+            contract_type=contract_type,
+            text=text,
+            filename=filename,
+        )
+    except Exception:
+        pass
+
+    prof = infer_contract_profile(
+        contract_type=contract_type, text=text,
+        canonical_type_code=(detailed_prof.contract_type if detailed_prof is not None else ""),
+    )
 
     from runtime.review.contract_classifier import is_fursys_group
     expert_mode = is_fursys_group(entity or "")
@@ -75,17 +95,6 @@ def build_final_review_context(
                 is_form = True
             if v == "no":
                 is_form = False
-
-    detailed_prof: DetailedContractProfile | None = None
-    try:
-        detailed_prof = classify_contract_detailed(
-            entity=entity,
-            contract_type=contract_type,
-            text=text,
-            filename=filename,
-        )
-    except Exception:
-        pass
 
     return FinalReviewContext(
         user_focus_issues=focus,

@@ -358,7 +358,9 @@ def build_revision_docx(
     frc0 = final_review_context if isinstance(final_review_context, dict) else {}
     jur_kind = (frc0.get("jurisdiction") or {}).get("kind") if isinstance(frc0.get("jurisdiction"), dict) else None
     prof0 = (frc0.get("contract_profile") or {}).get("profile") if isinstance(frc0.get("contract_profile"), dict) else None
-    is_dealer_contract = (prof0 == "dealer_consignment") or any(k in str(contract_type or "") for k in ("대리점", "유통", "위탁"))
+    # raw contract_type 라벨 substring 매칭 제거(2026-09-01) — prof0는 이미
+    # final_review_context.py에서 canonical_type_code를 우선 신뢰해 계산됨.
+    is_dealer_contract = prof0 == "dealer_consignment"
 
     def should_show(cr: dict[str, Any]) -> bool:
         tier = _risk_tier_from_clause_result(cr)

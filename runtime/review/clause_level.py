@@ -4204,7 +4204,11 @@ def build_clause_level_result(
     jur_kind0 = jur0.get("kind") if isinstance(jur0, dict) else None
     cross_border0 = bool(jur0.get("cross_border")) if isinstance(jur0, dict) else False
     wants_dispute0 = bool(isinstance(frc0, dict) and isinstance(frc0.get("user_focus_issues"), list) and any(isinstance(x, dict) and x.get("code") == "dispute" for x in frc0.get("user_focus_issues")))
-    is_dealer_contract0 = (prof.profile == "dealer_consignment") or any(k in str(contract_type or "") for k in ("대리점", "유통", "위탁"))
+    # prof(infer_contract_profile)가 이미 canonical_type_code를 우선 신뢰해
+    # 계산된 단일 source of truth이므로, raw contract_type 부분 문자열
+    # 매칭을 별도로 OR하지 않는다(2026-09-01 — stale 라벨이 이 값을
+    # 덮어써 무관한 조항에 대리점 전용 채점 가중치가 붙는 사고 방지).
+    is_dealer_contract0 = prof.profile == "dealer_consignment"
 
     scored_for_ai = sorted(
         clause_results,
@@ -4877,7 +4881,11 @@ def build_clause_level_result(
         rt = infer_rewrite_topics(rewrite_text=sr, reason_codes=[str(x) for x in rc if isinstance(x, str)])
         low_sr = sr.lower()
         onsite_present = ("설치" in (text or "")) or ("시공" in (text or "")) or ("현장" in (text or "")) or ("공사" in (text or ""))
-        is_dealer_contract = any(k in str(contract_type or "") for k in ("대리점", "위탁", "유통"))
+        # canonical-aware profile만 신뢰(raw contract_type 라벨 매칭 제거,
+        # 2026-09-01) — stale 라벨이 이 게이트를 오염시키면 정당한 app-dev
+        # 관련 rewrite가 "topic mismatch"로 조용히 폐기(None)되는 사고로
+        # 이어진다.
+        is_dealer_contract = prof.profile == "dealer_consignment"
         strong_app_dev = any(k in (text or "") for k in ("소스코드", "SOW", "Statement of Work", "오픈소스", "SBOM", "API 연동", "소프트웨어 개발", "앱 개발"))
         if str(jur_kind or "") == "domestic_korea" and clause_topic == "dispute":
             rr0 = cr.get("rewrite_reason")
@@ -4927,9 +4935,11 @@ def build_clause_level_result(
     # ── [Severity Reclassifier] 위탁판매 대리점 계약 severity 재분류 ──────────
     # 대리점/위탁판매 구조에서 구조 불일치(세금계산서 주체, 수금 책임, 모든 책임 등)를
     # 자동으로 HIGH/MEDIUM으로 상향 조정한다.
+    # raw contract_type 라벨 부분 문자열 매칭 제거(2026-09-01) — prof.profile
+    # 이 이미 canonical_type_code를 우선 신뢰해 계산되고, _struct는 실제
+    # 문서 구조 탐지 결과이므로 이 둘만으로 충분하다.
     _is_consignment_dealer = (
         prof.profile == "dealer_consignment"
-        or any(k in str(contract_type or "") for k in ("위탁판매", "대리점"))
         or _struct.contract_structure == "direct_customer_contract_with_dealer_service"
     )
     if _is_consignment_dealer:
