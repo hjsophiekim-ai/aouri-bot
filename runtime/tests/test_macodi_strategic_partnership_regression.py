@@ -23,7 +23,7 @@ from typing import Any
 from runtime.ai.provider import AIResponse, AIUsage
 from runtime.review.clause_level import build_clause_level_result
 from runtime.review.contract_classifier import classify_contract_detailed
-from runtime.review.legal_applicability_review import detect_user_cited_statutes
+from runtime.review.legal_applicability_review import detect_user_cited_statutes, infer_additional_relevant_statutes
 from runtime.review.text_extract import assess_text_quality
 from runtime.rules.loader import RuleLoader
 from runtime.services.query_service import RuleQueryService, TRIGGER_MAP
@@ -35,6 +35,14 @@ REVIEW_FOCUS = (
     "마감재의 공급 및 조달 체계를 구축하고, 설계지원, 프로젝트 지원등의 업무를 지원받으려고 해. "
     "대신에 퍼시스는 연간 최소 마감재 발주량이 있는 형식이야. 혹시 위 계약서가 "
     "하도급법 또는 공정거래법 또는 건설산업기본법 등에 문제가 되지 않는지 판단해줘."
+)
+# 2026-09-02 실제 두 번째 세션 재현 — 사용자가 "공정거래법"을 문언으로
+# 언급하지 않고 "그외 법령"이라고만 했는데, 최소구매의무·직접거래제한·
+# 위약벌이라는 명백한 공정거래법 쟁점이 통째로 누락된 사고.
+REVIEW_FOCUS_GENERIC_OTHER_LAW = (
+    "퍼시스(우리회사)가 인테리어 사업을 하는데, 마코디 라는 업체와 업무협약을 체결하고, "
+    "설계업무를 지원받고 자재를 구매하고자 함. 단 우리쪽에 의무적으로 자재를 사야하는 내용이 있음. "
+    "건설산업기본법, 하도급법 그외 법령상 문제가 없는지, 우리회사에 불리한 내용이 없는지 검토요청."
 )
 
 
@@ -205,6 +213,65 @@ class StatuteDetectionTest(unittest.TestCase):
 
     def test_no_statutes_detected_when_not_mentioned(self) -> None:
         self.assertEqual(detect_user_cited_statutes("이 조항 좀 봐줘"), [])
+
+    def test_generic_other_law_phrasing_infers_fair_trade_act(self) -> None:
+        """실사례: "그외 법령상 문제가 없는지"라고만 했을 때 최소구매의무·
+        직접거래제한·위약벌 구조로 볼 때 공정거래법이 추가로 잡혀야 한다."""
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        cited = detect_user_cited_statutes(REVIEW_FOCUS_GENERIC_OTHER_LAW)
+        self.assertEqual(set(cited), {"하도급법", "건설산업기본법"})
+        extra = infer_additional_relevant_statutes(
+            review_focus=REVIEW_FOCUS_GENERIC_OTHER_LAW, text=text, already_cited=cited,
+        )
+        self.assertIn("공정거래법", extra)
+
+    def test_no_inference_without_generic_other_law_phrasing(self) -> None:
+        """사용자가 특정 법률만 콕 집어 물었다면(포괄적 "그외 법령" 표현이
+        없다면) 임의로 다른 법률을 추가하지 않는다 — 모든 계약에 무차별
+        적용 방지."""
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        cited = ["하도급법"]
+        extra = infer_additional_relevant_statutes(
+            review_focus="하도급법 문제 있는지만 봐줘", text=text, already_cited=cited,
+        )
+        self.assertEqual(extra, [])
+
+
+class MacodiSeverityCalibrationTest(unittest.TestCase):
+    """2026-09-02 후속 지시 — "부차적 정산 문구가 핵심 경제조항보다 HIGH
+    상단에 올라오지 않도록" 요청. 신설된 Layer-1 규칙 2개(직접거래제한+
+    배액위약벌, 매출연동 최소구매의무)가 실제로 HIGH로 잡히는지, AI 없이도
+    (규칙 엔진만으로) 동작하는지 직접 확인한다."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        cls.bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="", text=text, filename="x.pdf",
+            answers=None, review_focus=None, law_service=None,
+            ai_provider=None, ai_model=None, ai_timeout_sec=None, ai_max_tokens=None, ai_temperature=None,
+        )
+        cls.by_id = {str(cr.get("clause_id") or ""): cr for cr in cls.bundle.clause_results if isinstance(cr, dict)}
+        cls.high_ids = {i.get("clause_id") for i in (cls.bundle.meta.get("high_issues_filtered") or [])}
+
+    def test_direct_dealing_restriction_with_penalty_is_high_on_article_6_3(self) -> None:
+        cr = self.by_id.get("clr_direct_dealing_restriction_with_penalty")
+        self.assertIsNotNone(cr, "제6조 제3항의 직접거래제한+배액위약벌 조합이 탐지되어야 한다")
+        self.assertEqual(cr["display_path"], "제6조 제3항")
+        self.assertEqual(cr["severity"], "HIGH")
+        self.assertEqual(cr.get("original_effect_tags"), ["non_circumvention", "direct_dealing_restriction", "penalty_for_bypass"])
+        self.assertIn("clr_direct_dealing_restriction_with_penalty", self.high_ids)
+
+    def test_minimum_purchase_commitment_is_high_on_article_7_1(self) -> None:
+        cr = self.by_id.get("clr_minimum_purchase_commitment_fixed_by_revenue_ratio")
+        self.assertIsNotNone(cr, "제7조 제1항의 매출연동 최소구매의무가 탐지되어야 한다")
+        self.assertEqual(cr["display_path"], "제7조 제1항")
+        self.assertEqual(cr["severity"], "HIGH")
+        self.assertEqual(cr.get("original_effect_tags"), ["minimum_purchase_commitment"])
+        self.assertIn("clr_minimum_purchase_commitment_fixed_by_revenue_ratio", self.high_ids)
 
 
 if __name__ == "__main__":

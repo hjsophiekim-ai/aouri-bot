@@ -87,6 +87,50 @@ def detect_user_cited_statutes(review_focus: str | None) -> list[str]:
     return found
 
 
+# 사용자가 특정 법률을 나열한 뒤 "그 외 법령"처럼 포괄적으로 추가
+# 검토를 요청하는 경우를 감지한다 — 실사례(2026-09-02): "건설산업기본법,
+# 하도급법 그외 법령상 문제가 없는지" 요청에서 사용자가 "공정거래법"이라는
+# 단어를 쓰지 않았다는 이유로 최소구매의무·직접거래제한·위약벌이라는
+# 명백한 공정거래법 쟁점이 통째로 누락됐다. 사내변호사라면 이런 요청을
+# "나열한 법률 + 실제로 문제될 만한 다른 법률도 봐달라"로 이해한다.
+_GENERIC_OTHER_LAW_MARKERS = [
+    "그외 법령", "그 외 법령", "기타 법령", "다른 법률", "관련 법령",
+    "그 밖의 법률", "그밖의 법률", "그 외에 문제", "그외에 문제", "그 외 문제",
+]
+
+# 각 법률이 실제로 문제될 소지가 있는지를 나타내는 계약 구조 신호(거래
+# 실질) — 법률명이 아니라 그 법률이 규율하는 legal effect의 존재 여부로
+# 판단한다. 계약유형·회사명과 무관한 범용 사전.
+_STRUCTURAL_STATUTE_SIGNALS: dict[str, list[str]] = {
+    "공정거래법": [
+        "최소 발주", "최소발주", "최소 구매", "최소구매", "최소 구입",
+        "배제하고", "직접 거래하지", "직접거래", "위약벌", "배타적", "독점적",
+    ],
+    "대리점법": ["대리점", "재판매가격", "판매장려금", "판촉비"],
+    "하도급법": ["위탁", "하도급", "재위탁"],
+}
+
+
+def infer_additional_relevant_statutes(
+    *, review_focus: str | None, text: str, already_cited: list[str],
+) -> list[str]:
+    """사용자가 "그 외 법령"처럼 포괄적 검토를 요청했다면, 계약의 실제
+    구조 신호로 볼 때 문제될 만한 다른 법률을 추가로 찾아 반환한다.
+    포괄적 요청이 없으면(사용자가 특정 법률만 콕 집어 물었다면) 빈
+    리스트를 반환한다 — 모든 계약에 무차별적으로 법률을 갖다 붙이지
+    않기 위한 안전장치."""
+    rf = review_focus or ""
+    if not any(marker in rf for marker in _GENERIC_OTHER_LAW_MARKERS):
+        return []
+    added: list[str] = []
+    for statute, signals in _STRUCTURAL_STATUTE_SIGNALS.items():
+        if statute in already_cited:
+            continue
+        if any(s in text for s in signals):
+            added.append(statute)
+    return added
+
+
 @dataclass(frozen=True)
 class StatuteApplicabilityResult:
     statute: str

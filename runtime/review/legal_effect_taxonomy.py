@@ -42,6 +42,14 @@ LEGAL_EFFECT_TAGS: tuple[str, ...] = (
     "confidentiality",
     "return_destruction",
     "ethics_morality",
+    # 혼합형 전략제휴/공급계약(2026-09-02 지시)에서 추가된 태그 — 계약
+    # 유형과 무관하게 "우리 회사에 장기적 경제적 구속·영업자유 제한이
+    # 있는가"를 판단하기 위한 legal effect.
+    "minimum_purchase_commitment",
+    "non_circumvention",
+    "direct_dealing_restriction",
+    "penalty_for_bypass",
+    "rebate_or_support_payment",
 )
 
 # Each tag maps to a list of (regex, requires_dotall) fairly specific phrase

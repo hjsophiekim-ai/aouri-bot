@@ -3440,9 +3440,18 @@ def build_clause_level_result(
     # 이유로 이 답까지 사라지면 안 된다.
     from runtime.review.legal_applicability_review import (
         detect_user_cited_statutes,
+        infer_additional_relevant_statutes,
         build_mandatory_legal_applicability_review,
     )
     _cited_statutes = detect_user_cited_statutes(review_focus)
+    # 사용자가 특정 법률을 나열한 뒤 "그 외 법령"처럼 포괄적 검토를
+    # 요청했다면, 실제 계약 구조상 문제될 만한 다른 법률도 놓치지 않는다
+    # (2026-09-02 실사례: "하도급법, 건설산업기본법 그외 법령상 문제가
+    # 없는지"라는 요청에서 공정거래법이 문언에 없다는 이유만으로 통째로
+    # 누락됨).
+    _cited_statutes = _cited_statutes + infer_additional_relevant_statutes(
+        review_focus=review_focus, text=str(text or ""), already_cited=_cited_statutes,
+    )
     _legal_applicability_results = build_mandatory_legal_applicability_review(
         statutes=_cited_statutes,
         contract_legal_map=_legal_map.to_dict(),
