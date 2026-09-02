@@ -11,10 +11,12 @@ from runtime.review.word_markers import contains_wordprocessingml_markers
 # extract_clauses() only ever mints clause_ids with these prefixes: "KR-" for
 # 조/항/호-segmented Korean contracts, "EN-" for English "Article N" contracts,
 # "P-" for the unstructured-paragraph fallback when no heading pattern is
-# found at all. Any other clause_id format belongs to a rule-engine-injected
-# finding (e.g. clr_*, tsr_*, MI-/MR-, DLR-*, isr_/pi_/svc_/sppc_/mi_/CP-) and
-# was never meant to correspond to a raw segmented clause.
-REAL_SEGMENT_ID_PREFIXES = ("KR-", "EN-", "P-")
+# found at all, "AP-" for a trailing [별표]/부속서 appendix section split off
+# from the article it used to be absorbed into. Any other clause_id format
+# belongs to a rule-engine-injected finding (e.g. clr_*, tsr_*, MI-/MR-,
+# DLR-*, isr_/pi_/svc_/sppc_/mi_/CP-) and was never meant to correspond to a
+# raw segmented clause.
+REAL_SEGMENT_ID_PREFIXES = ("KR-", "EN-", "P-", "AP-")
 
 
 def is_real_segment_clause_id(clause_id: str) -> bool:
@@ -362,6 +364,64 @@ def _strip_stray_circled_number_tail(text: str) -> str:
     return text[: m.start()].rstrip()
 
 
+_RX_APPENDIX_HEAD = re.compile(
+    r"^\[\s*(별표|부속서|첨부(?:\s*서류)?|Appendix|Schedule|Exhibit)\s*\]\s*(.*)$",
+    re.IGNORECASE,
+)
+_RX_SIGNATURE_BLOCK_START = re.compile(
+    r"^(계약\s*체결일|체결일|계약일)\s*[:：]"
+    r"|^(갑|을)\s*[\(（](甲|乙)[\)）]\s*$"
+)
+
+
+def _split_trailing_appendix_and_signature(
+    body_lines: list[str],
+) -> tuple[list[str], list[tuple[str, list[str]]]]:
+    """A trailing "[별표]" appendix table and/or a bilingual signature block
+    (계약일/사업자등록번호/대표/주소/날인) that follows the LAST numbered
+    paragraph of an article has no heading of its own, so the segmenter used
+    to absorb it wholesale into that paragraph's leaf clause — a real
+    strategic-partnership 계약 confirmed this: the entire [별표] 지원금 rate
+    table plus both parties' full signature block ended up quoted inside
+    "제16조 제4항 [기타]", so a legitimate 별표/제8조 정산구조 finding was
+    misattributed to 제16조④ instead. Cut the article's body at the first
+    such marker: an appendix marker starts its own separately reviewable
+    chunk (it references real clause content, e.g. 제8조 rates); a signature
+    marker is pure boilerplate and is dropped entirely, never quoted in any
+    finding.
+    """
+    app_idx: int | None = None
+    app_title = ""
+    sig_idx: int | None = None
+    for i, line in enumerate(body_lines):
+        l = (line or "").strip()
+        if not l:
+            continue
+        if app_idx is None:
+            m = _RX_APPENDIX_HEAD.match(l)
+            if m:
+                app_idx = i
+                app_title = (m.group(1) or "").strip()
+                continue
+        if sig_idx is None and _RX_SIGNATURE_BLOCK_START.match(l):
+            sig_idx = i
+            if app_idx is not None:
+                break
+
+    if app_idx is None and sig_idx is None:
+        return body_lines, []
+
+    cut_idx = app_idx if app_idx is not None else sig_idx
+    clause_body = body_lines[:cut_idx]
+    appendix_sections: list[tuple[str, list[str]]] = []
+    if app_idx is not None:
+        appendix_end = sig_idx if (sig_idx is not None and sig_idx > app_idx) else len(body_lines)
+        appendix_lines = body_lines[app_idx:appendix_end]
+        if appendix_lines:
+            appendix_sections.append((app_title or "별표", appendix_lines))
+    return clause_body, appendix_sections
+
+
 def _parse_kr_article_hierarchy(
     *,
     base_clause_id: str,
@@ -619,9 +679,32 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
         end = idxs[j + 1]
         head = titles.get(start) or ids.get(start) or f"C-{j+1:03d}"
         body_lines = [x for x in lines[start + 1 : end] if (x or "").strip()]
+        body_lines, appendix_sections = _split_trailing_appendix_and_signature(body_lines)
+
+        def _flush_appendix_sections() -> None:
+            for ap_title, ap_lines in appendix_sections:
+                ap_num = sum(1 for c in out if c.clause_id.startswith("AP-")) + 1
+                ap_text = _norm_text("\n".join(ap_lines))
+                if ap_text:
+                    out.append(
+                        ClauseChunk(
+                            clause_id=f"AP-{ap_num}",
+                            article_number=None,
+                            paragraph_number=None,
+                            item_number=None,
+                            subitem_number=None,
+                            display_path=f"[{ap_title}]",
+                            parent_clause_id=None,
+                            context_text=None,
+                            title=ap_title,
+                            text=ap_text,
+                        )
+                    )
+
         body = _norm_text("\n".join(body_lines))
         full_text = _norm_text((head + "\n" + body).strip()) if body else _norm_text(head)
         if not full_text:
+            _flush_appendix_sections()
             continue
         cid = ids.get(start) or f"C-{j+1:03d}"
         article_number = None
@@ -640,6 +723,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
                 body_lines=body_lines,
             )
             out.extend(hier)
+            _flush_appendix_sections()
             continue
 
         if len(full_text) > 2200:
@@ -678,6 +762,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
                     text=full_text,
                 )
             )
+        _flush_appendix_sections()
 
     headings_found = any(not (c.clause_id or "").startswith("P-") for c in out)
     rep = ClauseExtractionReport(

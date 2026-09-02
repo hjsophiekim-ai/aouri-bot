@@ -519,13 +519,23 @@ def _filter_and_sort_issues(
     medium = [i for i in medium_all if i.is_mandatory_target] + [i for i in medium_all if not i.is_mandatory_target][:max_medium]
     low = [i for i in all_issues if i.severity == "LOW"]
 
-    # Sort within HIGH/MEDIUM: CP first, then MI, then others by confidence
+    # Sort within HIGH/MEDIUM: CP first, then MI, then deterministic common-legal-
+    # risk rule hits (clr_* — a regex-confirmed match on the actual clause text,
+    # e.g. direct-dealing restriction + penalty, minimum purchase commitment),
+    # then other (typically AI-free-generated) findings by confidence. Without
+    # this, a real economic/commercial risk clr_ finding could sort below a
+    # generic AI-flagged procedural clause (e.g. a symmetric mutual termination
+    # right) that happens to carry a higher confidence score, even though the
+    # clr_ finding is the one with real negotiation weight (실제 협상에서 중요한
+    # 상업·법률 리스크가 부차적 조항보다 하단에 노출되는 문제 방지).
     def _sort_key(i: ReviewIssue) -> tuple:
         if i.clause_id.startswith("CP-"):
             return (0, i.clause_id, -i.confidence)
         if i.clause_id.startswith("MI-"):
             return (1, i.clause_id, -i.confidence)
-        return (2, "", -i.confidence)
+        if i.clause_id.startswith("clr_"):
+            return (2, i.clause_id, -i.confidence)
+        return (3, "", -i.confidence)
 
     high.sort(key=_sort_key)
     medium.sort(key=_sort_key)

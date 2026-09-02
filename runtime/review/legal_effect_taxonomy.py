@@ -50,6 +50,7 @@ LEGAL_EFFECT_TAGS: tuple[str, ...] = (
     "direct_dealing_restriction",
     "penalty_for_bypass",
     "rebate_or_support_payment",
+    "delegated_design_or_construction_service",
 )
 
 # Each tag maps to a list of (regex, requires_dotall) fairly specific phrase

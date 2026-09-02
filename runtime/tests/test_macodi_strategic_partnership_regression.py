@@ -21,9 +21,13 @@ from pathlib import Path
 from typing import Any
 
 from runtime.ai.provider import AIResponse, AIUsage
+from runtime.review.clause_extraction import extract_clauses
 from runtime.review.clause_level import build_clause_level_result
+from runtime.review.common_legal_risk import _apply_common_legal_risk_rules
 from runtime.review.contract_classifier import classify_contract_detailed
+from runtime.review.korean_polish import polish_korean_legal_style
 from runtime.review.legal_applicability_review import detect_user_cited_statutes, infer_additional_relevant_statutes
+from runtime.review.severity_reclassifier import demote_symmetric_mutual_termination
 from runtime.review.text_extract import assess_text_quality
 from runtime.rules.loader import RuleLoader
 from runtime.services.query_service import RuleQueryService, TRIGGER_MAP
@@ -317,6 +321,114 @@ class MacodiSeverityCalibrationTest(unittest.TestCase):
         self.assertEqual(cr["severity"], "HIGH")
         self.assertEqual(cr.get("original_effect_tags"), ["minimum_purchase_commitment"])
         self.assertIn("clr_minimum_purchase_commitment_fixed_by_revenue_ratio", self.high_ids)
+
+
+class AppendixAndSignatureBlockSegmentationTest(unittest.TestCase):
+    """2026-09-02 세 번째 후속 피드백 — 제16조 제4항이 HIGH로 잘못 잡힌
+    원인을 추적한 결과, [별표] 지원금 정산표와 양 당사자 서명블록(사업자
+    등록번호/대표/주소/날인) 전체가 제16조 제4항의 leaf clause에 그대로
+    흡수되어 있었다("이건 별표/제8조 finding으로 잡는 게 더 정확해").
+    clause_extraction.py가 조 번호 뒤에 붙는 부속서/서명블록을 별도
+    세그먼트(AP-*)로 분리하는지, 서명블록 자체는 완전히 제거되는지 확인."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        cls.chunks, cls.report = extract_clauses(text)
+        cls.by_id = {c.clause_id: c for c in cls.chunks}
+
+    def test_article16_paragraph4_no_longer_contains_appendix_or_signature(self) -> None:
+        cr = self.by_id.get("KR-16-p4")
+        self.assertIsNotNone(cr)
+        for leaked in ("별표", "사업자등록번호", "대표", "날인", "스페이스시프트", "㈜퍼시스"):
+            self.assertNotIn(leaked, cr.text, f"{leaked!r}가 제16조 제4항에 남아있으면 안 된다")
+
+    def test_appendix_split_into_its_own_segment(self) -> None:
+        ap_chunks = [c for c in self.chunks if c.clause_id.startswith("AP-")]
+        self.assertEqual(len(ap_chunks), 1)
+        self.assertEqual(ap_chunks[0].display_path, "[별표]")
+        self.assertIn("현장지원금", ap_chunks[0].text)
+        self.assertIn("제8조", ap_chunks[0].text)
+
+    def test_signature_block_dropped_from_every_segment(self) -> None:
+        for c in self.chunks:
+            for leaked in ("사업자등록번호", "날인 (印)", "스페이스시프트 (Macodi)"):
+                self.assertNotIn(leaked, c.text, f"서명블록 {leaked!r}가 {c.clause_id}에 남아있으면 안 된다")
+
+
+class DelegatedDesignConstructionServiceGapTest(unittest.TestCase):
+    """2026-09-02 세 번째 후속 피드백 — 제5조의 설계·시공 위탁 구조가
+    적용법률 섹션에는 나오지만 실제 조항 finding으로는 없었던 공백을
+    메우는 신설 Layer-1 규칙(clr_delegated_design_construction_service_gap)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        cls.bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="", text=text, filename="x.pdf",
+            answers=None, review_focus=None, law_service=None,
+            ai_provider=None, ai_model=None, ai_timeout_sec=None, ai_max_tokens=None, ai_temperature=None,
+        )
+        cls.by_id = {str(cr.get("clause_id") or ""): cr for cr in cls.bundle.clause_results if isinstance(cr, dict)}
+
+    def test_article5_delegated_design_construction_gap_detected(self) -> None:
+        cr = self.by_id.get("clr_delegated_design_construction_service_gap")
+        self.assertIsNotNone(cr, "제5조 제1항의 설계·시공 위탁 구조 공백이 탐지되어야 한다")
+        self.assertEqual(cr["display_path"], "제5조 제1항")
+        self.assertEqual(cr["severity"], "MEDIUM")
+        self.assertEqual(cr.get("original_effect_tags"), ["delegated_design_or_construction_service"])
+
+
+class SymmetricMutualTerminationDemotionTest(unittest.TestCase):
+    """2026-09-02 세 번째 후속 피드백 — "제11조 제1항을 HIGH 1순위로 올린
+    건 과해. 30일 전 자유해지는 양 당사자에게 대칭적으로 부여된 권리라서
+    보통은 MEDIUM 정도가 자연스러워." 양측에 동일하게 부여된 통지기간부
+    해지권은 HIGH -> MEDIUM으로 강등되고, 비대칭 해지권(일방 배제)은
+    그대로 HIGH를 유지하는지 확인."""
+
+    def test_article11_paragraph1_symmetric_termination_demoted(self) -> None:
+        text = "① 양 당사자는 상대방에게 30일 전까지 서면으로 통지함으로써 본 협약을 해지할 수 있다."
+        new_sev, demoted = demote_symmetric_mutual_termination("HIGH", text)
+        self.assertEqual(new_sev, "MEDIUM")
+        self.assertTrue(demoted)
+
+    def test_asymmetric_termination_not_demoted(self) -> None:
+        text = "갑은 을에게 즉시 계약 해지를 통보할 수 있으며, 을은 그러하지 아니하다."
+        new_sev, demoted = demote_symmetric_mutual_termination("HIGH", text)
+        self.assertEqual(new_sev, "HIGH")
+        self.assertFalse(demoted)
+
+    def test_non_high_severity_untouched(self) -> None:
+        text = "① 양 당사자는 상대방에게 30일 전까지 서면으로 통지함으로써 본 협약을 해지할 수 있다."
+        new_sev, demoted = demote_symmetric_mutual_termination("MEDIUM", text)
+        self.assertEqual(new_sev, "MEDIUM")
+        self.assertFalse(demoted)
+
+
+class KoreanPolishForceMajeureNoticeTest(unittest.TestCase):
+    """2026-09-02 세 번째 후속 피드백 — "제12조 제4항 수정안에 '상당한
+    기간을 정하여 최고한 후 갑에게 서면으로 통지'라는 문구는 문맥상
+    이상해. 불가항력이나 공급망 차질은 사전에 '최고'할 대상이 아니니까,
+    단순히 즉시 통지 + 대체조치가 맞아." korean_polish.py가 "즉시"라는
+    단어를 문맥과 무관하게 전부 치환하던 버그(str.replace)를 해지/해제/
+    종료 바로 앞의 "즉시"만 치환하는 정규식으로 좁힌 수정을 검증한다."""
+
+    def test_immediate_notice_obligation_not_rewritten_as_cure_demand(self) -> None:
+        t = (
+            "을은 그 사유를 알게 된 즉시 갑에게 통지하고, 대체 자재의 안내 등 "
+            "손해의 확대를 방지하기 위한 합리적인 조치를 이행한다."
+        )
+        out = polish_korean_legal_style(t)
+        self.assertIn("즉시 갑에게 통지", out)
+        self.assertNotIn("최고", out)
+
+    def test_immediate_termination_still_gets_cure_demand_inserted(self) -> None:
+        t = "갑은 을에게 즉시 해지를 통보할 수 있다."
+        out = polish_korean_legal_style(t)
+        self.assertIn("상당한 기간을 정하여 최고한 후 해지", out)
 
 
 if __name__ == "__main__":

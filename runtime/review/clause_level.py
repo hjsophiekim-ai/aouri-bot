@@ -5003,6 +5003,37 @@ def build_clause_level_result(
                 elif _new_sev == "MEDIUM" and _cur_sev == "LOW":
                     _cr["review_tier"] = "SUGGEST"
 
+    # ── [Severity Reclassifier] 대칭적 상호 해지권 HIGH 강등 (모든 계약유형) ──
+    # 양 당사자에게 동일하게 부여된 통지기간부 해지권(예: "양 당사자는 상대방에게
+    # 30일 전 서면으로 통지하여 계약을 해지할 수 있다")은 일방적 리스크가 아니라
+    # 균형잡힌 상호 조항이므로, AI가 HIGH로 판단했더라도 실제 협상상 중요도가
+    # 더 큰 일방적 경제 리스크(직접거래제한+위약벌, 최소구매약정 등) 위에 노출되지
+    # 않도록 MEDIUM으로 강등한다.
+    from runtime.review.severity_reclassifier import demote_symmetric_mutual_termination
+    for _cr in clause_results:
+        if not isinstance(_cr, dict):
+            continue
+        if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")) or bool(_cr.get("is_checklist_item")):
+            continue
+        if bool(_cr.get("is_common_legal_risk")):
+            continue
+        _cur_sev2 = str(_cr.get("risk_tier") or "LOW").upper()
+        _new_sev2, _demoted = demote_symmetric_mutual_termination(
+            severity=_cur_sev2,
+            clause_text=str(_cr.get("original_text") or ""),
+        )
+        if _demoted and _new_sev2 != _cur_sev2:
+            _cr["risk_tier"] = _new_sev2
+            _cr["severity"] = _new_sev2
+            _cr["high_risk"] = False
+            _cr["approval_required"] = False
+            _cr["must_fix"] = False
+            _cr["auto_severity_downgrade"] = ["symmetric_mutual_termination"]
+            if bool(_cr.get("has_rewrite_change")):
+                _cr["display_kind"] = "guidance"
+            else:
+                _cr["display_kind"] = "note"
+
     _dedup_rewrite_suggestions(clause_results)
     for cr in clause_results:
         if isinstance(cr, dict):

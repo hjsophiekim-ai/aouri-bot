@@ -135,6 +135,42 @@ def reclassify_setoff_clause(current_severity: str, clause_text: str) -> str:
     return sev
 
 
+_RX_SYMMETRIC_MUTUAL_TERMINATION = re.compile(
+    r"(양\s*당사자|각\s*당사자|상호|쌍방).{0,60}(?:상대방에게)?.{0,30}\d+\s*(?:일|개월)\s*전.{0,20}"
+    r"(?:서면으로?\s*)?통지.{0,30}해지",
+    re.DOTALL,
+)
+_RX_ASYMMETRIC_TERMINATION_EXCLUSION = re.compile(
+    r"갑에?\s*한하여|을은\s*그러하지\s*아니|일방만|편면적|갑만\s*해지|을만\s*해지",
+)
+
+
+def demote_symmetric_mutual_termination(severity: str, clause_text: str) -> tuple[str, bool]:
+    """A termination right granted *symmetrically* to both parties by the same
+    short-notice mechanism (e.g. "양 당사자는 상대방에게 30일 전 서면으로
+    통지하여 계약을 해지할 수 있다") is a balanced, mutually-available exit
+    right, not a one-sided commercial risk — real negotiation on it is usually
+    about adding a settlement/handover clause for in-flight work, not about
+    the termination right itself. Left at AI-assigned HIGH, it can crowd out
+    genuine one-sided economic risks (direct-dealing restriction + penalty,
+    minimum purchase commitment, etc.) at the top of the HIGH tier. Cap it at
+    MEDIUM unless the clause text itself carries an asymmetric-exclusion
+    marker (one party is exempted from the same right, so it is not actually
+    symmetric).
+
+    Returns (new_severity, demoted). Never upgrades — only ever HIGH -> MEDIUM.
+    """
+    sev = (severity or "LOW").upper()
+    if sev != "HIGH":
+        return sev, False
+    t = clause_text or ""
+    if not _RX_SYMMETRIC_MUTUAL_TERMINATION.search(t):
+        return sev, False
+    if _RX_ASYMMETRIC_TERMINATION_EXCLUSION.search(t):
+        return sev, False
+    return "MEDIUM", True
+
+
 def reclassify_for_consignment_dealer(
     severity: str,
     clause_text: str,
