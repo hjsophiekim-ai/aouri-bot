@@ -3434,10 +3434,13 @@ def build_clause_level_result(
     _contract_overview_dict = {**_contract_overview.to_dict(), **_legal_map.to_dict()}
 
     # [Mandatory Legal Applicability Review] 2026-09-02 지시 — 사용자가
-    # review_focus에서 특정 법률(하도급법/공정거래법/건설산업기본법 등)의
-    # 적용 여부를 직접 물었다면, rule hit 개수와 무관하게 그 법률 각각에
-    # 대한 독립적인 분석 결과를 반드시 산출한다. finding이 0건이라는
-    # 이유로 이 답까지 사라지면 안 된다.
+    # review_focus에서 특정 법률의 적용 여부를 직접 물었다면 rule hit
+    # 개수와 무관하게 그 법률 각각에 대한 독립적인 분석을 반드시 산출한다.
+    # 이어서(2026-09-02 후속 지시) 사용자가 법률을 하나도 지정하지 않아도,
+    # AI가 사용 가능하면 build_mandatory_legal_applicability_review()가
+    # 계약 구조를 스스로 읽고 문제될 만한 법률을 자체 판단해 추가한다
+    # (사내변호사가 의뢰인이 안 물어본 법률도 먼저 짚어주는 것과 동일한
+    # 원칙) — 그래서 _cited_statutes가 비어 있어도 이 함수는 항상 호출한다.
     from runtime.review.legal_applicability_review import (
         detect_user_cited_statutes,
         infer_additional_relevant_statutes,
@@ -5824,10 +5827,13 @@ def build_clause_level_result(
     ]
     meta["legal_applicability_review"] = [r.to_dict() for r in _legal_applicability_results]
     meta["user_cited_statutes"] = _cited_statutes
+    # 사용자가 명시적으로 지정한 법률(_cited_statutes)만 "누락되면 실패"
+    # 대상이다 — AI가 스스로 추가 판단한 법률(source="ai_self_identified")
+    # 은 사용자가 요청한 것이 아니므로 빠져도 REVIEW_FAILED 사유가 아니다.
     _missing_statutes = [
         r.statute for r in _legal_applicability_results
-        if r.source != "ai"
-    ] if _cited_statutes else []
+        if r.statute in _cited_statutes and r.source != "ai"
+    ]
     if _missing_statutes:
         meta["review_status"] = "REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING"
         meta["review_status_detail"] = f"AI 분석 없이 확인 필요 상태로 남은 법률: {', '.join(_missing_statutes)}"

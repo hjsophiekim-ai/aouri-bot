@@ -103,6 +103,28 @@ def _run_pipeline():
     return bundle, stub
 
 
+class _SelfDiscoveryStubAIProvider(_StubAIProvider):
+    """법률적용성 검토 호출에서, 사용자가 요청하지 않은 법률(공정거래법)을
+    AI가 스스로 추가 판단해 반환하는 상황을 재현한다(2026-09-02 지시:
+    "사용자가 법률을 언급하지 않아도 AI가 스스로 판단")."""
+
+    def complete(self, req):
+        payload = json.loads(req.messages[-1].content)
+        if "contract_legal_map" in payload:
+            resp = [
+                {
+                    "statute": "공정거래법",
+                    "applicability": "높음",
+                    "reasoning": "최소구매의무·직접거래제한·위약벌 구조로 볼 때 거래상 지위 남용 소지가 있다.",
+                    "additional_facts_needed": ["시장 내 지위 확인 필요"],
+                    "related_clauses": ["제6조", "제7조"],
+                    "risk_level": "HIGH",
+                },
+            ]
+            return AIResponse(content=json.dumps(resp, ensure_ascii=False), usage=AIUsage(10, 10, 20), raw=None)
+        return super().complete(req)
+
+
 class MacodiClassificationTest(unittest.TestCase):
     """title_zone에서 raw contract_type 라벨 제거 수정(2026-09-02) —
     stale "NDA 비밀유지계약서" 힌트가 주어져도 실제 문서 내용 기준으로
@@ -224,6 +246,29 @@ class StatuteDetectionTest(unittest.TestCase):
             review_focus=REVIEW_FOCUS_GENERIC_OTHER_LAW, text=text, already_cited=cited,
         )
         self.assertIn("공정거래법", extra)
+
+    def test_ai_self_identifies_statute_when_user_mentions_none(self) -> None:
+        """사용자가 법률을 하나도 지정하지 않아도(review_focus에 법률명
+        없음), AI가 사용 가능하면 스스로 판단해 관련 법률을 추가해야 한다
+        — 실제 AI로 확인된 동작(문서 참고)을 stub으로 배선 검증."""
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        stub = _SelfDiscoveryStubAIProvider()
+        bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="", text=text, filename="x.pdf",
+            answers=None, review_focus="이 계약서 좀 검토해줘.", law_service=None,
+            ai_provider=stub, ai_model="stub-model", ai_timeout_sec=30.0, ai_max_tokens=2000, ai_temperature=0.2,
+        )
+        meta = bundle.meta
+        self.assertEqual(meta.get("user_cited_statutes"), [])
+        review = meta.get("legal_applicability_review")
+        self.assertEqual(len(review), 1)
+        self.assertEqual(review[0]["statute"], "공정거래법")
+        self.assertEqual(review[0]["source"], "ai_self_identified")
+        # 사용자가 요청하지 않았으므로, 이게 없다고 REVIEW_FAILED가 되면 안 된다
+        self.assertNotEqual(meta.get("review_status"), "REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING")
 
     def test_no_inference_without_generic_other_law_phrasing(self) -> None:
         """사용자가 특정 법률만 콕 집어 물었다면(포괄적 "그외 법령" 표현이

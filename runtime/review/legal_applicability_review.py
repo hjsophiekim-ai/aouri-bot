@@ -165,18 +165,41 @@ def _stub_result(statute: str, source: str) -> StatuteApplicabilityResult:
     )
 
 
-_SYSTEM_PROMPT_TEMPLATE = """당신은 특정 법률의 적용 가능성을 판단하는 사내변호사입니다.
-사용자가 아래에 나열된 법률 각각에 대해 이 계약에 적용될 수 있는지 물었습니다.
-각 법률마다 키워드가 있는지가 아니라 실제 거래의 실질(무엇을 누구에게 위탁/
-공급/판매하는지, 당사자의 실제 역할)을 먼저 분석한 뒤 판단하십시오. 사실관계가
-불명확하면 결론을 단정하지 말고 "적용 가능성 있음(추가 확인 필요)"로 답하고
-확인이 필요한 사실관계를 구체적으로 나열하십시오 — 근거 없이 위반을 단정하는
-것이 근거 없이 안전하다고 단정하는 것보다 더 위험합니다.
+_SYSTEM_PROMPT_TEMPLATE = """당신은 계약을 검토하고 관련 법률의 적용 가능성을 판단하는 사내변호사입니다.
+
+{requested_section}
+
+사용자는 법률 전문가가 아닐 수 있습니다 — 사용자가 지정한 법률명을 무조건
+정답으로 믿지 마십시오. 사용자가 지정한 법률이더라도 실제로는 이 계약에
+적용되지 않거나 사용자가 법률명을 잘못 알고 있을 가능성을 열어두고 처음부터
+직접 판단하십시오. 만약 사용자가 지정한 법률이 실제로는 이 계약과 관련이
+낮다고 판단되면, 그 결과를 숨기지 말고 "적용 가능성: 낮음"으로 정직하게
+답하되 reasoning에 왜 낮은지와 함께 실제로 문제되는 법률이 따로 있다면
+무엇인지 반드시 언급하십시오(그 법률은 별도 항목으로도 추가하십시오).
+
+사용자가 특정 법률을 지정했는지와 무관하게, 당신 스스로 이 계약 내용을
+검토하여 실제로 문제될 소지가 있는 다른 법률이 있는지 반드시 함께 판단하고
+목록에 추가하십시오 — 실무에서 사내변호사는 의뢰인이 묻지 않은 법률이라도,
+심지어 의뢰인이 엉뚱한 법률을 물었더라도, 계약 구조상 실제 위험이 되는
+법률을 먼저 짚어줍니다. 예: 최소구매·직접거래 제한·위약벌 구조가 있으면
+공정거래법/대리점법, 제조 사양을 지정한 위탁이 있으면 하도급법, 실제
+시공 위탁이 있으면 건설산업기본법, 개인정보 처리위탁이 있으면 개인정보
+보호법처럼, 계약의 실제 거래구조에 근거해 판단하십시오. 민법·상법처럼
+모든 상거래에 일반적으로 적용되는 법률은 나열하지 말고, 이 계약의 구체적
+구조 때문에 특별히 문제될 수 있는 법률만 추가하십시오(추가분은 합쳐서
+최대 3개까지). 근거가 약하면 억지로 추가하지 말고 생략하십시오 — 없으면
+없는 대로 두는 것이 근거 없이 나열하는 것보다 낫습니다.
+
+각 법률마다 키워드가 있는지가 아니라 실제 거래의 실질(무엇을 누구에게
+위탁/공급/판매하는지, 당사자의 실제 역할)을 먼저 분석한 뒤 판단하십시오.
+사실관계가 불명확하면 결론을 단정하지 말고 "적용 가능성 있음(추가 확인
+필요)"로 답하고 확인이 필요한 사실관계를 구체적으로 나열하십시오 — 근거
+없이 위반을 단정하는 것이 근거 없이 안전하다고 단정하는 것보다 더 위험합니다.
 
 반드시 아래 JSON 배열 하나만 반환하십시오(설명 문장 금지, 마크다운 코드펜스 금지):
 [
   {{
-    "statute": "법률명(요청된 이름 그대로)",
+    "statute": "법률명",
     "applicability": "높음" | "있음(추가 확인 필요)" | "낮음",
     "reasoning": "거래실질 분석에 근거한 판단 이유 (2~4문장)",
     "additional_facts_needed": ["확인이 필요한 구체적 사실관계", ...] (없으면 빈 배열),
@@ -186,10 +209,9 @@ _SYSTEM_PROMPT_TEMPLATE = """당신은 특정 법률의 적용 가능성을 판�
   ...
 ]
 
-각 법률에 대한 구체적 판단 프레임:
-{guidance_blocks}
-
-요청된 법률 목록: {statute_list}"""
+일부 법률에 대한 구체적 판단 프레임(목록에 없는 법률은 일반적인 적용 요건
+— 주체·행위·목적물 — 을 계약 내용에 비추어 판단하십시오):
+{guidance_blocks}"""
 
 
 def build_mandatory_legal_applicability_review(
@@ -204,29 +226,41 @@ def build_mandatory_legal_applicability_review(
     ai_max_tokens: int | None,
     ai_temperature: float | None,
 ) -> list[StatuteApplicabilityResult]:
-    """statutes에 있는 모든 법률에 대해 독립적인 적용성 분석 결과를
-    반환한다 — AI가 없거나 호출이 실패해도 각 법률마다 최소한 "확인 필요"
-    stub을 반환해, 어떤 법률도 조용히 결과 없이 사라지지 않는다."""
-    if not statutes:
-        return []
+    """statutes(사용자가 명시적으로 지정한 법률)에 대해 독립적인 적용성
+    분석 결과를 반환한다 — AI가 없거나 호출이 실패해도 각 법률마다 최소한
+    "확인 필요" stub을 반환해, 어떤 법률도 조용히 결과 없이 사라지지 않는다.
 
+    사용자가 법률을 하나도 지정하지 않았어도 AI가 사용 가능하면 항상 이
+    함수를 호출해야 한다 — AI가 계약 구조를 스스로 읽고 문제될 만한 법률을
+    자체 판단하여 추가한다(source="ai_self_identified"). 사용자가 지정한
+    법률이 없고 AI도 없으면 반환할 것이 없으므로 빈 리스트를 반환한다."""
     ai_enabled = bool(ai_provider and ai_model and ai_timeout_sec is not None and ai_max_tokens is not None and ai_temperature is not None)
     if not ai_enabled:
         return [_stub_result(s, "stub_no_ai") for s in statutes]
 
+    if statutes:
+        requested_section = (
+            "사용자가 아래 법률 각각에 대해 이 계약에 적용될 수 있는지 명시적으로 물었습니다 "
+            f"— 이 법률들은 반드시 결과에 포함하십시오: {', '.join(statutes)}"
+        )
+    else:
+        requested_section = "사용자는 특정 법률을 지정하지 않았습니다 — 아래 지침에 따라 당신이 스스로 관련 법률을 판단하십시오."
+
     guidance_blocks = "\n".join(
-        f"- {s}: {_STATUTE_SPECIFIC_GUIDANCE.get(s, '일반적인 법률 적용 요건(주체·행위·목적물)을 계약 내용에 비추어 판단하십시오.')}"
-        for s in statutes
+        f"- {s}: {g}" for s, g in _STATUTE_SPECIFIC_GUIDANCE.items()
     )
-    system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(guidance_blocks=guidance_blocks, statute_list=", ".join(statutes))
+    system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(requested_section=requested_section, guidance_blocks=guidance_blocks)
 
     lm = contract_legal_map or {}
     lm_summary = {k: v for k, v in lm.items() if not k.startswith("_") and v}
     import json as _json
+    # 키 이름을 "contract_text"로 하지 않는다 — Contract Legal Map 호출의
+    # payload도 "contract_text" 키를 쓰므로, 두 호출을 payload shape로
+    # 구분하는 테스트/코드가 이 둘을 혼동하지 않도록 별도 키 이름을 쓴다.
     user_payload = {
         "entity": entity,
         "contract_legal_map": lm_summary,
-        "contract_text": (text or "")[:14000],
+        "review_target_text_excerpt": (text or "")[:14000],
     }
     user = _json.dumps(user_payload, ensure_ascii=False)
 
@@ -253,14 +287,7 @@ def build_mandatory_legal_applicability_review(
         if isinstance(item, dict) and isinstance(item.get("statute"), str):
             by_statute[item["statute"].strip()] = item
 
-    results: list[StatuteApplicabilityResult] = []
-    for s in statutes:
-        item = by_statute.get(s)
-        if item is None:
-            # AI가 이 법률을 응답에서 빠뜨린 경우 — 조용히 생략하지 않고
-            # stub으로라도 채운다.
-            results.append(_stub_result(s, "ai_call_failed"))
-            continue
+    def _parse_item(s: str, item: dict[str, Any], source: str) -> StatuteApplicabilityResult:
         applicability = str(item.get("applicability") or "").strip()
         if applicability not in ("높음", "있음(추가 확인 필요)", "낮음"):
             applicability = "있음(추가 확인 필요)"
@@ -269,13 +296,27 @@ def build_mandatory_legal_applicability_review(
             risk_level = "MEDIUM"
         additional_facts = item.get("additional_facts_needed")
         related_clauses = item.get("related_clauses")
-        results.append(StatuteApplicabilityResult(
+        return StatuteApplicabilityResult(
             statute=s,
             applicability=applicability,
             reasoning=str(item.get("reasoning") or "").strip() or "판단 근거가 제공되지 않았습니다.",
             additional_facts_needed=[str(x) for x in additional_facts if isinstance(x, str)] if isinstance(additional_facts, list) else [],
             related_clauses=[str(x) for x in related_clauses if isinstance(x, str)] if isinstance(related_clauses, list) else [],
             risk_level=risk_level,
-            source="ai",
-        ))
+            source=source,
+        )
+
+    results: list[StatuteApplicabilityResult] = []
+    for s in statutes:
+        item = by_statute.pop(s, None)
+        if item is None:
+            # 사용자가 명시적으로 지정한 법률을 AI가 응답에서 빠뜨린 경우 —
+            # 조용히 생략하지 않고 stub으로라도 채운다.
+            results.append(_stub_result(s, "ai_call_failed"))
+            continue
+        results.append(_parse_item(s, item, "ai"))
+    # 사용자가 지정하지 않았는데 AI가 스스로 추가로 판단한 법률 — 조용히
+    # 버리지 않고 별도 source로 표시해 함께 노출한다.
+    for s, item in by_statute.items():
+        results.append(_parse_item(s, item, "ai_self_identified"))
     return results

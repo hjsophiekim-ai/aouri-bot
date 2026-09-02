@@ -798,10 +798,12 @@ def build_legal_review_docx(
             facts = [str(x) for x in (item.get("additional_facts_needed") or []) if isinstance(x, str)]
             clauses_ref = [str(x) for x in (item.get("related_clauses") or []) if isinstance(x, str)]
             risk = str(item.get("risk_level") or "")
+            source = str(item.get("source") or "")
+            _self_id_tag = " (AI 자체 판단 — 사용자가 직접 요청하지 않음)" if source == "ai_self_identified" else ""
             _color = COLOR_HIGH if risk == "HIGH" else (COLOR_MEDIUM if risk == "MEDIUM" else None)
             p_st = _p(body)
             r_st = _r(p_st, bold=True, color=_color)
-            _t(r_st, f"■ {statute} — 적용 가능성: {applicability}" + (f" [{risk}]" if risk else ""))
+            _t(r_st, f"■ {statute} — 적용 가능성: {applicability}" + (f" [{risk}]" if risk else "") + _self_id_tag)
             _para(body, f"판단 이유: {reasoning}", indent=1)
             if clauses_ref:
                 _para(body, f"관련 조항: {', '.join(clauses_ref)}", indent=1)
