@@ -5034,6 +5034,14 @@ def build_clause_level_result(
             else:
                 _cr["display_kind"] = "note"
 
+    # ── [GLOBAL_CROSS_CLAUSE_VALIDATION] 이미 다른 조항에서 해결된 "부재"
+    # finding 제거 (모든 계약유형) ──────────────────────────────────────────
+    # 조항 단위(또는 AI의 단일 clause 호출) 검토는 문서 전체를 보지 못하므로,
+    # "이 조항에는 준거법/분쟁해결/책임상한 조항이 없다"는 finding이 실제로는
+    # 계약서의 다른 조항에 이미 있는 내용을 다시 지적하는 오탐일 수 있다.
+    from runtime.review.global_cross_clause_validation import apply_global_cross_clause_validation
+    apply_global_cross_clause_validation(clause_results, str(text or ""))
+
     _dedup_rewrite_suggestions(clause_results)
     for cr in clause_results:
         if isinstance(cr, dict):

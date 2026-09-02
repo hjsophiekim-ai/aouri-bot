@@ -51,6 +51,20 @@ UNIVERSAL_FIELDS: tuple[str, ...] = (
     # (runtime/review/legal_map_role_override.py가 실제 override를 적용).
     "our_role_direction",
     "our_role_direction_confidence",
+    # ── Transaction Map 필드 (2026-09-02 지시 — 범용 사내변호사형 검토
+    # 고도화, KOTRA 3자 컨설팅계약 실사례) — 처음 보는 계약유형에서도 "돈이
+    # 어디서 흐르고 누가 누구의 책임을 떠안는지"를 조항 검토 전에 먼저
+    # 구조화한다. 3자 이상 계약을 2자 계약처럼 단순화하지 않도록 party_
+    # rights_obligations_matrix를 별도로 요청한다.
+    "economic_beneficiary",
+    "third_party_payer_or_guarantor",
+    "conditional_funding_structure",
+    "advance_payment_exists",
+    "refund_or_clawback_obligation_holder",
+    "guarantee_structure",
+    "failure_loss_allocation",
+    "termination_settlement_structure",
+    "party_rights_obligations_matrix",
 )
 
 # NDA류 계약일 때만 추가로 요청하는 확장 필드.
@@ -80,7 +94,44 @@ _SYSTEM_PROMPT = """당신은 계약서 전체를 처음부터 끝까지 읽고 
 primary_obligations, payment_flow, term, termination_structure,
 liability_structure, indemnity_structure, third_party_liability,
 unilateral_rights, survival_obligations, amendment_structure, key_deliverables,
-our_role_direction, our_role_direction_confidence.
+our_role_direction, our_role_direction_confidence, economic_beneficiary,
+third_party_payer_or_guarantor, conditional_funding_structure,
+advance_payment_exists, refund_or_clawback_obligation_holder,
+guarantee_structure, failure_loss_allocation, termination_settlement_structure,
+party_rights_obligations_matrix.
+
+아래 9개 필드는 "Transaction Map"입니다 — 돈이 실제로 어디서 흐르고, 누가
+누구의 책임을 떠안는지를 조항 하나하나를 보기 전에 먼저 파악하는 것이
+목적이므로, 계약이 몇 당사자든, 처음 보는 계약유형이든 반드시 채우십시오:
+- economic_beneficiary: 이 계약의 급부(서비스·재화 등)로 실제 경제적
+  이익을 얻는 당사자는 누구인가(대금을 지급하는 당사자와 다를 수 있음 —
+  예: 제3자가 비용을 대고 다른 당사자가 서비스를 받는 구조).
+- third_party_payer_or_guarantor: 계약당사자가 아닌 제3자, 또는 당사자 중
+  하나가 다른 당사자를 위해 대금을 지급·보증·지원하는 구조인지, 있다면
+  누가 누구를 위해 그렇게 하는지.
+- conditional_funding_structure: 정부지원금·보조금·투자금·보험금 등 특정
+  조건(자격 유지, 별도 참여계약 이행 등)이 충족되어야만 지급되는 조건부
+  자금이 있는지, 조건은 무엇인지, 조건 미충족 시 어떻게 되는지.
+- advance_payment_exists: 선급금(계약 이행 전 또는 이행 중 결과물 완성
+  전에 지급되는 대금)이 있는지, 있다면 규모와 지급 시점.
+- refund_or_clawback_obligation_holder: 선급금·지원금 등을 반환해야 하는
+  사유가 발생했을 때, 그 반환채무를 누가 부담하는지(급부를 제공하지 못한
+  당사자인지, 아니면 그 당사자를 위해 다른 당사자가 보증하는지).
+- guarantee_structure: 한 당사자의 채무(반환·이행 등)를 다른 당사자가
+  보증·연대책임지는 구조가 있는지, 있다면 누가 누구의 어떤 채무를
+  보증하는지 구체적으로 서술.
+- failure_loss_allocation: 핵심 급부(서비스·재화 등)의 이행이 실패했을 때,
+  그로 인한 경제적 손실이 최종적으로 어느 당사자에게 귀속되는지 — 이행
+  실패의 원인 제공자와 손실 부담자가 다를 수 있음에 주의.
+  - termination_settlement_structure: 계약 종료(만료·중도해지 불문) 시
+  미정산 대금, 기지급금의 환급, clawback(사후 회수) 등이 어떻게
+  처리되는지.
+- party_rights_obligations_matrix: 당사자가 3인 이상인 계약에서는 절대로
+  2자 계약처럼 단순화하지 말고, 각 당사자별로 "제공하는 것/받는 것/지급
+  의무/보증 의무/실패 시 책임"을 짧게 표로 서술(문자열로, 예:
+  "A: 대금지급 조건부 / B: 서비스 제공 및 실패시 반환의무 / C: A를 대신해
+  B의 반환채무 보증"). 당사자가 2인이면 간단히 "2자 계약, matrix 불필요"로
+  답해도 됩니다.
 
 our_role_direction은 반드시 아래 세 값 중 하나만 사용하십시오(다른 표현 금지):
 - "provider": 우리 회사(our_party)가 이 계약의 핵심 급부(재화, 용역, 자금,

@@ -51,6 +51,10 @@ LEGAL_EFFECT_TAGS: tuple[str, ...] = (
     "penalty_for_bypass",
     "rebate_or_support_payment",
     "delegated_design_or_construction_service",
+    # KOTRA 3자 컨설팅계약(2026-09-02 지시, 범용 사내변호사형 검토 고도화)에서
+    # 확인된, 계약유형과 무관하게 적용되는 추가 legal effect.
+    "third_party_debt_guarantee",
+    "counterparty_broad_self_liability_shield",
 )
 
 # Each tag maps to a list of (regex, requires_dotall) fairly specific phrase

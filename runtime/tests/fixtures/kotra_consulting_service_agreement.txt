@@ -1,0 +1,108 @@
+CONSULTING SERVICE AGREEMENT
+
+This Consulting Service Agreement (this "Agreement") is made and entered into on [DATE (to be inserted by KOTRA)], by and between:
+
+(1)    [Fursys, Inc], a corporation duly organized and existing under the laws of the Republic of Korea, having its principal place of business at [311 Ogeum-ro, Songpa-gu, Seoul], the Republic of Korea ("Company"); and
+(2)    [HRology Group], a corporation duly organized and existing under the laws of [United States of America], having its principal office at [110 E Wilshire Ave Ste 101 #5, Fullerton, CA 92832] ("Consultant"); and
+(3)    Korea Trade Investment Promotion Agency, a non-profit government organization duly organized and existing under the law of the Republic Korea, having its principal place of business at 4801 Wilshire Blvd, Suite 104, Los Angeles, CA 90010 ("KOTRA").
+
+Article 1     Subject Matter
+
+1.1    Company intends to appoint Consultant, and Consultant accepts such appointment, to perform the [consulting services] described in Appendix 1 (the "Services") in accordance with the scope, deliverables, and schedule set forth therein.
+
+1.2         KOTRA is willing to support Company under the [Hidden Champion Program] for the [Services of Consultant] in the amount defined in Article 4 of this Agreement; provided, however, that KOTRA shall be held responsible for such payment only when Company remains in the [Hidden Champion Program] and Company duly provides its share of expenses to KOTRA under the [Hidden Champion Program] Participation Agreement. KOTRA shall bear no legal liability under this Agreement except for the payment to consultant for the Services and shall be indemnified against all claims, damages, losses and expenses arising in relation to the consultant's Services under this Agreement.
+
+Article 2     Duration
+Subject to the provisions for the termination under Article 5 below, this Agreement shall become effective from the moment of its signing by all three parties and shall remain in effect until [12/31/2026]. This Agreement shall end upon expiration of the said term, unless all parties agree otherwise in writing.
+Article 3    Rights and Obligations
+
+3.1    Consultant shall complete the Services and deliver all the result materials to the Company and KOTRA by [12/31/2026].
+
+3.2    Consultant shall provide to Company and KOTRA the information on performance of the Services, including the progress or results of the Services by the end of every month.
+
+3.3    Company shall provide Consultant with necessary documents to perform the Services and KOTRA shall make payment for the Services in the amount defined in Article 4 below.
+
+3.4    If Consultant fails to complete the Services by the agreed date above, Consultant shall be responsible for paying KOTRA 10 % of total amount of compensation under this Agreement for each day of delay.
+
+Article 4    Payment
+
+4.1     KOTRA shall pay Consultant a total of [USD  $33,750] in accordance with the following schedule and conditions:
+
+-    [$8,437.50]: by 9/30/2026; and
+-    [$8,437.50]: by 10/31/2026; and
+-    [$8,437.50]: by 11/30/2026; and
+-    [$8,437.50]: by 12/31/2026 upon receipt of invoice with the Certificate of Completion
+
+4.2     Consultant will be responsible for sending out the invoice to KOTRA 15 days before the payment date.
+
+4.3     In case that consultant fails to start and continue works by this agreement after advanced payment (the 1st payment), Company shall guarantee that consultant shall return the amount paid by KOTRA in accordance with clause 4.1. Otherwise, Company shall be directly responsible for its payback and return.
+
+4.4     KOTRA shall make payment by check or telegraphic transfer to the Consultant's account as follows.
+
+[ACH Transfer Information]
+-    Bank Name:
+-    Account No.(ACH):
+-    Routing No.(ACH)
+-    Bank Address:
+-    Beneficiary Name:
+-    Beneficiary Address:
+-    Beneficiary Phone No.:
+
+Article 5    Termination
+
+5.1    This Agreement shall terminate upon the last day of the duration set forth in Article 2 above.
+5.2    This Agreement may be terminated by KOTRA, Company or Consultant with a prior written notice of [30] days, without further cause, in any of the following cases:
+
+(1)    By mutual agreement in writing of the parties;
+
+(2)    By the non-defaulting party, in the event of default by the other party in the due performance of its obligations under this Agreement, and the default is not remedied within [30] days after receipt of written notice of default from the non-defaulting party;
+
+(3)    By the other party, either party making an assignment for the benefit of creditors, or being adjudged bankrupt or insolvent, or filing any petition seeking for itself any arrangement for dissolution and liquidation of its interests;
+
+(4)    By either party, if a force majeure condition under Article 7 below makes it unreasonable to proceed with this Agreement in the foreseeable future;
+
+(5)    By Company if Consultant commits any intentional acts that materially impair or damage the goodwill, business or property of Company; or
+
+(6)    By Company's evaluation on Consultant's performance [1] month after the date of this Agreement.
+
+Article 6    Indemnification
+
+Each party shall indemnify the other parties against all claims, damages, losses, and expenses, including reasonable attorney's fees, arising out of one's duty hereunder that are caused in whole or in part by the indemnifying party's intentional or negligent acts or omissions, acts in excess of authority granted hereunder, or acts of those employed or associated by the indemnifying party.
+
+Article 7     Force Majeure
+
+The parties shall be suspended from liability for force majeure circumstances (i.e. natural disasters, industrial disturbances, strikes and lockouts, wars, riots, fires, storms, explosions, legislative amendments, etc.) during the continuance of the cause, provided the cause is remedied with reasonable dispatch. The party which is affected by force majeure circumstances shall inform the other parties of such circumstances no later than [14] days.
+
+Article 8    Confidential Information
+
+8.1    By virtue of this Agreement, a party ("Disclosing Party") may disclose its confidential information ("Confidential Information") to the other parties ("Receiving Party"). The Receiving Party agrees that it will not use or disclose such Confidential Information and proprietary information during the term of this Agreement or at any time thereafter, without the express written consent of the Disclosing Party, except only as necessary to effectuate the terms of this Agreement.
+
+8.2    The Receiving Party agrees that the provision of this Article shall survive the termination (for any reason) or breach of this Agreement. In the event of the Receiving Party's violation of its duty under this Article, the Disclosing Party may, in addition to pursuing its other remedies, obtain equitable injunctive relief from any court of competent jurisdiction as may be necessary or reasonable to enjoin any such violation of the foregoing restraints.
+
+Article 9    Governing Law and Arbitration
+
+9.1     This Agreement shall be governed and interpreted by the laws of [Republic of Korea].
+
+9.2    In case of any dispute arising out of, or in connection with this Agreement, the parties shall take all necessary actions to settle amicably by negotiations between the parties. If a dispute is not settled amicably, it shall be finally settled by arbitration in [Seoul], in accordance with and governed by the laws of [Republic of Korea]. English language shall be used in the arbitral proceedings.
+
+COMPANY    CONSULTANT               KOTRA
+Name: Jung Hee Park    Name: HRology    Name:
+Date: 09/01/26               Date:
+Title: CEO    Title:                      Date:
+
+Appendix 1
+
+Scope of Services
+
+Project Objectives
+The Company has identified a need to establish a structured HR and administrative framework and to enhance its overall operational practices. In particular, as the Company plans to hire and manage local employees in the State of California, it is necessary to establish a compliant HR infrastructure. Accordingly, the Company intends to engage an outsourced HR service provider.
+
+Scope of Services
+1.    Foundational HR and Compliance Framework : Development and implementation of an Employee Handbook and HR policies and procedures in compliance with applicable federal and California state employment laws.
+2.    HR Infrastructure Implementation : Establishment and administration of digital HR systems, including payroll, employee benefits, and related HR processes.
+3.    HR Operations and Outsourcing : Ongoing management and administration of day-to-day HR operations and outsourced HR services.
+4.    HR Business Partnership (HRBP) : Strategic HR partnership and advisory support for the Company's management team and executives.
+
+Deliverables
+1.    Employee Handbook and HR Policies
+2.    Final Consulting Report summarizing findings, recommendations, and implementation guidance

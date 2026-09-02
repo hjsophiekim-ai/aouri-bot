@@ -553,6 +553,98 @@ def _parse_kr_article_hierarchy(
     return out
 
 
+def _parse_en_paragraph_start(line: str, article_number: str) -> tuple[str, str] | None:
+    """Match an English "N.M " numbered-paragraph marker (e.g. "3.4 If
+    Consultant fails...") at the start of a line, only when N equals the
+    article this body belongs to — so a stray decimal number elsewhere in
+    the text (a date, a percentage) can never be mistaken for a paragraph
+    heading of a *different* article."""
+    l = (line or "").strip()
+    if not l:
+        return None
+    m = re.match(r"^(\d{1,3})\.(\d{1,2})\s+(.*)$", l)
+    if not m:
+        return None
+    if m.group(1) != article_number:
+        return None
+    return m.group(2), (m.group(3) or "").strip()
+
+
+def _parse_en_article_hierarchy(
+    *,
+    base_clause_id: str,
+    article_number: str,
+    title: str,
+    body_lines: list[str],
+) -> list[ClauseChunk]:
+    """English-contract analogue of `_parse_kr_article_hierarchy` — splits an
+    "Article N" body into its "N.1", "N.2", ... numbered paragraphs so each
+    gets its own leaf clause instead of the whole article (every paragraph
+    concatenated) being treated as one undifferentiated chunk.
+
+    Without this, an AI or rule-engine pass over "Article 3" as a single
+    ~600-word blob has to notice, on its own, that 3.4's uncapped 10%-per-day
+    penalty is a materially different issue from 3.1-3.3's delivery/reporting
+    duties — confirmed against a real KOTRA 3자 컨설팅계약 where exactly this
+    happened: Article 3.4 (10%/day, no cap) and Article 4.3 (Company
+    guarantees Consultant's refund debt) were both missed or under-weighted
+    while sitting inside Article 3's and Article 4's single merged chunk.
+    """
+    lines = [x for x in body_lines if (x or "").strip()]
+    para_blocks = _split_blocks(lines, lambda l: _parse_en_paragraph_start(l, article_number))
+    if not para_blocks:
+        full = _norm_text("\n".join(lines))
+        head = _norm_text(title)
+        text = _norm_text((head + "\n" + full).strip()) if full else head
+        return [
+            ClauseChunk(
+                clause_id=base_clause_id,
+                article_number=article_number,
+                paragraph_number=None,
+                item_number=None,
+                subitem_number=None,
+                display_path=f"Article {article_number}",
+                parent_clause_id=None,
+                context_text=None,
+                title=title,
+                text=text,
+            )
+        ]
+
+    article_head = f"Article {article_number}" + (f" {title}" if title else "")
+    # Any text before the first "N.1" marker (e.g. an unnumbered intro
+    # sentence) belongs to the article as a whole, not to any one paragraph —
+    # carried as context only, mirroring the Korean parser's article_intro.
+    first_marker_idx = None
+    for i, line in enumerate(lines):
+        if _parse_en_paragraph_start(line, article_number):
+            first_marker_idx = i
+            break
+    article_intro = _norm_text("\n".join(lines[: first_marker_idx or 0])) if first_marker_idx is not None else ""
+
+    out: list[ClauseChunk] = []
+    for (pn, para_first), para_body in para_blocks:
+        para_lines = [x for x in ([para_first] + para_body) if (x or "").strip()]
+        para_text = _norm_text("\n".join(para_lines))
+        para_path = f"Article {article_number}.{pn}"
+        ctx = "\n".join([x for x in [article_head, article_intro] if x])
+        out.append(
+            ClauseChunk(
+                clause_id=f"{base_clause_id}.{pn}",
+                article_number=f"{article_number}.{pn}",
+                paragraph_number=pn,
+                item_number=None,
+                subitem_number=None,
+                display_path=para_path,
+                parent_clause_id=base_clause_id,
+                context_text=_norm_text(ctx) if ctx else None,
+                title=title,
+                text=para_text,
+            )
+        )
+    return out
+
+
 def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionReport]:
     if contains_wordprocessingml_markers(text):
         rep = ClauseExtractionReport(
@@ -602,13 +694,20 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             ids[i] = "KR-" + _normalize_clause_id(num)
             continue
 
-        m2 = re.match(r"^(Article\s+(?:\d{1,3}|[IVXLC]{1,10}))\.?\s*(.*)$", l, flags=re.IGNORECASE)
+        m2 = re.match(r"^Article\s+(\d{1,3}|[IVXLC]{1,10})\.?\s*(.*)$", l, flags=re.IGNORECASE)
         if m2:
             idxs.append(i)
-            art = (m2.group(1) or "").strip()
+            num = (m2.group(1) or "").strip()
             rest = (m2.group(2) or "").strip()
-            titles[i] = (art + (" " + rest if rest else "")).strip()
-            ids[i] = "EN-" + re.sub(r"\s+", "-", art.strip().upper())
+            titles[i] = ("Article " + num + (" " + rest if rest else "")).strip()
+            # "EN-{number}" (e.g. "EN-1"), matching the same id shape the
+            # "1. TITLE" fallback path below already uses — the article's
+            # bare number (not the whole "Article N" phrase) is what
+            # article_number ends up holding downstream, and what
+            # _parse_en_article_hierarchy() matches "N.M" paragraph markers
+            # against, so it must never be embedded inside a longer token
+            # like the old "ARTICLE-1" id used to produce.
+            ids[i] = "EN-" + num.upper()
             continue
 
     # Phase 1-2: English numbered format "1. TITLE" fallback
@@ -717,6 +816,17 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             cid = f"{cid}.D{seen_ids[cid]}"
         if cid.startswith("KR-") and article_number:
             hier = _parse_kr_article_hierarchy(
+                base_clause_id=cid,
+                article_number=article_number,
+                title=head,
+                body_lines=body_lines,
+            )
+            out.extend(hier)
+            _flush_appendix_sections()
+            continue
+
+        if cid.startswith("EN-") and article_number:
+            hier = _parse_en_article_hierarchy(
                 base_clause_id=cid,
                 article_number=article_number,
                 title=head,

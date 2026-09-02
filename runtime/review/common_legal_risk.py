@@ -625,6 +625,98 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         "legal_effect_tags": ["delegated_design_or_construction_service"],
     },
     {
+        # 범용 사내변호사형 검토 고도화(2026-09-02 지시, KOTRA 3자 컨설팅계약
+        # 실사례) — "Company shall guarantee that Consultant shall return...
+        # Otherwise, Company shall be directly responsible" 구조는 우리 회사가
+        # 제3자(계약상대방)의 채무를 보증하는 것으로, 원칙적으로 HIGH 후보다.
+        # 핵심 질문: 누구의 채무인가(수탁자/상대방) / 우리가 그 채무를
+        # 대신 떠안는가 / 우리가 통제할 수 없는 상대방의 불이행에 우리가
+        # 책임지는가. 특정 계약유형이 아니라 "제3자 채무 보증"이라는 문장
+        # 구조(A shall guarantee that B shall repay ... otherwise A shall be
+        # directly responsible)로 탐지한다 — 영문·국문 계약 모두 대응.
+        "id": "clr_third_party_debt_guarantee",
+        "name": "제3자(상대방)의 채무를 우리 회사가 보증",
+        "present": re.compile(
+            r"guarantee(?:s)?\s+that\b.{0,120}?(?:return|repay|refund).{0,150}?"
+            r"(?:otherwise|failing\s+which).{0,80}?(?:directly\s+responsible|liable)"
+            r"|(?:을|상대방)(?:이|가).{0,20}(?:반환|환불|상환)하지\s*(?:아니|않)하는?\s*경우.{0,60}"
+            r"(?:갑|우리\s*회사|당사)(?:이|가|는).{0,20}(?:연대하여?|직접)?\s*(?:보증|책임)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "risk": "HIGH",
+        "direction": "우리 회사의 보증 범위를 우리가 실제로 통제 가능한 사유(우리 자신의 귀책)로 한정하고, 상대방의 순수한 채무불이행에 대한 무조건적 보증은 삭제하거나 상한을 설정",
+        "reason": "계약상대방(용역수행자)이 대금을 받고도 착수하지 않거나 이행을 중단하는 경우, 그 반환채무를 우리 회사가 직접 책임지고 보증하는 구조다. 상대방의 채무불이행 여부는 우리 회사가 통제할 수 없는 사유임에도, 그 결과에 대한 금전적 책임을 우리가 떠안는다.",
+        "legal_business_reason": (
+            "제3자의 채무를 우리 회사가 보증하는 조항은 상대방의 신용·이행능력 리스크를 우리가 인수하는 것과 같다. "
+            "상대방이 실제로 반환할 자력이 없는 경우 우리 회사가 지급기관(또는 채권자)에게 그 금액을 대신 변제해야 "
+            "하므로, 계약금액 전액이 우리 회사의 잠재적 금전 노출(exposure)이 된다."
+        ),
+        "rewrite": (
+            "Company의 보증 책임은 Company 자신의 귀책사유(예: Company가 Consultant의 선정·관리에 중대한 과실이 있는 "
+            "경우)로 한정하고, Consultant 자신의 단순 채무불이행에 대하여는 Consultant가 직접 반환 책임을 지도록 하며, "
+            "Company의 보증 금액에는 상한(예: 이미 지급받은 선급금 범위 내)을 둔다."
+        ),
+        "negotiation_position": "보증 자체의 삭제보다, 우리 회사의 보증 범위를 우리 귀책사유로 한정하거나 최소한 금액 상한을 두는 것을 우선 요청.",
+        "clause_topic": "other",
+        "legal_effect_tags": ["third_party_debt_guarantee"],
+    },
+    {
+        # 위와 짝을 이루는 두 번째 신규 패턴 — 계약상대방(특히 정부기관·
+        # 지원기관 등 협상력이 강한 당사자)이 스스로의 책임은 결제 의무
+        # 하나로 한정하면서, 용역 관련 모든 청구·손해·비용에 대한 면책을
+        # 우리 쪶(또는 제3의 수행기관)에게 부담시키는 구조.
+        "id": "clr_counterparty_broad_self_liability_shield",
+        "name": "상대방의 광범위한 자기책임 면제 + 우리 쪽 포괄 면책 부담",
+        "present": re.compile(
+            r"shall\s+bear\s+no\s+legal\s+liability.{0,80}?except.{0,120}?shall\s+be\s+indemnified\s+against\s+all\s+claims"
+            r"|(?:갑|을|상대방)(?:은|는).{0,20}(?:본\s*계약과?\s*관련하여)?\s*(?:일체의?|아무런?)\s*법적\s*책임을?\s*지지\s*(?:아니|않)"
+            r"[^.\n]{0,60}(?:모든|일체의)\s*(?:청구|손해|비용)(?:에\s*대하여)?\s*(?:면책|배상)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "risk": "HIGH",
+        "direction": "상대방의 자기책임 면제 범위를 상대방 자신의 고의·중과실이 없는 경우로 한정하고, 우리 쪽이 부담하는 면책 범위도 우리 자신의 귀책사유로 한정",
+        "reason": "계약상대방은 대금 지급 의무 외에는 어떠한 법적 책임도 지지 않으면서, 용역과 관련하여 발생하는 모든 청구·손해·비용에 대한 면책은 우리(또는 제3의 수행기관)가 부담하는 구조다.",
+        "legal_business_reason": (
+            "협상력이 강한 상대방(정부기관·지원기관 등)이 자신의 책임을 대금 지급 하나로 한정하면서 나머지 모든 "
+            "위험을 계약구조상 약자에게 전가하는 전형적인 불균형 구조다. 우리 회사가 실제로 통제할 수 없는 제3자의 "
+            "행위로 인한 청구까지 포괄적으로 떠안게 될 수 있다."
+        ),
+        "rewrite": (
+            "상대방의 책임 면제는 상대방 자신의 고의 또는 중대한 과실이 없는 통상적인 업무 수행에 한정하고, 우리 "
+            "쪽이 부담하는 면책 의무도 우리 자신 또는 우리가 지휘·감독하는 자의 귀책사유로 발생한 청구로 한정한다."
+        ),
+        "negotiation_position": "포괄적 면책 문구 자체보다, 면책 범위를 '귀책사유가 있는 당사자'로 한정하는 것을 우선 요청 — 정부기관 상대 계약에서는 문구 전면 삭제보다 실현 가능성이 높다.",
+        "clause_topic": "other",
+        "legal_effect_tags": ["counterparty_broad_self_liability_shield"],
+    },
+    {
+        # 세 번째 — Article 6류 "무제한 indemnity + attorney's fees" 상호
+        # 면책조항. 위 self_liability_shield와 달리 대칭적(mutual)이지만
+        # cap이 전혀 없고 attorney's fees까지 포함되어 있어 MEDIUM.
+        "id": "clr_uncapped_mutual_indemnity_with_attorney_fees",
+        "name": "무제한 상호 indemnity + attorney's fees, cap 없음",
+        "present": re.compile(
+            r"indemnify\s+the\s+other\s+part(?:y|ies)\s+against\s+all\s+claims,?\s*damages,?\s*losses,?\s*(?:and\s+)?expenses"
+            r".{0,80}?including\s+reasonable\s+attorney"
+            r"|모든\s*청구\s*[,·]\s*손해\s*[,·]\s*비용.{0,40}(?:변호사\s*보수|소송비용)[^.\n]{0,60}(?:배상|면책)",
+            re.IGNORECASE | re.DOTALL,
+        ),
+        "risk": "MEDIUM",
+        "direction": "손해배상·면책 책임에 총액 상한을 설정하고, 간접·결과적 손해(consequential/special damages)는 배상 범위에서 제외",
+        "reason": "모든 청구·손해·비용을 변호사 보수까지 포함하여 상호 면책하는 조항인데, 배상 총액의 상한이나 간접손해 제외 규정이 없어 실제 분쟁 시 배상 범위가 예측 불가능하게 확대될 수 있다.",
+        "legal_business_reason": (
+            "당사자 간 대칭적(상호) 조항이라 하더라도, cap이 없는 all-claims/all-damages 조항은 실제 분쟁에서 변호사 "
+            "보수를 포함한 소송비용까지 그대로 청구 대상이 되어 예상보다 큰 금전적 노출로 이어질 수 있다."
+        ),
+        "rewrite": (
+            "각 당사자의 배상·면책 책임 총액은 본 계약에 따라 지급(또는 수령)한 대금 총액을 한도로 하며, 간접손해· "
+            "결과적 손해·특별손해는 배상 범위에서 제외한다."
+        ),
+        "negotiation_position": "cap 신설을 우선 요청 — 상호 조항이므로 상대방도 같은 보호를 받는 구조라 협상 성사 가능성이 높다.",
+        "clause_topic": "other",
+        "legal_effect_tags": ["uncapped_liability", "indemnity"],
+    },
+    {
         "id": "clr_ethics_morality_termination_waiver_cluster",
         "name": "광범위 윤리·품위의무 + 즉시해지(관련계약 포함) + 손해배상청구 포기",
         "present": re.compile(
@@ -652,10 +744,20 @@ _CLR_ITEMS: list[dict[str, Any]] = [
 
 _RX_LATE_PENALTY_RATE = re.compile(
     r"지체일수\s*당\s*총?\s*[“\"]?대금[”\"]?의\s*(\d+)\s*/\s*(\d+)"
-    r"|지체.{0,10}(?:1\s*)?일.{0,10}당?.{0,10}(\d+(?:\.\d+)?)\s*%",
+    r"|지체.{0,10}(?:1\s*)?일.{0,10}당?.{0,10}(\d+(?:\.\d+)?)\s*%"
+    # 영문 계약(2026-09-02 KOTRA 3자 컨설팅계약 지시) — "10 % of total amount
+    # of compensation ... for each day of delay" 형태. 한글 지체상금 요율만
+    # 잡던 기존 정규식에 "N% ... (for) each/per day (of delay)" 패턴을 추가해
+    # 같은 계산 로직(10일/30일 누적, 상한 유무)이 영문 계약에도 그대로
+    # 적용되게 한다 — KOTRA 전용 규칙이 아니라 언어 확장.
+    r"|(\d+(?:\.\d+)?)\s*%[^.\n]{0,90}?(?:for\s+)?(?:each|per)\s+(?:calendar\s+)?day(?:\s+of\s+delay)?",
     re.IGNORECASE | re.DOTALL,
 )
-_RX_PENALTY_CAP = re.compile(r"(상한|한도|최대|초과할?\s*수\s*없다)", re.IGNORECASE)
+_RX_PENALTY_CAP = re.compile(
+    r"상한|한도|최대|초과할?\s*수\s*없다"
+    r"|\bcap\b|\bmaximum\b|shall\s+not\s+exceed|not\s+to\s+exceed|up\s+to\s+a\s+maximum",
+    re.IGNORECASE,
+)
 
 
 _RX_CONTRACT_TERM_YEARS = re.compile(r"(\d)\s*년\s*(?:간|으로)?\s*(?:한다|간의\s*유효기간)", re.DOTALL)
@@ -899,6 +1001,8 @@ def _apply_late_penalty_uncapped_check(
             rate_pct = float(m.group(1)) / float(m.group(2)) * 100
         elif m.group(3):
             rate_pct = float(m.group(3))
+        elif m.group(4):
+            rate_pct = float(m.group(4))
         else:
             continue
         has_cap = bool(_RX_PENALTY_CAP.search(leaf_text))
