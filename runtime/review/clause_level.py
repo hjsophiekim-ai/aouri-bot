@@ -3433,6 +3433,28 @@ def build_clause_level_result(
     _contract_overview = build_contract_overview(clauses=clauses, full_text=str(text or ""))
     _contract_overview_dict = {**_contract_overview.to_dict(), **_legal_map.to_dict()}
 
+    # [Mandatory Legal Applicability Review] 2026-09-02 지시 — 사용자가
+    # review_focus에서 특정 법률(하도급법/공정거래법/건설산업기본법 등)의
+    # 적용 여부를 직접 물었다면, rule hit 개수와 무관하게 그 법률 각각에
+    # 대한 독립적인 분석 결과를 반드시 산출한다. finding이 0건이라는
+    # 이유로 이 답까지 사라지면 안 된다.
+    from runtime.review.legal_applicability_review import (
+        detect_user_cited_statutes,
+        build_mandatory_legal_applicability_review,
+    )
+    _cited_statutes = detect_user_cited_statutes(review_focus)
+    _legal_applicability_results = build_mandatory_legal_applicability_review(
+        statutes=_cited_statutes,
+        contract_legal_map=_legal_map.to_dict(),
+        text=str(text or ""),
+        entity=str(entity),
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_timeout_sec=ai_timeout_sec,
+        ai_max_tokens=ai_max_tokens,
+        ai_temperature=ai_temperature,
+    )
+
     # [REMOVED] 관련 법령 retrieval 영구 비활성화 — requirement.md > Section Removal Specs
     law_service = None
 
@@ -5791,6 +5813,15 @@ def build_clause_level_result(
         for cr in clause_results
         if isinstance(cr, dict) and cr.get("semantic_mismatch")
     ]
+    meta["legal_applicability_review"] = [r.to_dict() for r in _legal_applicability_results]
+    meta["user_cited_statutes"] = _cited_statutes
+    _missing_statutes = [
+        r.statute for r in _legal_applicability_results
+        if r.source != "ai"
+    ] if _cited_statutes else []
+    if _missing_statutes:
+        meta["review_status"] = "REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING"
+        meta["review_status_detail"] = f"AI 분석 없이 확인 필요 상태로 남은 법률: {', '.join(_missing_statutes)}"
 
     return ClauseLevelResult(
         review={

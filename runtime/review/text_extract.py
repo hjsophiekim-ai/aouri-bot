@@ -19,6 +19,99 @@ class TextExtractionResult:
     error: str | None = None
     raw_markup_text: str | None = None
     meta: dict | None = None
+    # PDF 전용 — 텍스트 추출 품질 판정(assess_text_quality 결과). 다른
+    # 파일 형식(txt/docx/xlsx/hwp)은 항상 None — 임베디드 텍스트를 그대로
+    # 읽으므로 이 품질 문제(스캔/이미지 PDF, CID 폰트 매핑 손상)가 없다.
+    quality: "TextQualityAssessment | None" = None
+
+
+_RX_PAGE_MARKER = re.compile(r"\[페이지\s*(\d+)\]")
+_RX_ARTICLE_MARKER = re.compile(r"제\s*\d+\s*조|Article\s+\d+", re.IGNORECASE)
+_RX_TOKEN = re.compile(r"[가-힣A-Za-z0-9]+")
+
+
+@dataclass
+class TextQualityAssessment:
+    total_chars: int
+    page_count: int
+    per_page_chars: list[int]
+    empty_page_count: int
+    single_char_token_ratio: float
+    has_article_markers: bool
+    verdict: str  # "ok" | "low_quality"
+    reasons: list[str]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total_chars": self.total_chars,
+            "page_count": self.page_count,
+            "per_page_chars": list(self.per_page_chars),
+            "empty_page_count": self.empty_page_count,
+            "single_char_token_ratio": round(self.single_char_token_ratio, 3),
+            "has_article_markers": self.has_article_markers,
+            "verdict": self.verdict,
+            "reasons": list(self.reasons),
+        }
+
+
+def assess_text_quality(text: str) -> TextQualityAssessment:
+    """PDF에서 추출된 텍스트가 실제로 읽을 수 있는 내용인지 판단한다.
+
+    "글자 수가 0이 아니다"는 실제 계약 내용을 담고 있다는 보장이 되지
+    못한다 — 스캔/이미지 PDF나 CID 폰트 매핑이 깨진 PDF는 pdfplumber/
+    pymupdf가 "성공"이라며 상당한 길이의 텍스트를 반환하지만, 실제로는
+    "연 간 전 략 적 파 트 너 십"처럼 글자마다 공백이 끼거나 무관한 기호가
+    섞인 판독 불가능한 문자열인 경우가 있다(2026-09-02 실사례). 이 함수는
+    다음 신호를 종합해 그런 경우를 감지한다:
+      1. 전체 글자 수가 거의 없음(사실상 빈 PDF)
+      2. 페이지 대부분이 비어 있음(이미지 전용 PDF의 전형적 패턴)
+      3. 한글/영문/숫자 토큰 중 "한 글자짜리" 비율이 비정상적으로 높음
+         (정상적인 한글 문장은 조사가 붙은 여러 글자 단어 위주다 — CID
+         매핑이 깨지면 모든 글자 사이에 공백이 들어가 이 비율이 치솟는다)
+      4. 상당한 분량인데 "제N조"/"Article N" 조항 표지가 전혀 없음
+         (실제 계약서라면 거의 항상 등장하는 구조 신호)
+    """
+    t = text or ""
+    total_chars = len(t.strip())
+    reasons: list[str] = []
+
+    page_positions = [(int(m.group(1)), m.start()) for m in _RX_PAGE_MARKER.finditer(t)]
+    per_page_chars: list[int] = []
+    if page_positions:
+        bounds = [p[1] for p in page_positions] + [len(t)]
+        for i in range(len(page_positions)):
+            segment = t[bounds[i]:bounds[i + 1]]
+            segment = _RX_PAGE_MARKER.sub("", segment, count=1).strip()
+            per_page_chars.append(len(segment))
+    page_count = len(per_page_chars)
+    empty_page_count = sum(1 for c in per_page_chars if c < 20)
+
+    tokens = _RX_TOKEN.findall(t)
+    single_char_tokens = sum(1 for tok in tokens if len(tok) == 1)
+    single_char_token_ratio = (single_char_tokens / len(tokens)) if tokens else 0.0
+
+    has_article_markers = bool(_RX_ARTICLE_MARKER.search(t))
+
+    if total_chars < 50:
+        reasons.append("total_chars_near_zero")
+    if page_count >= 2 and empty_page_count >= max(1, int(page_count * 0.5)):
+        reasons.append("majority_pages_empty")
+    if len(tokens) >= 30 and single_char_token_ratio >= 0.35:
+        reasons.append("single_char_token_ratio_too_high")
+    if total_chars >= 500 and not has_article_markers:
+        reasons.append("no_article_markers_despite_length")
+
+    verdict = "low_quality" if reasons else "ok"
+    return TextQualityAssessment(
+        total_chars=total_chars,
+        page_count=page_count,
+        per_page_chars=per_page_chars,
+        empty_page_count=empty_page_count,
+        single_char_token_ratio=single_char_token_ratio,
+        has_article_markers=has_article_markers,
+        verdict=verdict,
+        reasons=reasons,
+    )
 
 
 def _norm_text(s: str) -> str:
@@ -96,11 +189,23 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
 
     if ext == ".pdf":
         try:
-            text = extract_text_from_pdf(file_path)
-            text = _norm_text(_strip_zero_width_and_ctrl(text))
+            extraction = extract_pdf_text_with_quality(file_path)
+            text = _norm_text(_strip_zero_width_and_ctrl(extraction.text))
+            method_label = f"pdf_reader:{extraction.method}"
             if len(text) < min_len:
-                return TextExtractionResult(False, "", "pdf_reader", "extracted text too short")
-            return TextExtractionResult(True, text, "pdf_reader", None)
+                return TextExtractionResult(False, "", method_label, "extracted text too short", quality=extraction.quality)
+            if extraction.quality.verdict != "ok":
+                # 글자 수는 있지만 스캔/이미지 PDF이거나 CID 폰트 매핑이
+                # 깨진 PDF 특유의 판독 불가능한 텍스트다 — native 추출과
+                # OCR 모두 실패한 것으로 취급해 성공 처리하지 않는다.
+                # 호출부(server.py)가 REVIEW_FAILED_TEXT_EXTRACTION으로
+                # 종료해야 한다는 신호로 quality를 그대로 전달한다.
+                return TextExtractionResult(
+                    False, text, method_label,
+                    f"extraction quality low: {', '.join(extraction.quality.reasons)}",
+                    quality=extraction.quality,
+                )
+            return TextExtractionResult(True, text, method_label, None, quality=extraction.quality)
         except Exception as exc:
             return TextExtractionResult(False, "", "pdf_reader", str(exc))
 
@@ -491,35 +596,98 @@ def _extract_page_text_column_aware(page) -> str:
 
 
 def extract_text_from_pdf(file_path: Path) -> str:
-    # 1차: pdfplumber (텍스트 레이어 있는 PDF)
-    import pdfplumber
+    """하위 호환용 단순 wrapper — 품질 정보 없이 텍스트만 필요한 기존
+    호출부를 위해 남겨둔다. 새 코드는 extract_pdf_text_with_quality()를
+    쓸 것."""
+    result = extract_pdf_text_with_quality(file_path)
+    return result.text
 
-    texts: list[str] = []
-    with pdfplumber.open(str(file_path)) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
-            text = _extract_page_text_column_aware(page)
-            if text and text.strip():
-                texts.append(f"[페이지 {page_num}]\n{text.strip()}")
-    if texts:
+
+@dataclass
+class PdfExtractionResult:
+    text: str
+    method: str  # "pdfplumber" | "pymupdf" | "ocr_tesseract"
+    quality: TextQualityAssessment
+    attempts: list[dict[str, object]]
+
+
+def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
+    """PDF 텍스트를 추출하되, 글자 수가 0이 아니라는 것만으로 성공 판정을
+    내리지 않는다. pdfplumber → pymupdf 순으로 시도하고 각 결과를
+    assess_text_quality()로 검사한다 — "ok" 판정이 나오는 첫 결과를 즉시
+    채택하되, 상당한 분량(assess 함수가 신뢰할 만큼 페이지가 있음)인데도
+    모든 native 방법이 "low_quality"(스캔/이미지 PDF, 또는 CID 폰트 매핑이
+    깨진 PDF 특유의 패턴)로 판정되면 OCR(pytesseract, 페이지를 이미지로
+    렌더링 후 문자 인식)로 넘어간다. OCR도 low_quality면 OCR 결과를
+    그대로 반환하고 verdict는 low_quality로 남겨, 호출부(extract_text_
+    from_file)가 REVIEW_FAILED_TEXT_EXTRACTION으로 이어질 신호를 받도록
+    한다 — 텍스트가 있어 보인다는 이유로 조용히 통과시키지 않는다."""
+    attempts: list[dict[str, object]] = []
+
+    def _try(method: str, fn) -> tuple[str, TextQualityAssessment] | None:
+        try:
+            text = fn()
+        except Exception as exc:
+            attempts.append({"method": method, "error": str(exc)})
+            return None
+        if not text or not text.strip():
+            attempts.append({"method": method, "empty": True})
+            return None
+        q = assess_text_quality(text)
+        attempts.append({"method": method, **q.to_dict()})
+        return text, q
+
+    def _pdfplumber() -> str:
+        import pdfplumber
+        texts: list[str] = []
+        with pdfplumber.open(str(file_path)) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                t = _extract_page_text_column_aware(page)
+                if t and t.strip():
+                    texts.append(f"[페이지 {page_num}]\n{t.strip()}")
         return "\n\n".join(texts)
 
-    # 2차: pymupdf (암호화·구조 복잡한 텍스트 PDF)
-    try:
+    def _pymupdf() -> str:
         import fitz
         doc = fitz.open(str(file_path))
-        fitz_texts: list[str] = []
-        for page_num, page in enumerate(doc, 1):
-            text = page.get_text()
-            if text and text.strip():
-                fitz_texts.append(f"[페이지 {page_num}]\n{text.strip()}")
-        doc.close()
-        if fitz_texts:
+        try:
+            fitz_texts: list[str] = []
+            for page_num, page in enumerate(doc, 1):
+                t = page.get_text()
+                if t and t.strip():
+                    fitz_texts.append(f"[페이지 {page_num}]\n{t.strip()}")
             return "\n\n".join(fitz_texts)
-    except Exception:
-        pass
+        finally:
+            doc.close()
 
-    # 3차: OCR (이미지 기반 스캔 PDF)
-    return _ocr_pdf_pages(file_path)
+    def _ocr() -> str:
+        return _ocr_pdf_pages(file_path)
+
+    best: tuple[str, str, TextQualityAssessment] | None = None  # (text, method, quality)
+    for method, fn in (("pdfplumber", _pdfplumber), ("pymupdf", _pymupdf)):
+        r = _try(method, fn)
+        if r is None:
+            continue
+        text, q = r
+        if q.verdict == "ok":
+            return PdfExtractionResult(text=text, method=method, quality=q, attempts=attempts)
+        if best is None or q.total_chars > best[2].total_chars:
+            best = (text, method, q)
+
+    # 두 native 방법 모두 low_quality(또는 아예 텍스트 없음) — 이미지 기반
+    # PDF일 가능성이 높다고 보고 OCR로 넘어간다.
+    r = _try("ocr_tesseract", _ocr)
+    if r is not None:
+        text, q = r
+        if q.verdict == "ok" or best is None or q.total_chars > best[2].total_chars:
+            return PdfExtractionResult(text=text, method="ocr_tesseract", quality=q, attempts=attempts)
+
+    if best is not None:
+        text, method, q = best
+        return PdfExtractionResult(text=text, method=method, quality=q, attempts=attempts)
+
+    empty_q = assess_text_quality("")
+    return PdfExtractionResult(text="", method="none", quality=empty_q, attempts=attempts)
 
 
 def extract_text_from_hwp(file_path: Path) -> str:

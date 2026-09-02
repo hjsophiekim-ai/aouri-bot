@@ -81,7 +81,7 @@ UPLOAD_HTML = r"""<!doctype html>
 <div class="card">
   <h2><span class="section-num">STEP 1</span> 계약서 업로드</h2>
   <div class="row">
-    <input type="file" id="file" accept=".docx,.pdf,.txt,.hwp,.xlsx"/>
+    <input type="file" id="file" accept=".docx,.pdf,.txt,.hwp,.xlsx" onchange="onFileSelected()"/>
     <button class="btn-primary" onclick="doUpload()">업로드 &amp; 분석 시작</button>
   </div>
   <div class="row">
@@ -178,6 +178,17 @@ function toggleRaw() {
 }
 
 /* ─── STEP 1: 업로드 ───────────────────────────────────────── */
+function onFileSelected() {
+  // 새 파일을 고르면 이전 문서용으로 입력했던 계약유형/중점검토 힌트를
+  // 지운다 — 그대로 두면 새 문서에 이전 문서의 값이 그대로 제출된다
+  // (2026-09-02 실사례: 전략적 파트너십 계약이 이전 NDA 리뷰의 "NDA
+  // 비밀유지계약서" 값을 물려받아 0건으로 종료됨).
+  const ctEl = document.getElementById('contractType');
+  const rfEl = document.getElementById('reviewFocus');
+  if (ctEl) ctEl.value = '';
+  if (rfEl) rfEl.value = '';
+}
+
 async function doUpload() {
   const f = document.getElementById('file').files[0];
   if (!f) { alert('파일을 선택하세요'); return; }

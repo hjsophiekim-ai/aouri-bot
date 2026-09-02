@@ -559,6 +559,7 @@ def build_legal_review_docx(
     contract_type_code: str = "general",
     is_counterparty_form: bool = True,
     mandatory_review_targets: list[dict[str, Any]] | None = None,
+    legal_applicability_review: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review DOCX.
 
@@ -746,7 +747,11 @@ def build_legal_review_docx(
     _is_dealer_rental_docx = (contract_type_code == "dealer_rental_service_contract")
     # TOP 5 핵심 리스크 섹션을 폐지했으므로(HIGH 섹션과 중복), 번호를 항상 1씩
     # 당긴다 — dealer_rental은 원래도 TOP 5를 건너뛰었으므로 동작 변화 없음.
-    _sec_offset = -1
+    # 다만 사용자가 특정 법률의 적용 여부를 물어 [관련 법률 적용성] 섹션이
+    # 생기는 경우(2026-09-02 지시)에는 그 섹션이 TOP 5가 있던 자리를 대신
+    # 차지하므로 원래 번호 체계(HIGH=3, MEDIUM=4)를 유지한다.
+    _has_legal_applicability = bool(legal_applicability_review) and not _is_dealer_rental_docx
+    _sec_offset = 0 if _has_legal_applicability else -1
 
     if _is_dealer_rental_docx:
         # ── dealer_rental 전용: 섹션 2 = 역할매트릭스 ──────────────────────────
@@ -777,6 +782,35 @@ def build_legal_review_docx(
     # TOP 5 핵심 리스크 섹션은 폐지 — 바로 뒤 필수수정(HIGH) 섹션과 내용이
     # 사실상 중복되어 문서 가독성을 해쳤다(변호사형 전체계약 판단 지시,
     # 2026-08-31). `top_issues`는 더 이상 별도 섹션으로 렌더링하지 않는다.
+
+    # ── Section 2: 관련 법률 적용성 검토 ────────────────────────────────────
+    # 사용자가 review_focus에서 특정 법률(하도급법/공정거래법/건설산업
+    # 기본법 등)의 적용 여부를 직접 물으면, rule hit·finding 개수와 무관하게
+    # 그 법률 각각에 대한 독립 분석을 반드시 표로 출력한다(2026-09-02 지시).
+    if _has_legal_applicability:
+        _heading1(body, "2. 관련 법률 적용성 검토")
+        for item in legal_applicability_review or []:
+            if not isinstance(item, dict):
+                continue
+            statute = str(item.get("statute") or "")
+            applicability = str(item.get("applicability") or "")
+            reasoning = str(item.get("reasoning") or "")
+            facts = [str(x) for x in (item.get("additional_facts_needed") or []) if isinstance(x, str)]
+            clauses_ref = [str(x) for x in (item.get("related_clauses") or []) if isinstance(x, str)]
+            risk = str(item.get("risk_level") or "")
+            _color = COLOR_HIGH if risk == "HIGH" else (COLOR_MEDIUM if risk == "MEDIUM" else None)
+            p_st = _p(body)
+            r_st = _r(p_st, bold=True, color=_color)
+            _t(r_st, f"■ {statute} — 적용 가능성: {applicability}" + (f" [{risk}]" if risk else ""))
+            _para(body, f"판단 이유: {reasoning}", indent=1)
+            if clauses_ref:
+                _para(body, f"관련 조항: {', '.join(clauses_ref)}", indent=1)
+            if facts:
+                _para(body, "추가 확인 필요 사실관계:", indent=1)
+                for f in facts:
+                    _para(body, f"- {f}", indent=2)
+            _blank(body)
+        _separator(body)
 
     _separator(body)
 

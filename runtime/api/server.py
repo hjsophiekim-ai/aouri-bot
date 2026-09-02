@@ -1737,6 +1737,7 @@ def create_handler(service: RuleQueryService):
                         high_issues_filtered=_docx_final.get("high_issues"),
                         medium_issues_filtered=_docx_final.get("medium_issues"),
                         mandatory_review_targets=_mandatory_target_status,
+                        legal_applicability_review=(clause_meta.get("legal_applicability_review") if isinstance(clause_meta, dict) else None),
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})
@@ -2314,18 +2315,26 @@ def create_handler(service: RuleQueryService):
                     p = Path(tmp_path)
                     extraction = extract_text_from_file(p)
                     if not extraction.success:
+                        _is_quality_failure = extraction.quality is not None and extraction.quality.verdict == "low_quality"
                         _json_response(
                             self,
                             HTTPStatus.OK,
                             {
                                 "filename": filename,
+                                "status": "REVIEW_FAILED_TEXT_EXTRACTION",
                                 "extraction": {
                                     "success": False,
                                     "method": extraction.method,
                                     "error": extraction.error,
+                                    "quality": extraction.quality.to_dict() if extraction.quality else None,
                                 },
                                 "intake": intake_to_dict(intake),
-                                "note": f"텍스트 추출 실패: {extraction.error}. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF OCR 포함)",
+                                "note": (
+                                    "이 문서는 이미지 기반이거나 텍스트 인코딩이 손상되어 있어 native 추출과 OCR 모두 "
+                                    "내용을 읽지 못했습니다. 계약 유형을 임의로 추정하지 않고 검토를 중단합니다."
+                                    if _is_quality_failure
+                                    else f"텍스트 추출 실패: {extraction.error}. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF OCR 포함)"
+                                ),
                             },
                         )
                         return
@@ -2509,24 +2518,31 @@ def create_handler(service: RuleQueryService):
                     extraction = extract_text_from_file(p)
 
                     if not extraction.success:
+                        _is_quality_failure = extraction.quality is not None and extraction.quality.verdict == "low_quality"
                         _json_response(
                             self,
                             HTTPStatus.OK,
                             {
                                 "filename": filename,
+                                "status": "REVIEW_FAILED_TEXT_EXTRACTION",
                                 "extraction": {
                                     "success": False,
                                     "method": extraction.method,
                                     "error": extraction.error,
+                                    "quality": extraction.quality.to_dict() if extraction.quality else None,
                                 },
-                                "classification": {
-                                    "entity": entity or "미상",
-                                    "contract_type": contract_type or "기타/미분류",
-                                    "entity_source": "user_input" if entity else "unavailable",
-                                    "contract_type_source": "user_input" if contract_type else "unavailable",
-                                },
+                                # 추출 실패 시 raw contract_type/entity 입력값을 "classification"
+                                # 이라는 이름으로 되돌려주지 않는다 — 이전 문서에서 남은 stale
+                                # 값이 마치 유효한 분류 결과처럼 클라이언트에 보일 위험이 있다
+                                # (2026-09-02 실사례). extraction이 실패하면 분류 자체가 없다.
+                                "classification": None,
                                 "review": None,
-                                "note": f"텍스트 추출 실패: {extraction.error}. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF OCR 포함)",
+                                "note": (
+                                    "이 문서는 이미지 기반이거나 텍스트 인코딩이 손상되어 있어 native 추출과 OCR 모두 "
+                                    "내용을 읽지 못했습니다. 계약 유형을 임의로 추정하지 않고 검토를 중단합니다."
+                                    if _is_quality_failure
+                                    else f"텍스트 추출 실패: {extraction.error}. 지원 형식: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF OCR 포함)"
+                                ),
                             },
                         )
                         return

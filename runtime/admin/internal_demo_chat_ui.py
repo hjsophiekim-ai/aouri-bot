@@ -243,7 +243,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
               <div style="margin-top:10px;">
                 <div class="label">계약서 첨부</div>
-                <input id="file" type="file" accept=".txt,.docx,.xlsx,.pdf,.hwp" />
+                <input id="file" type="file" accept=".txt,.docx,.xlsx,.pdf,.hwp" onchange="onFileSelected()" />
                 <div style="font-size:12px;color:#888;margin-top:4px;">지원: .txt, .docx, .xlsx, .pdf, .hwp (이미지 PDF는 OCR 자동 처리)</div>
               </div>
 
@@ -651,6 +651,21 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       el.style.color = isError ? 'var(--danger)' : 'var(--primary)';
       el.innerText = msg;
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function onFileSelected() {
+      // 새 파일을 고르면 이전 문서에서 입력했던 계약유형/중점검토 힌트를
+      // 지운다 — 그대로 두면 이전 문서용으로 타이핑한 값(예: "NDA/비밀유지")
+      // 이 새 문서에 그대로 제출되어 canonical classifier조차 이 값을
+      // title 신호로 신뢰해 오분류로 이어질 수 있다(2026-09-02 실사례:
+      // 전략적 파트너십 계약이 이전 NDA 리뷰의 "NDA 비밀유지계약서" 값을
+      // 그대로 물려받아 0건으로 종료됨). entity(법인)는 같은 세션에서
+      // 여러 계약을 검토할 때 보통 그대로 유지되는 값이라 지우지 않는다.
+      const ctEl = document.getElementById('contractType');
+      const rfEl = document.getElementById('reviewFocus');
+      if (ctEl && ctEl.value) ctEl.value = '';
+      if (rfEl && rfEl.value) rfEl.value = '';
+      _setStartMsg('새 파일이 선택되어 계약유형/중점검토 입력값을 초기화했습니다. 필요하면 이 문서에 맞게 다시 입력해 주세요.', false);
     }
 
     async function startReview() {

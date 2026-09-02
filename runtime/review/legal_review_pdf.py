@@ -158,6 +158,7 @@ def build_legal_review_pdf(
     high_issues_filtered: list[dict[str, Any]] | None = None,
     medium_issues_filtered: list[dict[str, Any]] | None = None,
     mandatory_review_targets: list[dict[str, Any]] | None = None,
+    legal_applicability_review: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review PDF.
 
@@ -238,28 +239,56 @@ def build_legal_review_pdf(
     ]
     _body(pdf, "\n".join(lines))
 
-    _heading(pdf, "2. TOP 5 핵심 리스크")
+    _next_sec = 2
+    if legal_applicability_review:
+        # 사용자가 특정 법률(하도급법 등)의 적용 여부를 직접 물으면, rule
+        # hit 개수와 무관하게 그 법률 각각에 대한 독립 분석을 반드시
+        # 출력한다(2026-09-02 지시). DOCX와 동일한 소스를 그대로 렌더링.
+        _heading(pdf, f"{_next_sec}. 관련 법률 적용성 검토")
+        _lines: list[str] = []
+        for item in legal_applicability_review:
+            if not isinstance(item, dict):
+                continue
+            statute = str(item.get("statute") or "")
+            applicability = str(item.get("applicability") or "")
+            risk = str(item.get("risk_level") or "")
+            reasoning = str(item.get("reasoning") or "")
+            clauses_ref = [str(x) for x in (item.get("related_clauses") or []) if isinstance(x, str)]
+            facts = [str(x) for x in (item.get("additional_facts_needed") or []) if isinstance(x, str)]
+            _lines.append(f"■ {statute} — 적용 가능성: {applicability}" + (f" [{risk}]" if risk else ""))
+            _lines.append(f"  판단 이유: {reasoning}")
+            if clauses_ref:
+                _lines.append(f"  관련 조항: {', '.join(clauses_ref)}")
+            for f in facts:
+                _lines.append(f"  - 추가 확인 필요: {f}")
+        _body(pdf, "\n".join(_lines) if _lines else "분석 결과가 없습니다.")
+        _next_sec += 1
+
+    _heading(pdf, f"{_next_sec}. TOP 5 핵심 리스크")
     if not top_issues:
         _body(pdf, "분석된 핵심 리스크가 없습니다.")
     else:
         for idx, issue in enumerate(top_issues, start=1):
             _issue_block(pdf, issue, index=idx)
+    _next_sec += 1
 
-    _heading(pdf, "3. 필수수정 조항 — HIGH")
+    _heading(pdf, f"{_next_sec}. 필수수정 조항 — HIGH")
     if not high_issues:
         _body(pdf, "HIGH 조항이 없습니다.")
     else:
         for issue in high_issues:
             _issue_block(pdf, issue)
+    _next_sec += 1
 
-    _heading(pdf, "4. 권장수정 조항 — MEDIUM")
+    _heading(pdf, f"{_next_sec}. 권장수정 조항 — MEDIUM")
     if not medium_issues:
         _body(pdf, "권장 수정 조항이 없습니다.")
     else:
         for issue in medium_issues:
             _issue_block(pdf, issue)
+    _next_sec += 1
 
-    section_num = 5
+    section_num = _next_sec
     if include_low:
         _heading(pdf, f"{section_num}. 참고 조항 — LOW 부록")
         if not low_issues:

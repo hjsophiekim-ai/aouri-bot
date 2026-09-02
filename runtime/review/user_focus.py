@@ -15,7 +15,12 @@ class UserFocusObjective:
 
 
 _OBJECTIVES: list[UserFocusObjective] = [
-    UserFocusObjective(code="dealer_unfair_disadvantage", title="대리점법상 불이익 제공/거래상 지위 남용", keywords=["불이익", "불이익제공", "거래상", "지위", "남용", "대리점법", "공정거래"]),
+    # "지위"/"거래상"/"남용"을 단독 키워드로 두면(2026-09-02 이전) 계약
+    # 어디에나 흔한 "본 협약상의 지위"(양도금지 조항 등, 대리점법과 무관)
+    # 같은 문구에도 걸려 무관한 조항에 "대리점법상 불이익 제공" finding이
+    # 붙는 실사례가 있었다 — "거래상 지위"/"지위 남용"처럼 실제 법률 용어에
+    # 해당하는 복합구만 남기고 단독 일반 단어는 제거한다.
+    UserFocusObjective(code="dealer_unfair_disadvantage", title="대리점법상 불이익 제공/거래상 지위 남용", keywords=["불이익", "불이익제공", "거래상 지위", "지위 남용", "지위남용", "대리점법", "공정거래"]),
     UserFocusObjective(code="dealer_management_interference", title="경영간섭/영업자율 침해", keywords=["경영간섭", "영업간섭", "인사", "가격", "판매가격", "가격통제", "영업정책", "강제", "지시"]),
     UserFocusObjective(code="dealer_cost_shift", title="비용전가(판촉비/광고비/반품비/원상회복)", keywords=["비용전가", "비용 전가", "비용부담", "판촉비", "판매장려금", "광고비", "반품", "원상회복"]),
     UserFocusObjective(code="termination_abuse", title="계약해지/물량축소/불이익 조치 남용", keywords=["해지", "종료", "물량", "축소", "중단", "불이익", "임의"]),

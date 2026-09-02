@@ -341,7 +341,16 @@ def _classify_type_code(
     # ("비밀유지계약서", "컨설팅 계약서" 등). 본문 어딘가의 약한 단일
     # 키워드보다 표제가 훨씬 신뢰도 높은 신호이므로, 오탐이 잦은 특수
     # 유형(NDA 등)은 표제 신호를 필수 조건으로 요구한다.
-    title_zone = (contract_type + "\n" + text[:200] + "\n" + filename).lower()
+    #
+    # 주의: 여기에 raw contract_type 파라미터(UI/폼이 넘긴 자유 텍스트
+    # 힌트)를 포함하지 않는다 — 2026-09-02 실사례: 이전에 검토한 NDA의
+    # "NDA 비밀유지계약서"라는 값이 새 문서(전략적 파트너십 계약) 업로드에
+    # 그대로 재사용되어, 실제 문서 내용과 무관하게 title 신호를 통과시켜
+    # 전체 계약이 NDA로 오분류됐다. 사용자가 실제로 계약유형을 확인해준
+    # 경우는 이 함수보다 먼저 적용되는 Q-TYPE-001 명시 확인 경로
+    # (_type_code_from_answers)로 처리되므로, 이 title_zone은 반드시
+    # 문서 자체의 신호(본문 서두·파일명)만으로 구성한다.
+    title_zone = (text[:200] + "\n" + filename).lower()
     reasons: list[str] = []
 
     def has(*s: str) -> bool:
