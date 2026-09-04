@@ -4,8 +4,10 @@ import re
 from typing import Any
 
 from runtime.questions.model import Question, QuestionOption
+from runtime.questions.transaction_structure_questions import build_transaction_structure_questions
 from runtime.review.jurisdiction import classify_jurisdiction_profile
 from runtime.review.priority_map import infer_contract_profile
+from runtime.review.transaction_structure_signals import detect_sales_transaction_ambiguity
 from runtime.review.user_focus import parse_user_focus_issues
 
 
@@ -250,7 +252,26 @@ def generate_questions(
     for an NDA). When omitted, behaves as before (text/label-based only).
     """
     lead = _build_type_confirmation_questions(entity=entity, contract_type=contract_type, text=contract_text or "")
-    remaining = max(0, max_questions - len(lead))
+
+    # [거래구조 확인 질문, 2026-09-04 지시] — 판매/위탁판매/대리판매/중개/
+    # 판매지원 계약에서 판매자·소유권 등 핵심 사실관계가 계약 문언만으로
+    # 확정되지 않으면, contract_type_code/contract_class 분류 결과나 사용자가
+    # review_focus에 어떤 키워드를 먼저 썼는지와 무관하게 항상 최우선으로
+    # 노출한다 — 계약유형 오분류(예: 판매지원 용역계약이 advisory로
+    # 오분류)가 있어도 이 신호는 독립적으로 작동해 안전망 역할을 한다.
+    txn_lead: list[Question] = []
+    if detect_sales_transaction_ambiguity(contract_text or ""):
+        txn_lead = build_transaction_structure_questions()
+
+    lead_ids = {q.question_id for q in lead}
+    txn_lead = [q for q in txn_lead if q.question_id not in lead_ids]
+    combined_lead = lead + txn_lead
+    if len(combined_lead) > max_questions:
+        # required 질문이 우선순위 순서 안에서 뒤로 밀려 잘려나가지 않도록,
+        # 자르기 전에만 required-first로 안정 정렬한다(원래의 우선순위
+        # 순서는 required/두 그룹 내부에서 그대로 유지됨).
+        combined_lead = sorted(combined_lead, key=lambda q: not q.required)[:max_questions]
+    remaining = max(0, max_questions - len(combined_lead))
     rest = _generate_questions_inner(
         entity, contract_type, detected_rule_ids,
         law_topics=law_topics, contract_text=contract_text,
@@ -258,8 +279,8 @@ def generate_questions(
         review_focus=review_focus,
         contract_type_code=contract_type_code,
     ) if remaining > 0 else []
-    lead_ids = {q.question_id for q in lead}
-    return lead + [q for q in rest if q.question_id not in lead_ids]
+    combined_lead_ids = {q.question_id for q in combined_lead}
+    return combined_lead + [q for q in rest if q.question_id not in combined_lead_ids]
 
 
 def _build_type_confirmation_questions(*, entity: str, contract_type: str, text: str) -> list[Question]:

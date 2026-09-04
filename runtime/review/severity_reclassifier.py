@@ -171,6 +171,69 @@ def demote_symmetric_mutual_termination(severity: str, clause_text: str) -> tupl
     return "MEDIUM", True
 
 
+_RX_HAS_GOVERNING_LAW = re.compile(
+    r"준거법[은는이가]?\s*[\S ]{0,20}(?:법|법률)(?:으로|을|를)?\s*한다"
+    r"|governed\s+(?:and\s+interpreted\s+)?by\s+the\s+laws?\s+of"
+    r"|이\s*계약(?:서)?은\s*[\S ]{0,20}법(?:을|에)\s*따(?:라|른다)",
+    re.IGNORECASE,
+)
+_RX_HAS_DISPUTE_MECHANISM = re.compile(
+    r"중재(?:에\s*의하여|로)\s*(?:최종\s*)?해결"
+    r"|관할\s*법원(?:은|으로)\s*[\S ]{0,20}(?:로|으로)\s*한다"
+    r"|settled\s+by\s+arbitration|final(?:ly)?\s+settled\s+by\s+arbitration"
+    r"|exclusive\s+jurisdiction",
+    re.IGNORECASE,
+)
+_RX_GOVERNING_LAW_DISPUTE_TOPIC_MARKER = re.compile(
+    r"준거법|governing\s+law|관할\s*법원|중재|arbitration|dispute\s+resolution|jurisdiction",
+    re.IGNORECASE,
+)
+_RX_ABSENCE_CLAIM_MARKER = re.compile(
+    r"없다|부재|누락|명시되어\s*있지\s*않|규정되어\s*있지\s*않|정해져\s*있지\s*않|규정하고\s*있지\s*않"
+    r"|미특정|미설정|특정되지\s*않|설정되지\s*않|불명확"
+    r"|\bmissing\b|\babsent\b|does\s+not\s+specify|not\s+specified|no\s+provision|\blacks?\b"
+    r"|\bunspecified\b|\bunclear\b",
+    re.IGNORECASE,
+)
+
+
+def demote_adequate_governing_law_dispute_clause(
+    severity: str,
+    clause_text: str,
+    clause_title: str = "",
+    rewrite_reason: str = "",
+    legal_business_reason: str = "",
+) -> tuple[str, bool]:
+    """범용 사내변호사형 검토 고도화(2026-09-03 지시) — GLOBAL_CROSS_CLAUSE_
+    VALIDATION은 "이 조항에 준거법/분쟁해결이 없다"는 주장이 실제로는 다른
+    조항에 이미 있을 때만 억제한다. 이 함수는 그와 다른 축이다: 준거법/
+    분쟁해결 조항 그 자체가 이미 준거법 지정 + 완결된 분쟁해결 메커니즘
+    (중재기관/관할법원 + 지역)을 모두 갖추고 있는데도, 그 조항 자체를 검토한
+    finding이 (absence를 주장하지 않는 스타일 비판이라도) HIGH로 남아있는
+    경우를 LOW로 강등한다 — KOTRA 3자 컨설팅계약 Article 9.2(준거법: 대한민국
+    법, 분쟁해결: 서울 중재)가 그 자체로 완결돼 있음에도 HIGH로 과대평가된
+    사례가 이 클래스의 전형이다.
+
+    "이 조항에 X가 없다"는 absence claim이 있는 경우는 이 함수의 대상이
+    아니다(그 경우는 GLOBAL_CROSS_CLAUSE_VALIDATION이 계약 전체를 검색해
+    처리하거나, 실제로 다른 조항에도 없으면 진짜 문제이므로 그대로 둔다).
+
+    Returns (new_severity, demoted). Never upgrades — only ever HIGH -> LOW.
+    """
+    sev = (severity or "LOW").upper()
+    if sev != "HIGH":
+        return sev, False
+    haystack = " ".join(s for s in (clause_title, rewrite_reason, legal_business_reason) if s)
+    if not _RX_GOVERNING_LAW_DISPUTE_TOPIC_MARKER.search(haystack):
+        return sev, False
+    if _RX_ABSENCE_CLAIM_MARKER.search(haystack):
+        return sev, False
+    t = clause_text or ""
+    if not (_RX_HAS_GOVERNING_LAW.search(t) and _RX_HAS_DISPUTE_MECHANISM.search(t)):
+        return sev, False
+    return "LOW", True
+
+
 def reclassify_for_consignment_dealer(
     severity: str,
     clause_text: str,

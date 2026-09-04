@@ -176,8 +176,21 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     .redline .del { color: var(--danger); text-decoration: line-through; font-weight: 900; }
     .guidance { border: 1px solid rgba(31,122,224,0.25); background: rgba(31,122,224,0.07); border-radius: 12px; padding: 10px; color: #0c4a6e; white-space: pre-wrap; }
     .guidance .hintTitle { font-weight: 900; margin: 0 0 6px 0; }
-    .tagHigh { background: var(--dangerSoft); color: var(--danger); border-color: rgba(214,69,69,0.25); }
+    /* 위험도 배지(2026-09-03 지시) — HIGH/필수수정=빨강, MEDIUM/권장수정=주황,
+       LOW/참고=파랑. 단순 글자색이 아니라 배경/테두리/굵기까지 준 pill로 눈에
+       띄게 하고, 승인 필요는 별도의 독립된 배지로 나란히 붙인다. */
+    .clauseTag { font-weight: 800; }
+    .tagHigh { background: var(--dangerSoft); color: var(--danger); border-color: rgba(214,69,69,0.35); border-width: 1.5px; }
+    .tagMedium { background: var(--warnSoft); color: var(--warn); border-color: rgba(180,83,9,0.35); border-width: 1.5px; }
+    .tagLow { background: var(--primarySoft); color: var(--primary); border-color: rgba(31,122,224,0.3); }
     .tagGuide { background: rgba(31,122,224,0.10); color: #0c4a6e; border-color: rgba(31,122,224,0.25); }
+    .approvalBadge {
+      font-size: 12px; font-weight: 900; padding: 4px 9px; border-radius: 999px;
+      background: var(--danger); color: #fff; border: 1.5px solid rgba(214,69,69,0.5);
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .approvalBadge::before { content: "⚠"; }
+    .clauseTagRow { display:flex; align-items:center; gap: 6px; flex-wrap: wrap; }
     .lawList { margin-top: 8px; color: var(--muted); font-size: 12px; }
 
     .composer {
@@ -199,6 +212,9 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       .grid { grid-template-columns: 1fr; }
       .bubble { max-width: 100%; }
       .clauseBody { grid-template-columns: 1fr; }
+      .clauseHead { flex-direction: column; align-items: flex-start; }
+      .clauseTagRow { width: 100%; }
+      .clauseTag, .approvalBadge { font-size: 13px; padding: 5px 10px; }
     }
   </style>
 </head>
@@ -1154,8 +1170,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         title.className = 'clauseTitle';
         const lines = clauseHierarchyLines(it);
         title.innerHTML = lines.map((x, idx) => `<div style="margin-top:${idx===0?0:4}px; padding-left:${idx===0?0:12}px; color:${idx===0?'#102a43':'#5b7086'};">${escapeHtml(x)}</div>`).join('');
-        const tag = document.createElement('div');
-        tag.className = 'clauseTag';
+        const tagRow = document.createElement('div');
+        tagRow.className = 'clauseTagRow';
         const appr = !!it.approval_required;
         const high = !!it.high_risk;
         const focus = !!it.user_focus_hit;
@@ -1164,10 +1180,25 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const ctype = cr0 && cr0.change_type ? String(cr0.change_type) : '';
         const changeBadge = (ctype === 'keep_as_is') ? '유지' : (it.has_rewrite_change ? '수정' : (ctype === 'suppressed' ? '중복생략' : '검토'));
         const priBadge = focus ? '중점' : (fact ? '답변' : '');
-        tag.innerText = (priBadge ? (priBadge + ' · ') : '') + (appr ? '승인 필요' : (high ? '고위험' : '권장/참고')) + ' · ' + changeBadge;
-        tag.className = 'clauseTag ' + (high || appr ? 'tagHigh' : 'tagGuide');
+        // 위험도 배지(2026-09-03 지시) — HIGH/필수수정=빨강, MEDIUM/권장수정=주황,
+        // LOW/참고=파랑. Word/DOCX와 동일한 3분류를 화면에서도 색으로 구분한다.
+        const tier = String(it.risk_tier || '').toUpperCase();
+        const isHigh = tier === 'HIGH' || high || appr;
+        const isMedium = !isHigh && tier === 'MEDIUM';
+        const sevLabel = isHigh ? '필수수정' : (isMedium ? '권장수정' : '참고');
+        const sevClass = isHigh ? 'tagHigh' : (isMedium ? 'tagMedium' : 'tagLow');
+        const tag = document.createElement('div');
+        tag.className = 'clauseTag ' + sevClass;
+        tag.innerText = (priBadge ? (priBadge + ' · ') : '') + sevLabel + ' · ' + changeBadge;
+        tagRow.appendChild(tag);
+        if (appr) {
+          const apprTag = document.createElement('div');
+          apprTag.className = 'approvalBadge';
+          apprTag.innerText = '승인 필요';
+          tagRow.appendChild(apprTag);
+        }
         head.appendChild(title);
-        head.appendChild(tag);
+        head.appendChild(tagRow);
         card.appendChild(head);
 
         const body = document.createElement('div');

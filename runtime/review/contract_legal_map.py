@@ -65,6 +65,24 @@ UNIVERSAL_FIELDS: tuple[str, ...] = (
     "failure_loss_allocation",
     "termination_settlement_structure",
     "party_rights_obligations_matrix",
+    # ── 판매/위탁판매/대리판매/중개 거래구조 필드(2026-09-04 지시 — 그림닷컴
+    # 판매지원 용역계약 실사례) — "판매지원 용역"이라는 계약 제목만 보고
+    # 판매자·소유권을 추정하지 않기 위해, 최종 소비자와의 매매관계에서
+    # 누가 무엇을 소유·판매·수령·책임지는지를 별도로 구조화한다. POS/결제
+    # 단말기 명의자를 곧바로 판매자로 단정해서는 안 된다(위탁매매 구조에서는
+    # 매장이 결제를 대행할 뿐 실제 판매자가 다를 수 있음).
+    "seller",
+    "owner_of_goods",
+    "payment_recipient",
+    "revenue_recipient",
+    "intermediary",
+    "sales_support_provider",
+    "inventory_risk_holder",
+    "consumer_liability_holder",
+    "refund_liability",
+    "ip_authenticity_liability",
+    "existing_related_contract",
+    "dependency_on_existing_contract",
 )
 
 # NDA류 계약일 때만 추가로 요청하는 확장 필드.
@@ -98,7 +116,10 @@ our_role_direction, our_role_direction_confidence, economic_beneficiary,
 third_party_payer_or_guarantor, conditional_funding_structure,
 advance_payment_exists, refund_or_clawback_obligation_holder,
 guarantee_structure, failure_loss_allocation, termination_settlement_structure,
-party_rights_obligations_matrix.
+party_rights_obligations_matrix, seller, owner_of_goods, payment_recipient,
+revenue_recipient, intermediary, sales_support_provider, inventory_risk_holder,
+consumer_liability_holder, refund_liability, ip_authenticity_liability,
+existing_related_contract, dependency_on_existing_contract.
 
 아래 9개 필드는 "Transaction Map"입니다 — 돈이 실제로 어디서 흐르고, 누가
 누구의 책임을 떠안는지를 조항 하나하나를 보기 전에 먼저 파악하는 것이
@@ -132,6 +153,34 @@ party_rights_obligations_matrix.
   "A: 대금지급 조건부 / B: 서비스 제공 및 실패시 반환의무 / C: A를 대신해
   B의 반환채무 보증"). 당사자가 2인이면 간단히 "2자 계약, matrix 불필요"로
   답해도 됩니다.
+
+아래 12개 필드는 판매·위탁판매·대리판매·중개·판매지원 성격의 계약에서
+"최종 소비자와의 매매관계"를 구조화합니다(그림닷컴 판매지원 용역계약
+실사례 — "판매지원 용역계약"이라는 제목만 보고 판매자·소유권을 추정했다가
+실제로는 다른 당사자가 매입 후 재판매하는 구조였던 사고를 계기로 추가):
+- seller: 최종 고객과의 매매계약상 실제 판매자(매도인)는 누구인가.
+- owner_of_goods: 판매 전 상품의 소유권자는 누구이며 언제 고객에게 이전되는가.
+- payment_recipient: 고객으로부터 대금을 실제로 수령하는 당사자는 누구인가 —
+  **매장 POS/결제 단말기의 명의자를 곧바로 판매자·수령자로 단정하지 마십시오.**
+  위탁매매 구조에서는 매장이 결제를 대행할 뿐 실제 판매자·매출귀속 주체가
+  다를 수 있습니다.
+- revenue_recipient: 판매대금이 누구의 매출로 인식(회계상 귀속)되는가.
+- intermediary: 순수 중개자(매매계약 당사자가 아니며 수수료만 받는 자)가
+  있다면 누구인가.
+- sales_support_provider: 매매계약 당사자는 아니지만 상담·전시·결제처리
+  등 판매를 지원하는 용역 제공자가 있다면 누구인가.
+- inventory_risk_holder: 재고·분실·파손 위험을 부담하는 당사자는 누구인가.
+- consumer_liability_holder: 배송·하자·반품·환불 등 소비자 클레임에 대한
+  책임 주체는 누구인가.
+- refund_liability: 판매 취소·환불 발생 시 그 비용/수수료 반환 의무를
+  귀책사유에 따라 어떻게 배분하는지(구분이 없다면 그렇게 명시).
+- ip_authenticity_liability: 상품(특히 작품·창작물)의 진위·품질·저작권/IP
+  침해에 대한 책임 주체는 누구인가.
+- existing_related_contract: 이 계약과 경제적으로 연결된 기존 거래계약
+  (예: 별도의 대리점/위탁판매 운영계약)이 있는지, 있다면 그 계약명/당사자.
+- dependency_on_existing_contract: "별도 계약"이라는 형식만으로 독립적
+  거래라고 단정하지 말고, 당사자 동일성·동일 매장 사용·계약기간 연동·
+  기존 계약 종료 시 함께 종료되는지 등 실질적 경제적 종속 관계가 있는지.
 
 our_role_direction은 반드시 아래 세 값 중 하나만 사용하십시오(다른 표현 금지):
 - "provider": 우리 회사(our_party)가 이 계약의 핵심 급부(재화, 용역, 자금,

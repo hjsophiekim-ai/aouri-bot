@@ -44,7 +44,11 @@ CLAUSE_REVIEW_SYSTEM = (
     "3. 모든 위험은 금전적·운영적·평판적 영향으로 구체화하여 서술하라.\n"
     "4. 영문 계약서의 경우 영미법·독일법·오스트리아법·EU법의 맥락에서 해석하라.\n"
     "5. 수정 제안은 반드시 대체 문안(영문 또는 국문)을 제시하라.\n"
-    "6. 근거 없는 위험을 과장하지 말고, 실재하는 위험만 정확히 지적하라.\n\n"
+    "6. 근거 없는 위험을 과장하지 말고, 실재하는 위험만 정확히 지적하라.\n"
+    "7. indemnify/면책 조항이 수동태('shall be indemnified'/'면책된다')로만 되어 있고 "
+    "그 의무를 실제로 부담하는 당사자(주체)가 명시되어 있지 않다면, 퍼시스(우리 회사)가 그 의무를 "
+    "부담한다고 임의로 단정하지 마라 — '누가 면책하는지 불명확하다' 자체를 문제로 지적하고, "
+    "각 당사자가 자신의 귀책사유로 발생한 청구에 대해서만 책임지도록 명확화할 것을 제안하라.\n\n"
     "출력 형식: 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하라. "
     "각 원소 형식: clause_id / rewrite_reason / suggested_rewrite / changed_segments / "
     "risk_tier / must_fix / worst_case_scenario / negotiation_strategy\n"
@@ -62,7 +66,11 @@ EN_NDA_CLAUSE_REVIEW_SYSTEM = (
     "3. Quantify all risks: cost exposure, jurisdictional disadvantage, enforcement difficulty.\n"
     "4. Interpret under German/Austrian law and EU regulations where applicable.\n"
     "5. Always propose alternative contract language (in English).\n"
-    "6. Flag exclusive foreign court jurisdiction as HIGH risk requiring legal approval.\n\n"
+    "6. Flag exclusive foreign court jurisdiction as HIGH risk requiring legal approval.\n"
+    "7. If an indemnify/hold-harmless clause is passive ('shall be indemnified') and does not name "
+    "which party actually bears that obligation, do NOT assume Fursys bears it by default — flag the "
+    "ambiguity of the obligor itself as the issue, and propose clarifying that each party is liable "
+    "only for claims arising from its own fault.\n\n"
     "Output format: ONLY a JSON array starting with '['. Each element:\n"
     "clause_id / rewrite_reason / suggested_rewrite / changed_segments / "
     "risk_tier / must_fix / worst_case_scenario / negotiation_strategy\n"
@@ -1475,7 +1483,13 @@ _SVC_CHECKLIST_ITEMS: list[dict[str, Any]] = [
     {
         "id": "svc_delay_response",
         "name": "일정 지연 대응 조항",
-        "trigger": re.compile(r"납기|일정|기간|완료\s*일|제출\s*일", re.IGNORECASE),
+        # 2026-09-04 지시(그림닷컴 판매지원 용역계약 실사례) — 기존 trigger의
+        # "일정|기간" 단독 매치는 "계약 기간"처럼 사실상 모든 계약에 있는
+        # 일반 문구에도 걸려, 납기 의무가 전혀 없는 계약(예: 판매수수료만
+        # 정산하는 판매지원 계약)에서도 "일정 지연 대응 조항" 신설을
+        # 오탐 권고했다. 이 체크리스트가 실제로 의도하는 것은 "산출물
+        # 납기"이므로, 실제 이행기한을 가리키는 표현으로 좁힌다.
+        "trigger": re.compile(r"납기|완료\s*일|제출\s*일|인도\s*일|이행\s*기한", re.IGNORECASE),
         "present": re.compile(r"지연.{0,20}(통보|통지|협의|연장|위약금|지체상금)|납기.{0,20}(변경|연장|위약)", re.IGNORECASE),
         "risk": "MEDIUM",
         "rewrite": (
@@ -3087,6 +3101,15 @@ _BUYER_FAVORABLE_KW = re.compile(
     re.IGNORECASE,
 )
 
+# [요구 9] 우리에게 유리한 조항 보호 — 해지권/평가권/승인권처럼 우리 회사가
+# 실제로 보유한 권리를, 실질적 불이익 근거 없이 "형식적 비대칭"이라는
+# 비판만으로 약화시키지 않는다.
+_RX_FAVORABLE_RIGHT_TOPIC = re.compile(r"해지권|평가권|승인권", re.IGNORECASE)
+_RX_FORMAL_ASYMMETRY_ONLY_CRITIQUE = re.compile(
+    r"일방적|편향|불균형|비대칭|형평성",
+    re.IGNORECASE,
+)
+
 
 def _apply_do_not_harm_our_side_gate(
     clause_results: list[dict[str, Any]],
@@ -3116,6 +3139,28 @@ def _apply_do_not_harm_our_side_gate(
             continue
 
         rr = str(cr.get("rewrite_reason") or "")
+
+        # ── [요구 9] 우리에게 유리한 권리(해지권/평가권/승인권) 보호 ─────────
+        # clause_topic이 termination이거나 제목/사유에 해지권·평가권·승인권이
+        # 언급되는데, 비판 내용이 "일방적/불균형/비대칭"류 형식적 비판뿐이고
+        # 실질적 불이익 근거(과중한 부담·구매자 추가권리 확인 등)가 전혀 없으면
+        # 그 권리를 약화시키는 수정안 자체를 폐기한다.
+        _is_favorable_right_topic = (
+            str(cr.get("clause_topic") or "") == "termination"
+            or bool(_RX_FAVORABLE_RIGHT_TOPIC.search(str(cr.get("clause_title") or "") + " " + rr))
+        )
+        if _is_favorable_right_topic and _RX_FORMAL_ASYMMETRY_ONLY_CRITIQUE.search(rr):
+            _has_real_harm_evidence = bool(
+                _SUPPLIER_OVERBURDEN_KW.search(rr)
+                or _BUYER_FAVORABLE_KW.search(sr)
+                or _SUPPLIER_UNFAVORABLE_CONFIRM.search(sr)
+            )
+            if not _has_real_harm_evidence:
+                cr["suggested_rewrite"] = None
+                cr["changed_segments"] = []
+                cr["has_rewrite_change"] = False
+                cr.setdefault("guardrail_block", {})["favorable_right_protection"] = "formal_asymmetry_only_discarded"
+                continue
 
         # ── [STEP 2] 구매자 유리 템플릿 블랙리스트 즉시 차단 ─────────────────
         blacklisted = any(pat.search(sr) for pat in _BUYER_FAVORABLE_TEMPLATES)
@@ -3429,6 +3474,11 @@ def build_clause_level_result(
         text=str(text or ""),
         clauses=clauses,
     )
+    # [거래구조 확인 질문 답변 반영, 2026-09-04 지시] — AI 없이도(regex
+    # fallback 경로 포함) 사용자가 Q-TXN-* 질문에 실제로 답변한 판매자·
+    # 소유권·대금수령 등 사실관계를 Contract Legal Map에 채운다.
+    from runtime.review.transaction_structure_answers import apply_transaction_structure_answers
+    apply_transaction_structure_answers(_legal_map.fields, answers)
     from runtime.review.contract_overview import build_contract_overview
     _contract_overview = build_contract_overview(clauses=clauses, full_text=str(text or ""))
     _contract_overview_dict = {**_contract_overview.to_dict(), **_legal_map.to_dict()}
@@ -4548,7 +4598,9 @@ def build_clause_level_result(
                 "STEP 1: 이 계약으로 실제 어떤 분쟁·손실이 발생하는가? (IP 귀속 분쟁, 결과물 활용 제한, 배상 한도 미비 등)\n"
                 "STEP 2: 회사가 실제 어디서 돈을 잃는가? (IP 미귀속 → 재사용 불가, 배상 한도 초과, 비밀 유출 손해 등)\n"
                 "STEP 3: 제3자 손해가 발생하는가? (수탁자 IP 침해 → 위탁자 연대 책임)\n"
-                "STEP 4: 누가 책임을 부담하는가? (저작권법 제9조 수탁자 귀속 원칙 → 명시 규정 필수)\n"
+                "STEP 4: 누가 책임을 부담하는가? (저작권법 제9조 수탁자 귀속 원칙 → 명시 규정 필수. "
+                "indemnify/면책 조항이 수동태로만 되어 있고 의무 주체가 불명확하면 우리 회사가 부담한다고 "
+                "단정하지 말고 그 불명확함 자체를 지적할 것)\n"
                 "STEP 5: 실제 분쟁 가능성이 높은 경우에만 수정안 생성. boilerplate·일반론 금지.\n\n"
                 "## 최우선 점검 3개 (위탁자 갑인 경우)\n"
                 "① [IP 귀속 CRITICAL] 산출물의 저작권·지식재산권이 수탁자에게 귀속되거나 이용권만 부여되면 '위탁자(퍼시스) 전적 귀속'으로 수정하라. 근거: 저작권법 제9조.\n"
@@ -4586,7 +4638,9 @@ def build_clause_level_result(
                 "STEP 1: 이 계약으로 실제 어떤 사고·분쟁이 발생하는가? (제품 사고, 설치 재해, 리콜, 하자 분쟁, 해지 분쟁 등 구체적 시나리오)\n"
                 "STEP 2: 회사가 실제 어디서 돈을 잃는가? (대규모 손해배상, 생산중단, 리콜 비용, 계약해지 패널티 등)\n"
                 "STEP 3: 제3자 손해가 발생하는가? (고객·사용자 피해, 하도급 사고 연대책임 등)\n"
-                "STEP 4: 누가 책임을 부담하는가? (책임 공백·면책 과도·보험 미비 확인)\n"
+                "STEP 4: 누가 책임을 부담하는가? (책임 공백·면책 과도·보험 미비 확인. indemnify/면책 조항이 "
+                "수동태로만 되어 있고 의무 주체가 불명확하면 우리 회사가 부담한다고 단정하지 말고 그 "
+                "불명확함 자체를 지적할 것)\n"
                 "STEP 5: 실제 분쟁 가능성이 높은 경우에만 수정안 생성. generic boilerplate·일반론 금지.\n\n"
                 "## 수정안 필수 6개 요소 (모두 포함해야 함)\n"
                 "주체 / 조건(발동 요건) / 절차 / 기한 / 비용부담 / 책임범위\n\n"
@@ -5034,6 +5088,38 @@ def build_clause_level_result(
             else:
                 _cr["display_kind"] = "note"
 
+    # ── [Severity Reclassifier] 이미 완결된 준거법/분쟁해결 조항 HIGH 강등
+    # (모든 계약유형) — GLOBAL_CROSS_CLAUSE_VALIDATION은 "다른 조항에 이미
+    # 있다"만 처리하므로, "이 조항 자체가 이미 충분하다"는 별도 축을 여기서
+    # 처리한다 (2026-09-03 지시, KOTRA Article 9.2 과대평가 사례).
+    from runtime.review.severity_reclassifier import demote_adequate_governing_law_dispute_clause
+    for _cr in clause_results:
+        if not isinstance(_cr, dict):
+            continue
+        if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")) or bool(_cr.get("is_checklist_item")):
+            continue
+        if bool(_cr.get("is_common_legal_risk")):
+            continue
+        _cur_sev3 = str(_cr.get("risk_tier") or "LOW").upper()
+        _new_sev3, _demoted3 = demote_adequate_governing_law_dispute_clause(
+            severity=_cur_sev3,
+            clause_text=str(_cr.get("original_text") or ""),
+            clause_title=str(_cr.get("clause_title") or ""),
+            rewrite_reason=str(_cr.get("rewrite_reason") or ""),
+            legal_business_reason=str(_cr.get("legal_business_reason") or ""),
+        )
+        if _demoted3 and _new_sev3 != _cur_sev3:
+            _cr["risk_tier"] = _new_sev3
+            _cr["severity"] = _new_sev3
+            _cr["high_risk"] = False
+            _cr["approval_required"] = False
+            _cr["must_fix"] = False
+            _cr["keep_as_is"] = True
+            _cr["review_tier"] = "NOTE"
+            _cr["adequacy_downgrade_reason"] = "governing_law_dispute_resolution_already_adequate"
+            _cr["auto_severity_downgrade"] = ["adequate_governing_law_dispute_clause"]
+            _cr["display_kind"] = "note"
+
     # ── [GLOBAL_CROSS_CLAUSE_VALIDATION] 이미 다른 조항에서 해결된 "부재"
     # finding 제거 (모든 계약유형) ──────────────────────────────────────────
     # 조항 단위(또는 AI의 단일 clause 호출) 검토는 문서 전체를 보지 못하므로,
@@ -5282,6 +5368,12 @@ def build_clause_level_result(
                 continue
             if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")):
                 continue
+            # common_legal_risk.py의 결정론적 rule은 원문에 실제로 등장하는
+            # 문구를 정규식으로 직접 확인해 만든 고정밀 finding이므로 이
+            # 계약유형별 금지문구 차단 대상이 아니다(self_check.py 백스톱과
+            # 동일한 예외 — 2026-09-04 지시 회귀조건).
+            if bool(_cr.get("is_common_legal_risk")):
+                continue
             _sr = _cr.get("suggested_rewrite")
             if not (isinstance(_sr, str) and _sr.strip()):
                 continue
@@ -5354,7 +5446,32 @@ def build_clause_level_result(
     # 이 Layer 1은 절대 게이트하지 않는다 — 그래야 무관 룰 차단이 실제 존재하는
     # 공통 리스크(일방 면책·무제한 구상·외부약관 편입 등) 탐지까지 죽이지 않는다.
     from runtime.review.common_legal_risk import _apply_common_legal_risk_rules
-    _apply_common_legal_risk_rules(clause_results, str(text or ""), clauses)
+
+    def _infer_english_defined_term_for_entity(_text: str, _entity: str) -> str | None:
+        """entity 실명(예: "Fursys") 바로 옆에 붙는 영문 정의어(예: '("Company")')를
+        찾는다 — 계약마다 우리 쪽 정의어가 "Company"/"Client"/"Buyer" 등으로
+        달라지므로, "Company"를 고정 별칭으로 쓰지 않고 실제 계약문에서
+        우리 실명과 짝지어진 정의어만 별칭으로 채택한다(범용, 계약별 하드코딩 아님)."""
+        _entity = (_entity or "").strip()
+        if len(_entity) < 2:
+            return None
+        _idx = _text.lower().find(_entity.lower())
+        if _idx < 0:
+            return None
+        _window = _text[_idx: _idx + 300]
+        _m = re.search(r'["“]\s*(?:the\s+)?([A-Za-z][A-Za-z ]{1,30}?)\s*["”]\s*\)', _window)
+        return _m.group(1).strip() if _m else None
+
+    _our_party_aliases = [
+        a for a in {
+            str(entity or "").strip(),
+            str(getattr(party, "our_label", "") or "").strip(),
+            "당사",
+            _infer_english_defined_term_for_entity(str(text or ""), str(entity or "")) or "",
+        }
+        if a
+    ]
+    _apply_common_legal_risk_rules(clause_results, str(text or ""), clauses, our_party_aliases=_our_party_aliases)
     # 1-4. [Layer 2 — 시험·검사·인증 용역 특화] testing_service 계약에서만 실행.
     from runtime.review.testing_service_rules import _apply_testing_service_checklist
     _apply_testing_service_checklist(clause_results, str(text or ""), _contract_class, clauses)
@@ -5708,6 +5825,58 @@ def build_clause_level_result(
             pass
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── [Senior Counsel 판단] legal_risk와 negotiation_priority 분리 ────────
+    # "법적으로 문제인가"(risk_tier/severity)와 "지금 협상 테이블에 올릴
+    # 가치가 있는가"(negotiation_priority)를 별도 축으로 계산해 각 finding에
+    # 부착한다(2026-09-04 지시). Output Filter가 이 값을 그대로 UI/DOCX로
+    # 전달하도록, 그 이전에 계산해야 한다.
+    try:
+        from runtime.review.counterparty_role import classify_counterparty_role
+        from runtime.review.exposure_classification import classify_exposure
+        from runtime.review.negotiation_action import classify_negotiation_action
+        _counterparty_role = classify_counterparty_role(str(text or ""))
+        for cr in clause_results:
+            if not isinstance(cr, dict) or bool(cr.get("dedup_suppressed")):
+                continue
+            # clr_late_penalty_rate_uncapped처럼 이미 자체적으로 exposure_
+            # category를 계산해 부착한 rule도 있지만, 그 외 common_legal_risk
+            # 룰(예: clr_third_party_debt_guarantee)은 아직 계산되어 있지
+            # 않으므로 여기서 일괄 보강한다 — 개별 rule마다 중복 구현하지
+            # 않고 한 곳에서 모든 finding에 동일하게 적용한다.
+            if not cr.get("exposure_category"):
+                cr["exposure_category"] = classify_exposure(
+                    str(cr.get("original_text") or ""), _our_party_aliases,
+                )
+            cr.update(classify_negotiation_action(cr, counterparty_role=_counterparty_role))
+
+        # [Risk Cascade 연동] (2026-09-04 지시, 요구 9/12) — 지체상금(예:
+        # KOTRA Article 3.4)처럼 상대방 전용 리스크(counterparty_only)로
+        # ACCEPT 처리된 finding이라도, 같은 계약에 우리 쪽 보증 finding
+        # (clr_third_party_debt_guarantee)이 있으면 그 보증조항이 해결되기
+        # 전까지는 조건부로 우리 리스크에 연결된다 — "4.3이 삭제/제한되면
+        # 3.4는 협상우선순위를 낮출 수 있다"는 지시를 반영해, ACCEPT로
+        # 확정하지 않고 조건부 NEGOTIATE_IF_POSSIBLE + 의존관계로 표시한다.
+        _guarantee_cr = next(
+            (cr for cr in clause_results if isinstance(cr, dict) and cr.get("clause_id") == "clr_third_party_debt_guarantee"
+             and not bool(cr.get("dedup_suppressed"))),
+            None,
+        )
+        if _guarantee_cr is not None:
+            for cr in clause_results:
+                if not isinstance(cr, dict) or bool(cr.get("dedup_suppressed")):
+                    continue
+                # 지체상금류(late_penalty)만 연동한다 — risk_cascade.py의
+                # "delay_to_guarantee" 체인이 실제로 연결하는 finding이 이
+                # 유형이며, 다른 counterparty_only finding까지 무차별
+                # 연동하면 무관한 조항에도 잘못된 의존관계가 붙는다.
+                if cr.get("clause_id") != "clr_late_penalty_rate_uncapped":
+                    continue
+                if cr.get("business_exposure") == "counterparty_only" and cr.get("negotiation_priority") == "ACCEPT":
+                    cr["negotiation_priority"] = "NEGOTIATE_IF_POSSIBLE(조건부)"
+                    cr["negotiation_priority_depends_on"] = str(_guarantee_cr.get("clause_id") or "")
+    except Exception:
+        pass
+
     # ── [Output Filter] HIGH/MEDIUM 필터 + Top 5 핵심 리스크 ─────────────────
     # build_final_findings() is the single canonical clause_results -> final-
     # issue-list conversion, shared with server.py's DOCX/PDF download
@@ -5772,7 +5941,28 @@ def build_clause_level_result(
         },
         mandatory_review_targets=_mandatory_target_status,
         final_findings_clause_ids=_final_findings_clause_ids,
+        legal_map_fields=_legal_map.fields,
+        legal_applicability_results=[r.to_dict() for r in _legal_applicability_results],
     )
+
+    # ── [Self-Check 이후 재계산] (2026-09-04 지시로 발견) ────────────────────
+    # run_self_check()의 hallucination-guard 백스톱(예: 계약유형과 무관한
+    # 문구가 섞인 AI rewrite)은 clause_results를 직접 mutate해 risk_tier를
+    # LOW로 낮춘다. 하지만 그 시점은 이미 _filtered_output(= meta.final_
+    # findings, UI/DOCX가 공유하는 "단일 원본")을 계산한 *이후*라, self_check가
+    # 방금 강등한 finding이 계속 HIGH/MEDIUM으로 남아 최종 출력에 박제된다.
+    # 실제로 KOTRA 3자 컨설팅계약 다운로드에서 이 순서 문제가 재현됐다 —
+    # self_check가 지식재산권/IP 환각(hallucination) finding을 LOW로 낮췄지만
+    # final_findings에는 이미 HIGH로 포함되어, 이후 별도로 재구성되는 DOCX
+    # 경로(risk_tier를 다시 읽음)와 개수가 어긋나 REVIEW_FAILED_OUTPUT_
+    # MISMATCH가 발생했다. self_check 이후 clause_results 기준으로 다시
+    # 계산해 이 클래스의 불일치를 구조적으로 막는다.
+    try:
+        _review_issues_raw = _cr_to_ri(clause_results)
+        _filtered_output = _fi(_review_issues_raw, contract_type_code=_type_code, include_low=False)
+        _low_count_in_output = _cli({"clause_results": clause_results})
+    except Exception:
+        pass
 
     meta = {
         "self_check": _self_check_report,
@@ -5842,6 +6032,10 @@ def build_clause_level_result(
     # ── [Risk Scenario Modeling] 가상 사고 시나리오 기반 리스크 추출 ────────
     risk_scenarios = detect_risk_scenarios(str(text or ""), _contract_nature)
 
+    # ── [Risk Cascade] 계약 전체를 관통하는 리스크 연쇄(contract-level) ─────
+    from runtime.review.risk_cascade import build_risk_cascades
+    risk_cascades = build_risk_cascades(clause_results, _legal_map.fields)
+
     # ── [Strategic Inquiry] 계약 유형별 쟁점 질문 생성 ───────────────────────
     strategic_questions = generate_strategic_inquiry(
         contract_class=_contract_class,
@@ -5881,6 +6075,7 @@ def build_clause_level_result(
         review={
             **review,
             "risk_scenarios": risk_scenarios,
+            "risk_cascades": risk_cascades,
             "strategic_questions": strategic_questions,
             "clause_conflicts": clause_conflicts,
             "executive_summary": executive_summary,

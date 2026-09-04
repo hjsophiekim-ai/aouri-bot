@@ -819,8 +819,75 @@ def create_handler(service: RuleQueryService):
                     result["dealer_rental_six_section"] = _prof.get("six_section", {})
                 except Exception:
                     pass
+            # [UI/DOCX 동일 final_findings 요구, 2026-09-03 지시] — 딜러/위탁판매
+            # 필수이슈 주입(_inject_mandatory_issues)은 지금까지 DOCX 다운로드
+            # 핸들러에서만 호출되어, UI가 보여주는 clause_results에는 없던
+            # finding이 DOCX에만 나타나는 불일치가 있었다. 이 함수는 멱등하게
+            # 고쳤으므로(이미 주입된 항목은 재삽입하지 않음) UI 저장 시점에도
+            # 동일하게 호출해 두 경로가 같은 입력에서 출발하게 한다.
+            try:
+                _deep_cr = _inject_mandatory_issues(
+                    full_text=str(text),
+                    clause_results=_deep_cr,
+                    contract_type_code=_ct_code0,
+                    clauses=list(bundle.clauses or []),
+                )
+            except Exception:
+                pass
+            from runtime.review.output_finalize import ensure_finding_ids as _ensure_finding_ids
+            _ensure_finding_ids(_deep_cr)
             result["clause_results"] = _deep_cr
             result["clause_meta"] = bundle.meta
+            # bundle.meta["final_findings"]는 _deep_gate/_prof_assess/mandatory
+            # 이슈 주입으로 clause_results가 바뀌기 전에 계산된 값이라 stale하다
+            # — UI 자신이 실제로 보여주는 _deep_cr 기준으로 다시 계산해 덮어써서,
+            # UI가 보고하는 카운트/finding 목록이 자기 자신의 clause_results와
+            # 항상 일치하게 한다(이후 DOCX 경로도 같은 build_final_findings를
+            # 같은 종류의 입력에 호출하므로 두 경로가 비교 가능해진다).
+            result["clause_meta"]["final_findings"] = _build_final_findings(_deep_cr, contract_type_code=_ct_code0)
+            # [False-negative 재확인, 2026-09-04 지시] — bundle.meta["self_check"]는
+            # _deep_gate/mandatory 이슈 주입 이전에 계산돼, 그 사이 새로 생긴
+            # finding을 반영하지 못한 채 "HIGH=0/MEDIUM=0인데 위험 키워드가
+            # 있다"는 stale한 REVIEW_FAILED_LIKELY_FALSE_NEGATIVE를 남길 수 있다
+            # — _deep_cr 기준으로 다시 계산해 이제 실제 finding이 있으면 상태를
+            # 정정하고, 여전히 없으면 그대로 유지한다(server.py 다운로드 게이트가
+            # 이 최신 상태를 사용).
+            try:
+                from runtime.review.self_check import _FALSE_NEGATIVE_RISK_GROUPS as _fn_groups
+                _deep_high = sum(1 for cr in _deep_cr if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is") and str(cr.get("risk_tier") or "").upper() == "HIGH")
+                _deep_medium = sum(1 for cr in _deep_cr if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is") and str(cr.get("risk_tier") or "").upper() == "MEDIUM")
+                if _deep_high == 0 and _deep_medium == 0:
+                    _deep_triggered = [g for g, kws in _fn_groups.items() if any(kw in str(text or "") for kw in kws)]
+                    if isinstance(result.get("clause_meta"), dict) and isinstance(result["clause_meta"].get("self_check"), dict):
+                        _sc = result["clause_meta"]["self_check"]
+                        _sc["zero_findings_but_risk_language_present"] = bool(_deep_triggered)
+                        _sc["zero_findings_triggered_risk_groups"] = _deep_triggered
+                        if _deep_triggered and _sc.get("review_status") == "OK":
+                            _sc["review_status"] = "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE"
+                            _sc["passed"] = False
+                elif isinstance(result.get("clause_meta"), dict) and isinstance(result["clause_meta"].get("self_check"), dict):
+                    _sc = result["clause_meta"]["self_check"]
+                    if _sc.get("review_status") == "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE":
+                        # false-negative 사유만 정정한다 — passed는 다른 독립적
+                        # 실패 사유(scope_violations/type_confidence_low/
+                        # incomplete_high/mandatory_targets/language_quality/
+                        # global_reasoning/hard_integrity)가 없을 때만 True로
+                        # 되돌려, 다른 진짜 실패를 함께 지워버리지 않는다.
+                        _sc["review_status"] = "OK"
+                        _sc["zero_findings_but_risk_language_present"] = False
+                        _sc["zero_findings_triggered_risk_groups"] = []
+                        _sc["passed"] = (
+                            not _sc.get("scope_violations_stripped")
+                            and not _sc.get("type_confidence_low")
+                            and not _sc.get("incomplete_high_findings")
+                            and not _sc.get("mandatory_targets_missing")
+                            and not _sc.get("language_quality_violations")
+                            and bool(_sc.get("global_reasoning_ok", True))
+                            and int(_sc.get("clause_id_missing_count") or 0) == 0
+                            and not _sc.get("final_findings_count_mismatch")
+                        )
+            except Exception:
+                pass
             result["review_elapsed_sec"] = round(time.perf_counter() - _deep_t0, 2)
             if law_service is not None:
                 try:
@@ -1675,6 +1742,42 @@ def create_handler(service: RuleQueryService):
                         review_focus=(review_focus if isinstance(review_focus, str) else None),
                     )
 
+                    # [Article 8.2류 잔존 오탐 제거, 2026-09-03 지시] — 이 다운로드
+                    # 경로는 _all_results를 독립적으로 재구성(mandatory_issues
+                    # 재주입 등)하므로, clause_level.py에서 한 번 실행된
+                    # GLOBAL_CROSS_CLAUSE_VALIDATION/조항 자체 적정성 판단을
+                    # 여기서도 백스톱으로 다시 적용해야 새로 바뀐 finding까지
+                    # 검증된다.
+                    from runtime.review.global_cross_clause_validation import apply_global_cross_clause_validation as _apply_gccv
+                    from runtime.review.severity_reclassifier import demote_adequate_governing_law_dispute_clause as _demote_adequate_gld
+                    _apply_gccv(_all_results, str(text or ""))
+                    for _cr_gld in _all_results:
+                        if not isinstance(_cr_gld, dict):
+                            continue
+                        if bool(_cr_gld.get("dedup_suppressed")) or bool(_cr_gld.get("keep_as_is")) or bool(_cr_gld.get("is_common_legal_risk")):
+                            continue
+                        _cur_sev_gld = str(_cr_gld.get("risk_tier") or "LOW").upper()
+                        _new_sev_gld, _demoted_gld = _demote_adequate_gld(
+                            severity=_cur_sev_gld,
+                            clause_text=str(_cr_gld.get("original_text") or ""),
+                            clause_title=str(_cr_gld.get("clause_title") or ""),
+                            rewrite_reason=str(_cr_gld.get("rewrite_reason") or ""),
+                            legal_business_reason=str(_cr_gld.get("legal_business_reason") or ""),
+                        )
+                        if _demoted_gld and _new_sev_gld != _cur_sev_gld:
+                            _cr_gld["risk_tier"] = _new_sev_gld
+                            _cr_gld["severity"] = _new_sev_gld
+                            _cr_gld["high_risk"] = False
+                            _cr_gld["approval_required"] = False
+                            _cr_gld["must_fix"] = False
+                            _cr_gld["keep_as_is"] = True
+
+                    # [finding_id, 2026-09-03 지시] — 세션에서 로드된 항목은 이미
+                    # UI 저장 시점에 부여된 finding_id를 그대로 유지하고, 이
+                    # 경로에서만 새로 생긴 항목(있다면)에도 안정적 ID를 부여한다.
+                    from runtime.review.output_finalize import ensure_finding_ids as _ensure_finding_ids_docx
+                    _ensure_finding_ids_docx(_all_results)
+
                     _docx_final = _build_final_findings(_all_results, contract_type_code=_ct_code, include_low=False)
                     _docx_high = int(_docx_final.get("high_count") or 0)
                     _docx_medium = int(_docx_final.get("medium_count") or 0)
@@ -1703,6 +1806,52 @@ def create_handler(service: RuleQueryService):
                         )
                         return
 
+                    # [REVIEW_FAILED_OUTPUT_MISMATCH gate, 2026-09-03 지시] — UI가
+                    # 저장한 clause_meta.final_findings(Phase 1에서 이제 UI 자신의
+                    # clause_results 기준으로 신선하게 재계산됨)와 이 다운로드
+                    # 경로가 방금 만든 _docx_final을 finding_id/severity/count
+                    # 기준으로 비교한다. 세션이 이 기능 도입 이전에 생성돼
+                    # final_findings이 없거나 finding_id가 없는 구버전 데이터는
+                    # 비교 대상에서 제외한다(하위호환 — 새로 생성된 리뷰부터 적용).
+                    _ui_final = clause_meta.get("final_findings") if isinstance(clause_meta, dict) else None
+                    if isinstance(_ui_final, dict):
+                        def _fid_severity_map(final_findings: dict[str, Any]) -> dict[str, str]:
+                            out_map: dict[str, str] = {}
+                            for _sev_key, _sev_label in (("high_issues", "HIGH"), ("medium_issues", "MEDIUM")):
+                                for _i in (final_findings.get(_sev_key) or []):
+                                    if isinstance(_i, dict):
+                                        _fid = str(_i.get("finding_id") or "")
+                                        if _fid:
+                                            out_map[_fid] = _sev_label
+                            return out_map
+                        _ui_map = _fid_severity_map(_ui_final)
+                        _docx_map = _fid_severity_map(_docx_final)
+                        # finding_id가 하나도 없는 쪽(구버전 데이터)은 비교 불가 —
+                        # 새로 부여된 리뷰만 이 게이트의 대상이 된다.
+                        if _ui_map and _docx_map:
+                            _ui_count = int(_ui_final.get("high_count") or 0) + int(_ui_final.get("medium_count") or 0)
+                            _docx_count = _docx_total
+                            _severity_mismatches = {
+                                fid: (sev, _docx_map[fid])
+                                for fid, sev in _ui_map.items()
+                                if fid in _docx_map and _docx_map[fid] != sev
+                            }
+                            if set(_ui_map) != set(_docx_map) or _ui_count != _docx_count or _severity_mismatches:
+                                _json_response(
+                                    self,
+                                    HTTPStatus.CONFLICT,
+                                    {
+                                        "error": "REVIEW_FAILED_OUTPUT_MISMATCH: UI and DOCX final_findings diverge",
+                                        "review_status": "REVIEW_FAILED_OUTPUT_MISMATCH",
+                                        "ui_only_finding_ids": sorted(set(_ui_map) - set(_docx_map)),
+                                        "docx_only_finding_ids": sorted(set(_docx_map) - set(_ui_map)),
+                                        "severity_mismatches": _severity_mismatches,
+                                        "ui_count": _ui_count,
+                                        "docx_count": _docx_count,
+                                    },
+                                )
+                                return
+
                     _final_findings_clause_ids = {
                         str(i.get("clause_id") or "")
                         for i in (list(_docx_final.get("high_issues") or []) + list(_docx_final.get("medium_issues") or []))
@@ -1719,6 +1868,119 @@ def create_handler(service: RuleQueryService):
                                 "error": "REVIEW_FAILED_USER_REQUEST_MISSING: user-cited clause(s) from review_focus missing from final output",
                                 "review_status": "REVIEW_FAILED_USER_REQUEST_MISSING",
                                 "missing_clause_citations": _missing_targets,
+                            },
+                        )
+                        return
+
+                    # [REVIEW_FAILED_GLOBAL_REASONING gate] (2026-09-03 지시, 요구 11)
+                    # — 이 다운로드 경로는 _all_results를 독립적으로 재구성하므로
+                    # self_check.py의 전체 판단축을 여기서 다시 돌릴 수는 없지만,
+                    # 구조적으로 계산 가능한 핵심 두 축(금전리스크 미탐지, 제3자
+                    # 귀책을 우리가 떠안는데 HIGH가 아님)만은 여기서도 반드시
+                    # 재확인한다 — 그 외 항목은 초기 리뷰 단계의 self_check가 이미
+                    # meta.self_check에 기록해 둔다.
+                    from runtime.review.self_check import (
+                        _RX_MONETARY_PENALTY_LANGUAGE as _rx_monetary_penalty,
+                    )
+                    _active_docx_results = [
+                        cr for cr in _all_results
+                        if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is")
+                    ]
+                    _has_penalty_finding_docx = any(
+                        str(cr.get("clause_id") or "") == "clr_late_penalty_rate_uncapped"
+                        or "%" in str(cr.get("legal_business_reason") or "")
+                        for cr in _active_docx_results
+                    )
+                    _monetary_risk_unconfirmed_docx = bool(
+                        _rx_monetary_penalty.search(str(text or "")) and not _has_penalty_finding_docx
+                    )
+                    _third_party_fault_not_high_docx = [
+                        str(cr.get("clause_id") or "")
+                        for cr in _active_docx_results
+                        if isinstance(cr.get("indemnity_direction"), dict)
+                        and cr["indemnity_direction"].get("fault_source") in ("counterparty_own", "third_party_shifted_to_us")
+                        and str(cr.get("risk_tier") or "").upper() != "HIGH"
+                    ]
+                    if _monetary_risk_unconfirmed_docx or _third_party_fault_not_high_docx:
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "REVIEW_FAILED_GLOBAL_REASONING: monetary risk or third-party fault exposure not properly reflected",
+                                "review_status": "REVIEW_FAILED_GLOBAL_REASONING",
+                                "monetary_risk_unconfirmed": _monetary_risk_unconfirmed_docx,
+                                "third_party_fault_borne_by_us_not_high": _third_party_fault_not_high_docx,
+                            },
+                        )
+                        return
+
+                    # [REVIEW_FAILED_GLOBAL_CROSS_CLAUSE gate, 2026-09-04 지시] —
+                    # 다른 조항에 이미 있는 답(예: Article 9의 준거법·중재)을
+                    # "부재"로 다시 지적하는 잔존 사례를 self_check.py와 동일한
+                    # 백스톱(apply_global_cross_clause_validation 재실행)으로
+                    # 이 다운로드 경로에서도 확인한다.
+                    from runtime.review.global_cross_clause_validation import (
+                        apply_global_cross_clause_validation as _apply_gccv_docx,
+                    )
+                    _pre_suppressed_ids_docx = {
+                        str(cr.get("clause_id") or id(cr)) for cr in _all_results
+                        if isinstance(cr, dict) and bool(cr.get("dedup_suppressed"))
+                    }
+                    _apply_gccv_docx(_all_results, str(text or ""))
+                    _newly_suppressed_docx = [
+                        str(cr.get("clause_id") or "")
+                        for cr in _all_results
+                        if isinstance(cr, dict) and bool(cr.get("dedup_suppressed"))
+                        and str(cr.get("clause_id") or id(cr)) not in _pre_suppressed_ids_docx
+                    ]
+                    if _newly_suppressed_docx:
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "REVIEW_FAILED_GLOBAL_CROSS_CLAUSE: finding re-flags a topic already resolved elsewhere in the contract",
+                                "review_status": "REVIEW_FAILED_GLOBAL_CROSS_CLAUSE",
+                                "cross_clause_duplicates_caught": _newly_suppressed_docx,
+                            },
+                        )
+                        return
+
+                    # [REVIEW_FAILED_LIKELY_FALSE_NEGATIVE 다운로드 차단, 2026-09-04
+                    # 지시] — self_check.py는 HIGH=0/MEDIUM=0인데 위험 언어가
+                    # 원문에 있으면 이 status를 올바르게 계산하지만, 지금까지는
+                    # 이 다운로드 경로가 그 결과를 무시하고 그대로 "정상" 문서를
+                    # 내보냈다. _all_results(이 경로가 독립적으로 재구성한 최종
+                    # 목록) 기준으로 다시 확인해 차단한다.
+                    from runtime.review.self_check import _FALSE_NEGATIVE_RISK_GROUPS as _fn_groups_docx
+                    _docx_high_for_fn = sum(1 for cr in _active_docx_results if str(cr.get("risk_tier") or "").upper() == "HIGH")
+                    _docx_medium_for_fn = sum(1 for cr in _active_docx_results if str(cr.get("risk_tier") or "").upper() == "MEDIUM")
+                    if _docx_high_for_fn == 0 and _docx_medium_for_fn == 0:
+                        _fn_triggered_docx = [g for g, kws in _fn_groups_docx.items() if any(kw in str(text or "") for kw in kws)]
+                        if _fn_triggered_docx:
+                            _json_response(
+                                self,
+                                HTTPStatus.CONFLICT,
+                                {
+                                    "error": "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE: zero HIGH/MEDIUM findings but risk language present in contract text",
+                                    "review_status": "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE",
+                                    "triggered_risk_groups": _fn_triggered_docx,
+                                },
+                            )
+                            return
+
+                    # [REVIEW_FAILED_LANGUAGE_QUALITY gate, 2026-09-03 지시] —
+                    # 문장이 중간에서 잘리거나 원문 일부가 앞에서 잘린("ayment",
+                    # "icle") 채로 DOCX/PDF를 생성하지 않는다.
+                    from runtime.review.language_quality_gate import detect_language_quality_issues as _detect_lang_quality
+                    _lang_violations = _detect_lang_quality(_all_results)
+                    if _lang_violations:
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "REVIEW_FAILED_LANGUAGE_QUALITY: incomplete sentence or extraction corruption detected",
+                                "review_status": "REVIEW_FAILED_LANGUAGE_QUALITY",
+                                "violations": _lang_violations[:20],
                             },
                         )
                         return
@@ -1878,6 +2140,22 @@ def create_handler(service: RuleQueryService):
                         if not _g2.is_clean:
                             _cr2["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
                             _cr2["has_rewrite_change"] = False
+
+                # [REVIEW_FAILED_LANGUAGE_QUALITY gate, 2026-09-03 지시]
+                from runtime.review.language_quality_gate import detect_language_quality_issues as _detect_lang_quality2
+                _lang_violations2 = _detect_lang_quality2(_cr_list2)
+                if _lang_violations2:
+                    _json_response(
+                        self,
+                        HTTPStatus.CONFLICT,
+                        {
+                            "error": "REVIEW_FAILED_LANGUAGE_QUALITY: incomplete sentence or extraction corruption detected",
+                            "review_status": "REVIEW_FAILED_LANGUAGE_QUALITY",
+                            "violations": _lang_violations2[:20],
+                        },
+                    )
+                    return
+
                 doc_bytes = _builder(
                     entity=entity, contract_type=contract_type,
                     filename=str(filename) if isinstance(filename, str) else None,

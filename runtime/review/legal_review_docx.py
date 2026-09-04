@@ -28,6 +28,8 @@ from io import BytesIO
 from typing import Any, Literal
 from xml.etree import ElementTree as ET
 
+from runtime.review.language_quality_gate import safe_truncate
+
 logger = logging.getLogger(__name__)
 
 # ─── DOCX namespace constants ──────────────────────────────────────────────────
@@ -160,9 +162,12 @@ def _compose_display_title(clause_title: str, display_path: str) -> str:
 
 
 def _clean_text(text: str, max_len: int = 3000) -> str:
-    """Remove XML markers and truncate."""
+    """Remove XML markers and truncate at a word/sentence boundary — never
+    mid-word (2026-09-03 지시, 문장 완결성 HARD GATE). A raw `t[:max_len]`
+    slice can land mid-word (e.g. "Article" -> "icle", "Payment" -> "ayment"),
+    which is exactly the class of DOCX corruption this replaces."""
     t = re.sub(r"<[^>]+>", "", str(text or "")).strip()
-    return t[:max_len]
+    return safe_truncate(t, max_len)
 
 
 def _safe_text(text: str) -> str:
@@ -198,7 +203,7 @@ def _r(parent: ET.Element, *, bold: bool = False, color: str | None = None,
 def _t(parent: ET.Element, text: str) -> ET.Element:
     t = ET.SubElement(parent, _w("t"))
     t.set(f"{{{XML_NS}}}space", "preserve")
-    t.text = _safe_text(text)[:2000]
+    t.text = safe_truncate(_safe_text(text), 2000)
     return t
 
 
@@ -212,7 +217,7 @@ def _heading1(body: ET.Element, text: str) -> None:
     run = _r(p, bold=True)
     t = ET.SubElement(run, _w("t"))
     t.set(f"{{{XML_NS}}}space", "preserve")
-    t.text = _safe_text(text)[:500]
+    t.text = safe_truncate(_safe_text(text), 500)
 
 
 def _para(body: ET.Element, text: str, *, color: str | None = None,
@@ -295,12 +300,12 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         clause_title=_compose_display_title(str(d.get("clause_title") or ""), str(d.get("display_path") or "")),
         severity=sev,  # type: ignore[arg-type]
         approval_required=bool(d.get("approval_required")),
-        issue_title=str(d.get("issue_title") or "")[:120],
-        original_text=str(d.get("original_text") or "")[:500],
-        problem=str(d.get("problem") or d.get("rewrite_reason") or "")[:400],
-        legal_business_reason=str(d.get("legal_business_reason") or d.get("problem") or "")[:400],
-        proposed_revision=str(d.get("proposed_revision") or d.get("suggested_rewrite") or "")[:800],
-        negotiation_position=neg[:300],
+        issue_title=safe_truncate(str(d.get("issue_title") or ""), 120),
+        original_text=safe_truncate(str(d.get("original_text") or ""), 500),
+        problem=safe_truncate(str(d.get("problem") or d.get("rewrite_reason") or ""), 400),
+        legal_business_reason=safe_truncate(str(d.get("legal_business_reason") or d.get("problem") or ""), 400),
+        proposed_revision=safe_truncate(str(d.get("proposed_revision") or d.get("suggested_rewrite") or ""), 800),
+        negotiation_position=safe_truncate(neg, 300),
         # output_filter.build_final_findings() emits "related_clause_ids"
         # (ReviewIssue.to_dict()'s key there); legal_review_docx.py's own
         # _build_review_issues() (used only when no pre-filtered lists are
@@ -366,7 +371,7 @@ def _build_review_issues(
             if isinstance(first, dict):
                 issue_title = str(first.get("issue_title") or "").strip()
         if not issue_title:
-            issue_title = str(cr.get("issue_title") or problem).strip()[:120]
+            issue_title = safe_truncate(str(cr.get("issue_title") or problem).strip(), 120)
 
         clause_id = str(cr.get("clause_id") or "")
         if clause_id in seen_issue_ids and not cr.get("is_mandatory"):
@@ -385,12 +390,12 @@ def _build_review_issues(
             ),
             severity=sev,  # type: ignore[arg-type]
             approval_required=bool(cr.get("approval_required")),
-            issue_title=issue_title or problem[:80],
-            original_text=ot[:500] if ot else f"[{cr.get('clause_title', '')}] 관련 조항",
-            problem=problem[:400],
-            legal_business_reason=lr[:400],
-            proposed_revision=sr[:800],
-            negotiation_position=neg[:300],
+            issue_title=issue_title or safe_truncate(problem, 80),
+            original_text=safe_truncate(ot, 500) if ot else f"[{cr.get('clause_title', '')}] 관련 조항",
+            problem=safe_truncate(problem, 400),
+            legal_business_reason=safe_truncate(lr, 400),
+            proposed_revision=safe_truncate(sr, 800),
+            negotiation_position=safe_truncate(neg, 300),
             related_clauses=[str(r) for r in related[:6]],
             confidence=float(cr.get("confidence") or 0.75),
             is_checklist_item=bool(cr.get("is_checklist_item")),
@@ -844,10 +849,10 @@ def build_legal_review_docx(
                 _para(body, "★ 내부 법무 승인 필요", bold=True, color=COLOR_HIGH, indent=1)
 
             if issue.original_text and not issue.original_text.startswith("["):
-                _para(body, f"원문: {issue.original_text[:300]}", indent=1)
+                _para(body, f"원문: {safe_truncate(issue.original_text, 300)}", indent=1)
 
-            _para(body, f"문제점: {issue.problem[:350]}", indent=1)
-            _para(body, f"법적/실무상 이유: {issue.legal_business_reason[:350]}", indent=1)
+            _para(body, f"문제점: {safe_truncate(issue.problem, 350)}", indent=1)
+            _para(body, f"법적/실무상 이유: {safe_truncate(issue.legal_business_reason, 350)}", indent=1)
 
             if issue.proposed_revision:
                 _para(body, "수정문안:", bold=True, color=COLOR_HIGH, indent=1)
@@ -858,13 +863,13 @@ def build_legal_review_docx(
                         r_line = _r(p_line, color=COLOR_HIGH)
                         t_elem = ET.SubElement(r_line, _w("t"))
                         t_elem.set(f"{{{XML_NS}}}space", "preserve")
-                        t_elem.text = "      " + _clean_text(line)[:250]
+                        t_elem.text = "      " + safe_truncate(_clean_text(line), 250)
             else:
                 logger.error("HIGH issue %s has no proposed_revision", issue.clause_id)
 
             neg = issue.negotiation_position
             if neg and not _has_placeholder(neg):
-                _para(body, f"협상 포지션: {neg[:200]}", indent=1, italic=True)
+                _para(body, f"협상 포지션: {safe_truncate(neg, 200)}", indent=1, italic=True)
 
             if issue.related_clauses:
                 _para(body, f"함께 수정할 조항: {', '.join(issue.related_clauses[:6])}", indent=1)
@@ -888,14 +893,14 @@ def build_legal_review_docx(
             _t(r_title, f"[MEDIUM] {issue.clause_title} — {issue.issue_title}")
 
             if issue.original_text and not issue.original_text.startswith("["):
-                _para(body, f"원문: {issue.original_text[:200]}", indent=1)
+                _para(body, f"원문: {safe_truncate(issue.original_text, 200)}", indent=1)
 
-            _para(body, f"문제점: {issue.problem[:300]}", indent=1)
-            _para(body, f"수정방향: {issue.proposed_revision[:350]}", indent=1)
+            _para(body, f"문제점: {safe_truncate(issue.problem, 300)}", indent=1)
+            _para(body, f"수정방향: {safe_truncate(issue.proposed_revision, 350)}", indent=1)
 
             neg = issue.negotiation_position
             if neg and not _has_placeholder(neg):
-                _para(body, f"협상 포지션: {neg[:200]}", indent=1, italic=True)
+                _para(body, f"협상 포지션: {safe_truncate(neg, 200)}", indent=1, italic=True)
 
             if issue.related_clauses:
                 _para(body, f"함께 수정할 조항: {', '.join(issue.related_clauses[:4])}", indent=1)
@@ -945,7 +950,7 @@ def build_legal_review_docx(
                 r_ri = _r(p_ri, bold=True, color=COLOR_LOW)
                 _t(r_ri, f"[반영됨] {_ri_title}")
                 if _ri_text:
-                    _para(body, _ri_text[:350], indent=1, color=COLOR_LOW)
+                    _para(body, safe_truncate(_ri_text, 350), indent=1, color=COLOR_LOW)
                 _blank(body)
 
         if _customer_form_items:
@@ -956,7 +961,7 @@ def build_legal_review_docx(
             _t(r_h_cf, f"{_sec_cf}. 별첨/고객계약 양식 정합성 참고")
             for _cfi in _customer_form_items:
                 _cfi_text = _cfi.get("current_assessment_text", "") if isinstance(_cfi, dict) else ""
-                _para(body, _cfi_text[:400] if _cfi_text else "고객 렌탈계약서 양식 — 별도 법무 검토 권장", indent=1)
+                _para(body, safe_truncate(_cfi_text, 400) if _cfi_text else "고객 렌탈계약서 양식 — 별도 법무 검토 권장", indent=1)
             _blank(body)
 
     # ── Section (5 or 4 or 6): 제외된 항목 요약 ──────────────────────────────────────

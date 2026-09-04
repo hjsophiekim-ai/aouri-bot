@@ -27,6 +27,14 @@ class TextExtractionResult:
 
 _RX_PAGE_MARKER = re.compile(r"\[페이지\s*(\d+)\]")
 _RX_ARTICLE_MARKER = re.compile(r"제\s*\d+\s*조|Article\s+\d+", re.IGNORECASE)
+# 2026-09-04 실사례("영업지원 용역계약서") — "제1조/제2조" 대신 "1. 목적",
+# "2. 약정 기간"처럼 순수 번호매김 조항 형식을 쓰는 국내 부속합의서/약정서가
+# 실제로 흔하다. 이런 문서는 "제N조"/"Article N" 문자열이 전혀 없어도
+# 정상적으로 구조화된 계약서이므로, 줄 맨 앞의 "N. 제목" 헤딩이 3개 이상
+# 반복되는 경우도 "조항 표지가 있다"는 근거로 인정한다 — 스캔/CID깨짐
+# 문서가 우연히 여러 줄에 걸쳐 오름차순 번호로 시작하는 제목 형태를
+# 만들어낼 가능성은 매우 낮으므로 오탐 위험 없이 실사례 오탐만 제거한다.
+_RX_NUMBERED_CLAUSE_HEADING = re.compile(r"^\s*\d{1,2}\.\s*\S", re.MULTILINE)
 _RX_TOKEN = re.compile(r"[가-힣A-Za-z0-9]+")
 
 
@@ -68,8 +76,9 @@ def assess_text_quality(text: str) -> TextQualityAssessment:
       3. 한글/영문/숫자 토큰 중 "한 글자짜리" 비율이 비정상적으로 높음
          (정상적인 한글 문장은 조사가 붙은 여러 글자 단어 위주다 — CID
          매핑이 깨지면 모든 글자 사이에 공백이 들어가 이 비율이 치솟는다)
-      4. 상당한 분량인데 "제N조"/"Article N" 조항 표지가 전혀 없음
-         (실제 계약서라면 거의 항상 등장하는 구조 신호)
+      4. 상당한 분량인데 "제N조"/"Article N" 조항 표지도, "1. 제목"류
+         순수 번호매김 조항 헤딩(3회 이상 반복)도 전혀 없음 — 실제
+         계약서/약정서라면 둘 중 하나는 거의 항상 등장하는 구조 신호
     """
     t = text or ""
     total_chars = len(t.strip())
@@ -90,7 +99,7 @@ def assess_text_quality(text: str) -> TextQualityAssessment:
     single_char_tokens = sum(1 for tok in tokens if len(tok) == 1)
     single_char_token_ratio = (single_char_tokens / len(tokens)) if tokens else 0.0
 
-    has_article_markers = bool(_RX_ARTICLE_MARKER.search(t))
+    has_article_markers = bool(_RX_ARTICLE_MARKER.search(t)) or len(_RX_NUMBERED_CLAUSE_HEADING.findall(t)) >= 3
 
     if total_chars < 50:
         reasons.append("total_chars_near_zero")

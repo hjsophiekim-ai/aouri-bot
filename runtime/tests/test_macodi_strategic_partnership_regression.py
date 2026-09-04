@@ -229,6 +229,35 @@ class ExtractionQualityGateTest(unittest.TestCase):
         self.assertEqual(q.verdict, "low_quality")
         self.assertIn("single_char_token_ratio_too_high", q.reasons)
 
+    def test_numbered_clause_headings_without_article_word_pass_gate(self) -> None:
+        # 2026-09-04 실사례("영업지원 용역계약서") — "제1조/제2조"가 아니라
+        # "1. 목적", "2. 약정 기간"처럼 순수 번호매김 조항 형식을 쓰는
+        # 정상 약정서가 no_article_markers_despite_length로 잘못 차단되던
+        # 사고. 8개 조항을 "N. 제목" 형식으로 재현해 검증한다.
+        text = (
+            "영업지원 용역계약서\n"
+            "(주)일룸(이하 갑)과 주식회사 퍼시스데스커드림센터(이하 을)는 아래와 같이 약정한다.\n\n"
+            "1. 목적\n본 약정은 갑이 매장에서 그림을 대리판매함에 있어 을이 판매지원 용역을 제공하는 "
+            "내용으로 개별사항을 약정함을 목적으로 한다. 이를 위해 양 당사자는 성실히 협력한다.\n\n"
+            "2. 약정 기간\n본 약정의 유효기간은 2026년 4월 1일부터 2027년 3월 31일까지로 한다.\n\n"
+            "3. 판매취소 시 정산\n고객이 주문을 취소하였을 경우 을은 갑에게 기 정산되었던 비용을 반환한다.\n\n"
+            "4. 용역수수료 지급 금액\n갑은 판매금액의 10퍼센트를 용역수수료로 을에게 지급한다.\n\n"
+            "5. 영업지원 범위\n고객 상담 및 작품 안내, 매장 내 전시 및 진열 공간 관리를 포함한다.\n\n"
+            "6. 용역수수료 지급시기 및 방법\n을에게 익월 말일까지 현금으로 지급하는 것을 원칙으로 한다.\n\n"
+            "7. 영업배상책임\n을의 귀책사유로 인해 발생한 손해에 대해 을은 갑에게 배상할 책임이 있다.\n\n"
+            "8. 기타\n본 약정서 문구 해석상 이의가 발생했을 때는 갑의 해석에 따른다.\n"
+        )
+        q = assess_text_quality(text)
+        self.assertEqual(q.verdict, "ok", f"reasons={q.reasons}")
+        self.assertTrue(q.has_article_markers)
+
+    def test_stray_numbered_list_alone_does_not_fake_article_markers(self) -> None:
+        # 번호매김 헤딩이 우연히 1~2개만 있는 경우까지 "구조화된 계약서"로
+        # 오인하면 안 된다 — 3개 미만이면 여전히 원래 규칙대로 판단한다.
+        text = "1. 참고사항\n" + ("아무 의미 없는 반복 텍스트. " * 60)
+        q = assess_text_quality(text)
+        self.assertFalse(q.has_article_markers)
+
 
 class StatuteDetectionTest(unittest.TestCase):
     def test_detects_all_three_cited_statutes(self) -> None:

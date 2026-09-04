@@ -55,6 +55,10 @@ LEGAL_EFFECT_TAGS: tuple[str, ...] = (
     # 확인된, 계약유형과 무관하게 적용되는 추가 legal effect.
     "third_party_debt_guarantee",
     "counterparty_broad_self_liability_shield",
+    # Force Majeure(2026-09-04 지시) — 이 태그가 없으면 effects_overlap()이
+    # "원문 태그 없음=무조건 통과"로 처리해, 불가항력 조항에 SLA/지체상금류
+    # 문구가 섞여도 REVIEW_FAILED_SEMANTIC_MISMATCH가 못 잡는 구멍이 있었다.
+    "force_majeure",
 )
 
 # Each tag maps to a list of (regex, requires_dotall) fairly specific phrase
@@ -123,6 +127,9 @@ _PATTERNS: dict[str, list[re.Pattern[str]]] = {
     ],
     "ethics_morality": [
         re.compile(r"품위를?\s*유지|윤리\s*(헌장|규범)|사회적으로\s*비난받"),
+    ],
+    "force_majeure": [
+        re.compile(r"불가항력|force\s+majeure", re.IGNORECASE),
     ],
 }
 

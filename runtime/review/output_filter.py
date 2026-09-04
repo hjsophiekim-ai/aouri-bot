@@ -11,6 +11,7 @@ Enforces:
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -44,6 +45,29 @@ class ReviewIssue:
     paragraph_number: str = ""
     item_number: str = ""
     display_path: str = ""
+    # 안정적 finding 식별자(2026-09-03 지시) — clause_id는 위치/규칙 ID를
+    # 겸하고 있어 dedup 병합 시 바뀔 수 있으므로, UI와 DOCX/PDF가 "같은
+    # finding"임을 비교할 때는 이 필드를 쓴다. 비어있을 수 있다(과거
+    # 데이터/finding_id 부여 이전 경로와의 하위호환).
+    finding_id: str = ""
+    # common_legal_risk.py의 결정론적 rule(원문에 실제로 등장하는 문구를
+    # 정규식으로 직접 확인해 만든 고정밀 finding)인지 여부(2026-09-04 지시).
+    # is_valid_issue()의 Gate 4(계약유형별 금지문구 hallucination guard)가
+    # 이 rule들의 proposed_revision에 등장하는 "위탁판매"/"용역수수료" 같은
+    # 계약의 실제 문언을 contract_type_code 오분류 하나만으로 "wrong
+    # context"로 오인해 finding 전체를 조용히 걸러내던 사고를 방지한다.
+    is_common_legal_risk: bool = False
+    # Senior In-house Counsel 판단 레이어(2026-09-04 지시) — "법적으로
+    # 문제인가"(legal_risk/business_exposure)와 "지금 협상 테이블에 올릴
+    # 가치가 있는가"(negotiation_priority)를 분리한 필드. legal_risk==HIGH여도
+    # negotiation_priority==ACCEPT일 수 있다(우리 회사가 실제로 부담하지
+    # 않는 상대방 전용 리스크). 비어있으면 severity로 대체 표시한다(하위호환).
+    legal_risk: str = ""
+    business_exposure: str = ""
+    negotiation_priority: str = ""
+    recommended_starting_tier: str = ""
+    negotiation_priority_depends_on: str = ""
+    negotiation_feasibility: str = ""
 
     @property
     def display_bucket(self) -> str:
@@ -77,6 +101,14 @@ class ReviewIssue:
             "paragraph_number": self.paragraph_number,
             "item_number": self.item_number,
             "display_path": self.display_path,
+            "finding_id": self.finding_id,
+            "is_common_legal_risk": self.is_common_legal_risk,
+            "legal_risk": self.legal_risk or self.severity,
+            "business_exposure": self.business_exposure,
+            "negotiation_priority": self.negotiation_priority,
+            "recommended_starting_tier": self.recommended_starting_tier,
+            "negotiation_priority_depends_on": self.negotiation_priority_depends_on,
+            "negotiation_feasibility": self.negotiation_feasibility,
         }
 
 
@@ -151,8 +183,12 @@ def is_valid_issue(
     if issue.severity == "HIGH" and _is_generic(issue.proposed_revision):
         return False
 
-    # Gate 4: hallucination guard
-    if contract_type_code:
+    # Gate 4: hallucination guard — common_legal_risk.py의 결정론적 rule은
+    # 원문에 실제로 등장하는 문구를 정규식으로 직접 확인해 만든 고정밀
+    # finding이므로 이 계약유형별 금지문구 검사 대상이 아니다(2026-09-04
+    # 지시 회귀조건 — "위탁판매"/"용역수수료"처럼 계약이 실제로 다루는
+    # 어휘를 contract_type_code 오분류 하나만으로 걸러내는 사고 방지).
+    if contract_type_code and not issue.is_common_legal_risk:
         guard = check_revision_text(
             issue.proposed_revision,
             contract_type_code=contract_type_code,
@@ -309,6 +345,14 @@ def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
                     paragraph_number=issue.paragraph_number,
                     item_number=issue.item_number,
                     display_path=issue.display_path,
+                    finding_id=issue.finding_id,
+                    is_common_legal_risk=issue.is_common_legal_risk or existing.is_common_legal_risk,
+                    legal_risk=issue.legal_risk or existing.legal_risk,
+                    business_exposure=issue.business_exposure or existing.business_exposure,
+                    negotiation_priority=issue.negotiation_priority or existing.negotiation_priority,
+                    recommended_starting_tier=issue.recommended_starting_tier or existing.recommended_starting_tier,
+                    negotiation_priority_depends_on=issue.negotiation_priority_depends_on or existing.negotiation_priority_depends_on,
+                    negotiation_feasibility=issue.negotiation_feasibility or existing.negotiation_feasibility,
                 )
             else:
                 # Add new clause_id to existing's related list
@@ -319,6 +363,45 @@ def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
 
 
 # ─── Main filter function ─────────────────────────────────────────────────────
+
+# [요구 10] Exposure 기준 우선순위 — 실제 금전·귀책 노출이 큰 카테고리는
+# 조항번호나 계약유형이 아니라 legal effect/문언 구조로 식별한다.
+_HIGH_EXPOSURE_CLAUSE_IDS: frozenset[str] = frozenset({
+    "clr_third_party_debt_guarantee",
+    "clr_late_penalty_rate_uncapped",
+    "clr_counterparty_broad_self_liability_shield",
+    "clr_uncapped_mutual_indemnity_with_attorney_fees",
+    "clr_conditional_funding_unclear",
+    "clr_breach_triggers_related_contract_termination",
+})
+_RX_HIGH_EXPOSURE_KEYWORDS = re.compile(
+    r"제3자.{0,10}채무.{0,10}보증|타인.{0,10}채무.{0,10}보증"
+    r"|무제한\s*indemnity|무제한\s*배상|무제한\s*책임"
+    r"|정부지원금?\s*환수|지원금\s*환수|clawback"
+    r"|무과실\s*책임"
+    r"|장기\s*(?:최소구매|독점)|최소구매약정|독점\s*(?:공급|판매)"
+    r"|편의해지|기투입비용"
+    r"|cross[- ]?default|교차\s*불이행",
+    re.IGNORECASE,
+)
+_RX_LOW_EXPOSURE_MARKERS = re.compile(
+    r"문구\s*(?:보완|정리|수정)|통지\s*방법|일반\s*준거법|형식적\s*(?:보완|정리)",
+    re.IGNORECASE,
+)
+
+
+def _exposure_tier(issue: ReviewIssue) -> int:
+    """2 = 고노출(HIGH-exposure) 카테고리, 1 = 통상, 0 = 저노출(형식적
+    보완류) — severity와 별개로 top_risks 정렬 우선순위를 조정한다."""
+    if issue.clause_id in _HIGH_EXPOSURE_CLAUSE_IDS:
+        return 2
+    haystack = f"{issue.issue_title} {issue.problem} {issue.legal_business_reason}"
+    if _RX_LOW_EXPOSURE_MARKERS.search(haystack):
+        return 0
+    if _RX_HIGH_EXPOSURE_KEYWORDS.search(haystack):
+        return 2
+    return 1
+
 
 def filter_issues(
     issues: list[ReviewIssue],
@@ -379,10 +462,16 @@ def filter_issues(
     # Step 4: top risks (HIGH first, then MEDIUM, sorted by confidence).
     # Mandatory items are boosted ahead of equal-severity ordinary ones so a
     # user-cited clause can't be squeezed out of the TOP N by confidence rank.
+    # Exposure tier (요구 10, 2026-09-03 지시) sits between mandatory-boost
+    # and severity: 실제 금전·귀책 노출이 큰 카테고리(제3자 채무보증, 과도한
+    # penalty, 무제한 indemnity, 정부지원금 환수, 무과실 책임, cross-default
+    # 등)는 같은 severity 내에서도 우선 노출하고, 문구보완·통지방법·일반
+    # 준거법정리 같은 저노출 항목은 severity와 무관하게 top_risks에서
+    # 뒤로 밀린다.
     _SEV_KEY = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
     combined = sorted(
         high + medium,
-        key=lambda x: (int(x.is_mandatory), _SEV_KEY.get(x.severity, 0), x.confidence),
+        key=lambda x: (int(x.is_mandatory), _exposure_tier(x), _SEV_KEY.get(x.severity, 0), x.confidence),
         reverse=True,
     )
     top_risks = combined[:max_top_risks]
@@ -404,6 +493,8 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
     guardrail post-processing) so "what the reviewer saw" and "what's in the
     downloaded file" are built by the same rule, not two independently
     maintained filters that can silently diverge in count and content."""
+    from runtime.review.output_finalize import ensure_finding_ids
+    ensure_finding_ids(clause_results)
     out: list[ReviewIssue] = []
     for cr in clause_results:
         if not isinstance(cr, dict):
@@ -456,6 +547,14 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             paragraph_number=str(cr.get("paragraph_number") or "").strip(),
             item_number=str(cr.get("item_number") or "").strip(),
             display_path=str(cr.get("display_path") or "").strip(),
+            finding_id=str(cr.get("finding_id") or ""),
+            is_common_legal_risk=bool(cr.get("is_common_legal_risk")),
+            legal_risk=str(cr.get("legal_risk") or "").strip(),
+            business_exposure=str(cr.get("business_exposure") or cr.get("exposure_category") or "").strip(),
+            negotiation_priority=str(cr.get("negotiation_priority") or "").strip(),
+            recommended_starting_tier=str(cr.get("recommended_starting_tier") or "").strip(),
+            negotiation_priority_depends_on=str(cr.get("negotiation_priority_depends_on") or "").strip(),
+            negotiation_feasibility=str(cr.get("negotiation_feasibility") or "").strip(),
         ))
     return out
 

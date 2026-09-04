@@ -719,6 +719,17 @@ def inject_mandatory_issues(
 
     negotiation = _NEGOTIATION_COUNTERPARTY_FORM if is_counterparty_form else _NEGOTIATION_SUPPLIER_FORM
 
+    # 멱등성(2026-09-03 지시, UI/DOCX 동일 final_findings 요구) — 이 함수는
+    # 이제 UI 저장 시점과 DOCX 다운로드 시점 양쪽에서 같은 clause_results에
+    # 대해 호출될 수 있다. 이미 주입된 항목이 있는 입력에 다시 호출해도
+    # 중복 삽입되지 않도록, 호출 시작 시점에 이미 존재하는 mandatory_issue_id
+    # 를 먼저 수집해 둔다(같은 호출 안에서만 추적하는 injected_ids와는 별개).
+    existing_mandatory_ids: set[str] = {
+        str(cr.get("mandatory_issue_id") or cr.get("clause_id") or "")
+        for cr in clause_results
+        if isinstance(cr, dict) and bool(cr.get("is_mandatory"))
+    }
+
     injected_ids: set[str] = set()
     new_results: list[dict[str, Any]] = list(clause_results)
 
@@ -731,24 +742,44 @@ def inject_mandatory_issues(
         # Always add mandatory issue as a NEW cr with its own clause_id (MI-001 etc.)
         # This ensures _filter_and_sort_issues can identify it as mandatory via clause_id.
         # The original matched clause_result is kept as-is but gets severity upgrade.
-        if mandatory.issue_id not in injected_ids:
+        if mandatory.issue_id not in injected_ids and mandatory.issue_id not in existing_mandatory_ids:
             # Upgrade any matching existing clause result (severity, but NOT clause_id).
             # Skip already-injected mandatory issues to prevent one mandatory issue
             # from overwriting another's mandatory_issue_id tag.
+            _SEV_ORDER = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
             for cr in new_results:
                 if not isinstance(cr, dict):
                     continue
                 if cr.get("is_mandatory"):
                     continue
+                # common_legal_risk.py의 결정론적 rule(is_common_legal_risk=True)은
+                # 이미 자기 자신의 문장구조 분석으로 severity를 정한 고정밀
+                # finding이다 — 이 조 결과의 original_text 발췌문이 우연히
+                # 다른 mandatory issue의 트리거 문구와 겹친다고 해서(예:
+                # "관할 법원" 문구가 MI-* 패턴과 우연히 매치) 그 rule과
+                # 무관한 severity로 덮어써서는 안 된다(2026-09-04 실사례 —
+                # clr_unilateral_interpretation_and_forum이 HIGH에서
+                # 아무 관련 없는 MEDIUM 필수이슈로 조용히 강등됨).
+                if bool(cr.get("is_common_legal_risk")):
+                    continue
                 cr_text = str(cr.get("original_text") or "")
-                if cr_text and _detect_issue_in_text(mandatory, cr_text):
-                    cr["risk_tier"] = mandatory.severity
-                    cr["severity"] = mandatory.severity
-                    cr["high_risk"] = mandatory.severity == "HIGH"
-                    cr["must_fix"] = mandatory.severity == "HIGH"
-                    cr["is_mandatory_upgraded"] = True
-                    cr["mandatory_issue_id"] = mandatory.issue_id
-                    break
+                if not (cr_text and _detect_issue_in_text(mandatory, cr_text)):
+                    continue
+                # "Upgrade"라는 이름 그대로, severity를 낮추는 방향으로는
+                # 절대 덮어쓰지 않는다 — 같은 이유로 이 매치가 우연일 가능성을
+                # 배제할 수 없으므로, 더 낮은 mandatory.severity로 이미 더
+                # 높은 severity를 가진 finding을 조용히 다운그레이드하는
+                # 사고를 막는다.
+                _cur_sev = str(cr.get("risk_tier") or cr.get("severity") or "LOW").upper()
+                if _SEV_ORDER.get(mandatory.severity, 0) < _SEV_ORDER.get(_cur_sev, 0):
+                    continue
+                cr["risk_tier"] = mandatory.severity
+                cr["severity"] = mandatory.severity
+                cr["high_risk"] = mandatory.severity == "HIGH"
+                cr["must_fix"] = mandatory.severity == "HIGH"
+                cr["is_mandatory_upgraded"] = True
+                cr["mandatory_issue_id"] = mandatory.issue_id
+                break
 
             # Add the new mandatory cr
             if mandatory.issue_id not in injected_ids:

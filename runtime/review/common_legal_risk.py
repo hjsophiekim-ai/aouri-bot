@@ -19,6 +19,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from runtime.review.conditional_funding_review import _apply_conditional_funding_review
+from runtime.review.exposure_classification import classify_exposure
+from runtime.review.indemnity_direction import classify_indemnity_direction, has_unclear_indemnifying_party
+from runtime.review.negotiation_ladder import build_ladder
+from runtime.review.sales_transaction_rules import apply_sales_transaction_rules
+
 from runtime.review.clause_extraction import ClauseChunk, find_clause_scoped_excerpt, find_all_clause_scoped_matches
 
 _RX_PENALTY_CUMULATIVE_DAMAGE = re.compile(
@@ -656,7 +662,41 @@ _CLR_ITEMS: list[dict[str, Any]] = [
             "경우)로 한정하고, Consultant 자신의 단순 채무불이행에 대하여는 Consultant가 직접 반환 책임을 지도록 하며, "
             "Company의 보증 금액에는 상한(예: 이미 지급받은 선급금 범위 내)을 둔다."
         ),
-        "negotiation_position": "보증 자체의 삭제보다, 우리 회사의 보증 범위를 우리 귀책사유로 한정하거나 최소한 금액 상한을 두는 것을 우선 요청.",
+        # 협상 우선순위는 삭제가 1순위다(2026-09-03 지시) — 제3자(상대방)의
+        # 채무를 우리 회사가 보증하는 구조는 협상력이 허락하는 한 조항 자체를
+        # 삭제하는 것이 최선이며, 범위 한정·금액 상한은 삭제가 관철되지 않을
+        # 때의 차선책이다.
+        "negotiation_position": "보증조항 삭제를 1순위로 요청하고, 관철되지 않을 경우에만 우리 귀책사유 한정 또는 금액 상한을 차선책으로 협상.",
+        "negotiation_ladder": [
+            {
+                "priority": 1,
+                "label": "최선안",
+                "action": "보증조항 전체 삭제 — Consultant 자신의 채무불이행에 대한 반환 책임은 Consultant가 직접 부담",
+                "rewrite_text": (
+                    "Consultant가 지급받은 대금을 반환하여야 하는 경우, 그 반환 책임은 Consultant가 "
+                    "직접 부담한다. Company는 Consultant의 반환채무를 보증하지 아니한다."
+                ),
+            },
+            {
+                "priority": 2,
+                "label": "차선안",
+                "action": "Consultant 자신의 귀책사유로 인한 불이행에 대하여는 Company의 보증책임을 제외",
+                "rewrite_text": (
+                    "Company의 보증 책임은 Company 자신의 귀책사유(예: Company가 Consultant의 선정·"
+                    "관리에 중대한 과실이 있는 경우)로 한정하고, Consultant 자신의 단순 채무불이행에 "
+                    "대하여는 Consultant가 직접 반환 책임을 진다."
+                ),
+            },
+            {
+                "priority": 3,
+                "label": "최소수정안(fallback)",
+                "action": "위 두 안이 모두 관철되지 않을 경우 금액 상한과 책임요건(중과실)을 제한",
+                "rewrite_text": (
+                    "Company의 보증 금액은 이미 지급받은 선급금 범위 내로 상한을 두며, Company가 "
+                    "Consultant의 선정·관리에 중대한 과실이 있는 경우에 한하여 보증책임을 부담한다."
+                ),
+            },
+        ],
         "clause_topic": "other",
         "legal_effect_tags": ["third_party_debt_guarantee"],
     },
@@ -674,16 +714,23 @@ _CLR_ITEMS: list[dict[str, Any]] = [
             re.IGNORECASE | re.DOTALL,
         ),
         "risk": "HIGH",
-        "direction": "상대방의 자기책임 면제 범위를 상대방 자신의 고의·중과실이 없는 경우로 한정하고, 우리 쪽이 부담하는 면책 범위도 우리 자신의 귀책사유로 한정",
-        "reason": "계약상대방은 대금 지급 의무 외에는 어떠한 법적 책임도 지지 않으면서, 용역과 관련하여 발생하는 모든 청구·손해·비용에 대한 면책은 우리(또는 제3의 수행기관)가 부담하는 구조다.",
+        "direction": "① 면책 의무 주체(누가 indemnify하는가)를 조항에 명시할 것을 먼저 요구, ② 상대방의 자기책임 면제 범위를 상대방 자신의 고의·중과실이 없는 경우로 한정, ③ 면책 의무가 우리 쪽으로 귀속될 경우에도 그 범위를 우리 자신의 귀책사유로 한정",
+        # 2026-09-03 지시(요구 4) — "shall be indemnified against all claims"는
+        # 수동태로, 조항 자체는 "누가" 그 면책을 제공하는지 명시하지 않는다.
+        # 문맥상 우리 쪽(또는 제3의 수행기관)일 가능성이 높다는 합리적 추정은
+        # 하되, 그 추정을 확정된 사실처럼 서술하지 않고 "의무 주체 자체가
+        # 불명확하다"는 것을 별개의 독립된 문제로 명시한다 — Company가 반드시
+        # 부담한다고 단정해서는 안 된다.
+        "reason": "계약상대방은 대금 지급 의무 외에는 어떠한 법적 책임도 지지 않는다고 규정하면서, 그 대가로 '면책된다(shall be indemnified)'고만 되어 있을 뿐 그 면책 의무를 실제로 부담하는 당사자가 조항에 명시되어 있지 않다. 문맥상 우리 측(또는 제3의 수행기관)에게 귀속될 가능성이 높으나, 이는 추정일 뿐 조항 자체가 확정하지 않은 공백이다.",
         "legal_business_reason": (
-            "협상력이 강한 상대방(정부기관·지원기관 등)이 자신의 책임을 대금 지급 하나로 한정하면서 나머지 모든 "
-            "위험을 계약구조상 약자에게 전가하는 전형적인 불균형 구조다. 우리 회사가 실제로 통제할 수 없는 제3자의 "
-            "행위로 인한 청구까지 포괄적으로 떠안게 될 수 있다."
+            "면책 의무 주체가 명시되지 않은 상태로 서명하면, 분쟁 발생 시 상대방이 '계약상 누군가는 나를 면책하기로 "
+            "했다'는 문언을 근거로 우리 측에 그 부담을 주장할 수 있다 — 협상력이 강한 상대방(정부기관·지원기관 등)이 "
+            "자신의 책임을 대금 지급 하나로 한정하면서 나머지 위험의 귀속 주체를 의도적으로 비워두는 구조일 수 있다."
         ),
         "rewrite": (
-            "상대방의 책임 면제는 상대방 자신의 고의 또는 중대한 과실이 없는 통상적인 업무 수행에 한정하고, 우리 "
-            "쪽이 부담하는 면책 의무도 우리 자신 또는 우리가 지휘·감독하는 자의 귀책사유로 발생한 청구로 한정한다."
+            "본 조항의 면책 의무는 [면책 의무를 실제로 부담하는 당사자]가 이행하며, 그 범위는 해당 당사자 자신의 "
+            "고의 또는 중대한 과실로 발생한 청구로 한정한다. 각 당사자는 자신의 귀책사유로 발생한 청구에 대해서만 "
+            "상대방에게 배상 책임을 진다."
         ),
         "negotiation_position": "포괄적 면책 문구 자체보다, 면책 범위를 '귀책사유가 있는 당사자'로 한정하는 것을 우선 요청 — 정부기관 상대 계약에서는 문구 전면 삭제보다 실현 가능성이 높다.",
         "clause_topic": "other",
@@ -715,6 +762,33 @@ _CLR_ITEMS: list[dict[str, Any]] = [
         "negotiation_position": "cap 신설을 우선 요청 — 상호 조항이므로 상대방도 같은 보호를 받는 구조라 협상 성사 가능성이 높다.",
         "clause_topic": "other",
         "legal_effect_tags": ["uncapped_liability", "indemnity"],
+        "negotiation_ladder": [
+            {
+                "priority": 1,
+                "label": "최선안",
+                "action": "배상·면책 책임 총액 cap 신설 + 간접·결과적·특별손해 배상범위 제외",
+                "rewrite_text": (
+                    "각 당사자의 배상·면책 책임 총액은 본 계약에 따라 지급(또는 수령)한 대금 총액을 "
+                    "한도로 하며, 간접손해·결과적 손해·특별손해 및 변호사 보수는 배상 범위에서 제외한다."
+                ),
+            },
+            {
+                "priority": 2,
+                "label": "차선안",
+                "action": "간접손해 제외 없이 총액 cap만 신설",
+                "rewrite_text": (
+                    "각 당사자의 배상·면책 책임 총액은 본 계약에 따라 지급(또는 수령)한 대금 총액을 한도로 한다."
+                ),
+            },
+            {
+                "priority": 3,
+                "label": "최소수정안(fallback)",
+                "action": "총액 cap이 관철되지 않을 경우 변호사 보수(attorney's fees)만이라도 배상범위에서 제외",
+                "rewrite_text": (
+                    "본 조항에 따른 배상·면책 범위에는 변호사 보수 및 소송비용을 포함하지 아니한다."
+                ),
+            },
+        ],
     },
     {
         "id": "clr_ethics_morality_termination_waiver_cluster",
@@ -772,6 +846,7 @@ def _apply_common_legal_risk_rules(
     clause_results: list[dict[str, Any]],
     full_text: str,
     clauses: list[ClauseChunk] | None = None,
+    our_party_aliases: list[str] | None = None,
 ) -> None:
     """[Layer 1] Common legal risk checklist — runs for EVERY contract type.
 
@@ -857,6 +932,7 @@ def _apply_common_legal_risk_rules(
         clause_title = f"{display_path} [{item['name']}]" if display_path else f"[공통 법률리스크] {item['name']}"
         _effect_tags = item.get("legal_effect_tags")
         _effect_tags = list(_effect_tags) if isinstance(_effect_tags, list) else []
+        _indemnity_direction = classify_indemnity_direction(excerpt)
         clause_results.append({
             "clause_id": item["id"],
             "article_number": article_number,
@@ -892,12 +968,17 @@ def _apply_common_legal_risk_rules(
             "factual_hit": False,
             "ai_deep_reviewed": False,
             **({"original_effect_tags": _effect_tags, "rewrite_effect_tags": _effect_tags} if _effect_tags else {}),
+            **({"negotiation_ladder": item["negotiation_ladder"]} if item.get("negotiation_ladder") else {}),
+            **({"indemnity_direction": _indemnity_direction} if _indemnity_direction else {}),
         })
 
     _apply_cross_default_severity_check(clause_results)
     _apply_termination_vs_term_check(clause_results, text, clauses)
-    _apply_late_penalty_uncapped_check(clause_results, text, clauses)
+    _apply_late_penalty_uncapped_check(clause_results, text, clauses, our_party_aliases)
     _apply_confidentiality_survival_undefined_check(clause_results, clauses)
+    _apply_conditional_funding_review(clause_results, text)
+    _apply_indemnifying_party_unclear_check(clause_results, clauses)
+    apply_sales_transaction_rules(clause_results, text, clauses)
 
 
 _RX_SURVIVAL_NO_TERM = re.compile(
@@ -974,10 +1055,105 @@ def _apply_confidentiality_survival_undefined_check(
         return
 
 
+def _apply_indemnifying_party_unclear_check(
+    clause_results: list[dict[str, Any]],
+    clauses: list[ClauseChunk] | None = None,
+) -> None:
+    """범용 사내변호사형 검토 고도화(2026-09-03 지시, 요구 4) — "shall be
+    indemnified"/"면책된다"처럼 수동태로만 되어 있고 그 면책 의무를 실제로
+    부담하는 당사자가 조항에 명시되지 않은 indemnity 문구를 감지한다.
+
+    핵심 원칙: 의무 주체가 불명확할 때 그 주체를 우리 회사(또는 다른 특정
+    당사자)로 임의 단정하지 않는다 — "누가 면책하는지 불명확하다" 자체를
+    finding으로 만들고, 수정방향은 "각 당사자는 자신의 귀책사유로 발생한
+    청구에 대해서만 책임진다"는 원칙 명확화다. 이미 더 구체적인 3개
+    방향성 패턴(제3자 채무보증/상대방 자기책임면제/상호 indemnity)에
+    해당하는 조항은 그쪽에서 이미 다루므로 제외한다.
+    """
+    existing = {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}
+    if "clr_indemnifying_party_unclear" in existing:
+        return
+    for c in (clauses or []):
+        leaf_text = str(getattr(c, "text", None) or (c.get("text") if isinstance(c, dict) else "") or "")
+        if not has_unclear_indemnifying_party(leaf_text):
+            continue
+        art = str(getattr(c, "article_number", None) or (c.get("article_number") if isinstance(c, dict) else "") or "").strip() or None
+        para = str(getattr(c, "paragraph_number", None) or (c.get("paragraph_number") if isinstance(c, dict) else "") or "").strip() or None
+        display_path = str(getattr(c, "display_path", None) or (c.get("display_path") if isinstance(c, dict) else "") or "").strip() or None
+        title = f"{display_path} [면책(indemnify) 의무 주체 불명확]" if display_path else "[공통 법률리스크] 면책(indemnify) 의무 주체 불명확"
+        clause_results.append({
+            "clause_id": "clr_indemnifying_party_unclear",
+            "article_number": art,
+            "paragraph_number": para,
+            "display_path": display_path,
+            "clause_title": title,
+            "clause_number_uncertain": not bool(display_path),
+            "clause_topic": "other",
+            "original_text": leaf_text.strip()[:400],
+            "risk_tier": "MEDIUM",
+            "severity": "MEDIUM",
+            "high_risk": False,
+            "must_fix": False,
+            "approval_required": False,
+            "review_tier": "SUGGEST",
+            "suggested_rewrite": (
+                "각 당사자는 자신의 고의 또는 과실로 발생한 청구에 대해서만 상대방에게 배상(면책) 책임을 "
+                "진다. 본 조항의 면책 의무를 실제로 이행하는 당사자를 명시한다."
+            ),
+            "rewrite_reason": "면책(indemnify) 의무가 수동태로만 규정되어 있어, 그 의무를 실제로 부담하는 당사자가 조항 자체에 명시되어 있지 않다.",
+            "legal_business_reason": (
+                "면책 의무 주체가 불명확한 상태로는 분쟁 발생 시 상대방이 임의의 당사자에게 그 부담을 "
+                "주장할 수 있다 — 어느 한쪽으로 단정하지 말고, 협상 단계에서 주체를 먼저 명확히 해야 한다."
+            ),
+            "suggested_direction": ["면책 의무의 주체를 조항에 명시하고, 각 당사자 자신의 귀책사유로 발생한 청구로 책임 범위를 한정"],
+            "negotiation_position": "주체 불명확 자체를 협상 쟁점으로 제기 — 상대방이 스스로를 의무 주체에서 배제하려는 의도인지 먼저 확인.",
+            "confidence": 0.7,
+            "is_common_legal_risk": True,
+            "has_rewrite_change": True,
+            "display_kind": "guidance",
+            "negotiation_ladder": [
+                {
+                    "priority": 1,
+                    "label": "최선안",
+                    "action": "면책 의무의 실제 주체를 조항에 명시",
+                    "rewrite_text": (
+                        "본 조항의 면책 의무는 [면책 의무를 실제로 부담하는 당사자]가 이행하며, "
+                        "그 범위는 해당 당사자 자신의 고의 또는 중대한 과실로 발생한 청구로 한정한다."
+                    ),
+                },
+                {
+                    "priority": 2,
+                    "label": "차선안",
+                    "action": "주체를 특정하지 못하더라도 각자 귀책 원칙만이라도 명시",
+                    "rewrite_text": (
+                        "각 당사자는 자신의 고의 또는 과실로 발생한 청구에 대해서만 상대방에게 "
+                        "배상(면책) 책임을 진다."
+                    ),
+                },
+                {
+                    "priority": 3,
+                    "label": "최소수정안(fallback)",
+                    "action": "위 두 안이 모두 관철되지 않을 경우, 계약 체결 전 면책의 실질적 부담자를 문서 외로 확인",
+                    "rewrite_text": (
+                        "현행 문언을 유지하되, 면책 의무의 실질적 부담자가 누구인지 계약 체결 전 상대방에게 "
+                        "서면(이메일 등)으로 확인해 분쟁 발생 시 근거자료로 보관한다."
+                    ),
+                },
+            ],
+            "dedup_suppressed": False,
+            "keep_as_is": False,
+            "user_focus_hit": False,
+            "factual_hit": False,
+            "ai_deep_reviewed": False,
+        })
+        return
+
+
 def _apply_late_penalty_uncapped_check(
     clause_results: list[dict[str, Any]],
     text: str,
     clauses: list[ClauseChunk] | None = None,
+    our_party_aliases: list[str] | None = None,
 ) -> None:
     """변호사형 전체계약 판단 (2026-08-31 지시) > 금전 리스크 최우선 분석.
 
@@ -1007,12 +1183,31 @@ def _apply_late_penalty_uncapped_check(
             continue
         has_cap = bool(_RX_PENALTY_CAP.search(leaf_text))
         has_cumulative = bool(_RX_PENALTY_CUMULATIVE_DAMAGE.search(leaf_text))
+        # [Exposure 분류, 2026-09-04 지시] — 이 지체상금의 채무자가 우리
+        # 회사가 아니라 상대방(예: KOTRA 3자 컨설팅계약의 Consultant→KOTRA
+        # 지체상금)이면, 우리 회사의 직접 리스크가 아니므로 HIGH로 올리지
+        # 않는다 — 단, 같은 계약에 우리 쪽이 그 채무를 보증하는 finding
+        # (clr_third_party_debt_guarantee)이 있으면 risk cascade로 실제
+        # 연결되므로 그대로 둔다(강등하지 않음).
+        exposure_category = classify_exposure(leaf_text, our_party_aliases)
+        _has_our_guarantee_link = any(
+            isinstance(_cr, dict) and _cr.get("clause_id") == "clr_third_party_debt_guarantee"
+            for _cr in clause_results
+        )
+        _exposure_capped = exposure_category == "counterparty_only" and not _has_our_guarantee_link
         art = str(getattr(c, "article_number", None) or (c.get("article_number") if isinstance(c, dict) else "") or "").strip() or None
         para = str(getattr(c, "paragraph_number", None) or (c.get("paragraph_number") if isinstance(c, dict) else "") or "").strip() or None
         display_path = str(getattr(c, "display_path", None) or (c.get("display_path") if isinstance(c, dict) else "") or "").strip() or None
         rate_str = f"{rate_pct:g}"
         ten_day = f"{rate_pct * 10:g}"
         thirty_day = f"{rate_pct * 30:g}"
+        # [요구 5, 2026-09-03 지시] — "보다 낮은 요율로 인하한다"는 추상적
+        # 표현 대신 실제 협상 가능한 구체적 1차안 숫자를 제시한다. 국내
+        # 상거래계약에서 흔히 쓰이는 1일 0.1%(연 약 36.5%) 수준을 기준으로,
+        # 원래 요율이 이미 그보다 낮다면(드문 경우) 원래 요율의 절반을 제안해
+        # 항상 실제 인하가 되도록 한다.
+        concrete_rate = 0.1 if rate_pct > 0.1 else round(rate_pct / 2, 4)
+        concrete_rate_str = f"{concrete_rate:g}"
 
         if has_cumulative:
             # 같은 조항의 standalone 중복청구 finding은 이 클러스터로 흡수
@@ -1033,7 +1228,7 @@ def _apply_late_penalty_uncapped_check(
                 "사전에 예측·통제할 수 없다."
             )
             rewrite = (
-                f"① 지체상금은 지체일수 당 대금의 {rate_str}%보다 낮은 요율로 인하한다.\n"
+                f"① 지체상금은 지체일수 당 대금의 {concrete_rate_str}%(연 약 {concrete_rate * 365:g}%) 수준으로 인하한다.\n"
                 "② 지체상금 누계액은 대금의 10%를 초과할 수 없다.\n"
                 "③ 지체상금은 지체로 인한 손해배상액의 예정으로 하며, 상대방은 지체상금을 "
                 "초과하는 실손해가 지체상금 산정과 무관한 별도의 손해임을 구체적으로 입증한 "
@@ -1041,20 +1236,62 @@ def _apply_late_penalty_uncapped_check(
             )
             direction = "① 일 지체상금률 인하, ② 지체상금 총액 상한 설정, ③ 실손해 중복청구 제한 — 세 요소를 함께 협상"
             negotiation = "요율 인하와 총액 cap은 반드시 요청. 실손해 중복청구는 최소한 초과손해 입증 방식으로 제한."
+            ladder = build_ladder([
+                (
+                    "최선안",
+                    "요율을 대폭 인하하고 누계 상한을 설정하며, 실손해 중복청구를 제한",
+                    rewrite,
+                ),
+                (
+                    "최소수정안",
+                    "현재 요율은 유지하더라도 누계 상한과 실손해 중복청구 제한은 반드시 확보",
+                    (
+                        f"지체상금율({rate_str}%)은 유지하되, 지체상금 누계액은 대금의 15%를 초과할 "
+                        "수 없다. 상대방은 지체상금을 초과하는 실손해가 지체상금 산정과 무관한 "
+                        "별도의 손해임을 구체적으로 입증한 경우에 한하여 그 초과분만을 추가로 "
+                        "청구할 수 있다."
+                    ),
+                ),
+            ])
         else:
-            title = f"{display_path} [지체상금율 미계산·상한 부재]" if display_path else "[공통 법률리스크] 지체상금율 미계산·상한 부재"
+            title = f"{display_path} [지체상금율 과다·상한 부재]" if display_path else "[공통 법률리스크] 지체상금율 과다·상한 부재"
             problem = f"지체일수 당 {rate_str}%의 지체상금에 누계 상한이 없다."
             legal_reason = (
                 f"10일 지연 시 계약금액의 약 {ten_day}%, 30일 지연 시 약 {thirty_day}%에 달하는데, "
-                "상한(캡) 규정이 없어 지연이 길어질수록 배상액이 무제한으로 누적될 수 있다."
+                "상한(캡) 규정이 없어 지연이 길어질수록 배상액이 무제한으로 누적될 수 있다. 상한만 "
+                "추가하고 요율 자체를 그대로 두면 지연 초반 단기간에도 배상액이 과도해질 수 있으므로 "
+                "요율 인하와 상한 설정을 함께 검토해야 한다."
             )
+            # 요율(rate)은 그대로 두고 상한(cap)만 추가하는 수정안은 비논리적이다
+            # (2026-09-03 지시, 회귀조건) — 요율 인하와 누계 상한을 함께 제시한다.
             rewrite = (
-                f"지체상금은 지체일수 당 대금의 {rate_str}%로 하되, 지체상금 누계액은 대금의 "
-                "10%를 초과할 수 없다."
+                f"① 지체상금율을 지체일수 당 대금의 {concrete_rate_str}%(연 약 {concrete_rate * 365:g}%) 수준으로 인하한다.\n"
+                "② 지체상금 누계액은 대금의 10%를 초과할 수 없다."
             )
-            direction = "지체상금 누계 상한(예: 대금의 10%) 설정"
-            negotiation = "지체상금율 자체보다 '상한 부재'가 협상 포인트 — 상한 신설을 우선 요구"
+            direction = "① 일 지체상금률 인하, ② 지체상금 누계 상한(예: 대금의 10%) 설정 — 요율 인하와 상한 설정을 함께 협상"
+            negotiation = "상한 부재뿐 아니라 요율 자체도 과도 — 요율 인하와 누계 상한 설정을 함께 요청."
+            ladder = build_ladder([
+                (
+                    "최선안",
+                    "요율을 대폭 인하하고 누계 상한을 함께 설정",
+                    rewrite,
+                ),
+                (
+                    "최소수정안",
+                    f"현재 요율({rate_str}%)은 유지하더라도 누계 상한은 반드시 확보",
+                    (
+                        f"지체상금은 지체일수 당 대금의 {rate_str}%로 하되, 지체상금 누계액은 대금의 "
+                        "15%를 초과할 수 없다."
+                    ),
+                ),
+            ])
 
+        _is_high = (not has_cap) and not _exposure_capped
+        if _exposure_capped:
+            legal_reason += (
+                " 다만 이 지체상금의 채무자는 우리 회사가 아니라 상대방이므로, 다른 조항을 통해 "
+                "우리 회사의 보증책임 등으로 전이되지 않는 한 우리 회사의 직접 리스크는 아니다."
+            )
         clause_results.append({
             "clause_id": "clr_late_penalty_rate_uncapped",
             "article_number": art,
@@ -1064,21 +1301,23 @@ def _apply_late_penalty_uncapped_check(
             "clause_number_uncertain": not bool(display_path),
             "clause_topic": "damage",
             "original_text": leaf_text.strip()[:400],
-            "risk_tier": "HIGH" if not has_cap else "MEDIUM",
-            "severity": "HIGH" if not has_cap else "MEDIUM",
-            "high_risk": not has_cap,
-            "must_fix": not has_cap,
-            "approval_required": not has_cap,
-            "review_tier": "MUST" if not has_cap else "SUGGEST",
+            "risk_tier": "HIGH" if _is_high else "MEDIUM",
+            "severity": "HIGH" if _is_high else "MEDIUM",
+            "high_risk": _is_high,
+            "must_fix": _is_high,
+            "approval_required": _is_high,
+            "review_tier": "MUST" if _is_high else "SUGGEST",
             "suggested_rewrite": rewrite,
             "rewrite_reason": problem,
             "legal_business_reason": legal_reason,
             "suggested_direction": [direction],
             "negotiation_position": negotiation,
+            "negotiation_ladder": ladder,
             "confidence": 0.85,
             "is_common_legal_risk": True,
             "has_rewrite_change": True,
-            "display_kind": "redline" if not has_cap else "guidance",
+            "display_kind": "redline" if _is_high else "guidance",
+            "exposure_category": exposure_category,
             "dedup_suppressed": False,
             "keep_as_is": False,
             "user_focus_hit": False,

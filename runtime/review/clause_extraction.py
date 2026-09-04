@@ -979,6 +979,32 @@ def group_clause_text_by_article(clauses: list[Any] | None) -> list[tuple[str, s
     return [(art, "\n".join(parts[art])) for art in order]
 
 
+def _snap_window_start(text: str, idx: int) -> int:
+    """[요구 6, 2026-09-03 지시] `idx`가 단어 중간이면 그 단어 시작 이전의
+    공백/줄바꿈까지 되돌아간다 — 그렇지 않으면 "Article 6"의 "before=40"
+    윈도우가 우연히 단어 한가운데(예: "Art|icle")에서 시작해 발췌문이
+    "icle 6 Indemnification..."처럼 잘려서 시작하는 사고가 난다(KOTRA
+    Article 6 실사례로 확인)."""
+    if idx <= 0:
+        return 0
+    if idx >= len(text) or text[idx - 1].isspace():
+        return idx
+    j = max(text.rfind(" ", 0, idx), text.rfind("\n", 0, idx))
+    return j + 1 if j >= 0 else 0
+
+
+def _snap_window_end(text: str, idx: int) -> int:
+    """`idx`가 단어 중간이면 그 단어 끝(다음 공백/줄바꿈) 또는 문자열
+    끝까지 확장한다 — 발췌문이 단어 중간에서 끝나지 않게 한다."""
+    n = len(text)
+    if idx >= n:
+        return n
+    if idx <= 0 or text[idx].isspace():
+        return idx
+    candidates = [x for x in (text.find(" ", idx), text.find("\n", idx)) if x != -1]
+    return min(candidates) if candidates else n
+
+
 def find_clause_scoped_excerpt(
     clauses: list[Any] | None,
     pattern: "re.Pattern[str]",
@@ -1005,8 +1031,8 @@ def find_clause_scoped_excerpt(
         m = pattern.search(leaf_text)
         if not m:
             continue
-        start = max(0, m.start() - before)
-        end = min(len(leaf_text), m.end() + after)
+        start = _snap_window_start(leaf_text, max(0, m.start() - before))
+        end = _snap_window_end(leaf_text, min(len(leaf_text), m.end() + after))
         art = str(_clause_field(c, "article_number") or "").strip() or None
         return leaf_text[start:end].strip(), art
 
@@ -1014,8 +1040,8 @@ def find_clause_scoped_excerpt(
         m = pattern.search(art_text)
         if not m:
             continue
-        start = max(0, m.start() - before)
-        end = min(len(art_text), m.end() + after)
+        start = _snap_window_start(art_text, max(0, m.start() - before))
+        end = _snap_window_end(art_text, min(len(art_text), m.end() + after))
         return art_text[start:end].strip(), art
     return None
 
@@ -1055,8 +1081,8 @@ def find_all_clause_scoped_matches(
         m = pattern.search(leaf_text)
         if not m:
             continue
-        start = max(0, m.start() - before)
-        end = min(len(leaf_text), m.end() + after)
+        start = _snap_window_start(leaf_text, max(0, m.start() - before))
+        end = _snap_window_end(leaf_text, min(len(leaf_text), m.end() + after))
         out.append(
             ClauseScopedMatch(
                 excerpt=leaf_text[start:end].strip(),
