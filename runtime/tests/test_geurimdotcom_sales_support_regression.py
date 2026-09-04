@@ -379,5 +379,89 @@ class QuestionSessionDocumentScopingTest(unittest.TestCase):
         self.assertFalse(doc_b.get("answers"), "새 문서 세션은 이전 세션의 답변을 승계하면 안 된다")
 
 
+class GeurimdotcomGoldenAnswerApplicabilityTest(unittest.TestCase):
+    """대리점법 적용성 판단 보정(2026-09-04 지시, 그림닷컴 Golden Answer) —
+    기존 대리점(위탁판매)관계가 있고 이번 계약이 동일 매장·인력·POS 또는
+    계약기간·해지 연동으로 그 관계와 경제적·운영상 연계되어 있으면,
+    상대방이 자기 명의로 재판매하지 않는다는 이유만으로 대리점법 적용을
+    "낮음"으로 방치하면 안 된다(적용 가능성 있음/MEDIUM 이상). 반대로
+    하도급법은 단순 판매지원 업무만으로 MEDIUM 이상 자동 승격되면 안
+    된다(낮음/LOW 확정). 조항번호·회사명·상품명을 하드코딩하지 않는
+    구조 신호 기반 판단이 실제로 이 실사례에서 정답을 내는지 확인한다."""
+
+    _ANSWERS = {
+        "Q-TXN-001-seller": "(주)일룸",
+        "Q-TXN-002-owner": "(주)일룸 - 일룸이 그림을 매입하여 재판매",
+        "Q-TXN-003-revenue": "(주)일룸 매출로 인식",
+        "Q-TXN-004-payment-collection": "매장 POS로 결제되나 위탁매매 구조로 (주)일룸 명의로 결제됨",
+        "Q-TXN-008-relationship-type": "sales_support_service",
+        "Q-TXN-009-existing-contract-link": "기존 위탁판매(운영) 계약과 계약기간·해지가 연동됨",
+    }
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from runtime.review.clause_level import build_clause_level_result
+        from runtime.rules.loader import RuleLoader
+        from runtime.services.query_service import RuleQueryService
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        cls.bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="영업지원 용역계약",
+            text=text, filename="geurimdotcom.pdf",
+            answers=dict(cls._ANSWERS), review_focus=None, law_service=None,
+            ai_provider=None, ai_model=None, ai_timeout_sec=None, ai_max_tokens=None, ai_temperature=None,
+        )
+        cls.lar_by_statute = {
+            str(r.get("statute")): r
+            for r in (cls.bundle.meta.get("legal_applicability_review") or [])
+            if isinstance(r, dict)
+        }
+
+    def test_dealer_act_applicability_not_low(self) -> None:
+        dealer = self.lar_by_statute.get("대리점법")
+        self.assertIsNotNone(dealer, "위탁판매/대리점 성격 계약에서 대리점법은 항상 검토 대상이어야 한다")
+        self.assertNotIn(dealer.get("risk_level"), ("LOW",), "대리점법을 낮음으로 방치하면 안 된다")
+        self.assertNotEqual(dealer.get("applicability"), "낮음")
+        self.assertEqual(dealer.get("applicability"), "있음(추가 확인 필요)")
+        self.assertEqual(dealer.get("risk_level"), "MEDIUM")
+
+    def test_subcontract_act_capped_at_low(self) -> None:
+        subcontract = self.lar_by_statute.get("하도급법")
+        self.assertIsNotNone(subcontract)
+        self.assertEqual(subcontract.get("risk_level"), "LOW", "단순 판매지원만으로 하도급법이 MEDIUM 이상으로 승격되면 안 된다")
+        self.assertEqual(subcontract.get("applicability"), "낮음")
+
+    def test_self_check_ok(self) -> None:
+        self_check = self.bundle.meta.get("self_check") or {}
+        self.assertEqual(self_check.get("review_status"), "OK")
+
+    def test_system_guaranteed_statutes_do_not_trigger_missing_scope_failure(self) -> None:
+        # 대리점법/하도급법을 시스템이 항상 검토 대상에 포함시키더라도,
+        # 이는 사용자가 직접 요청한 것이 아니므로 AI 미가동 stub만 남아도
+        # REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING을 유발하면 안 된다.
+        self.assertIsNone(self.bundle.meta.get("review_status"))
+        self.assertNotIn("대리점법", self.bundle.meta.get("user_cited_statutes") or [])
+        self.assertNotIn("하도급법", self.bundle.meta.get("user_cited_statutes") or [])
+
+    def test_canonical_facts_still_resolved_to_illoom(self) -> None:
+        facts = self.bundle.meta.get("canonical_transaction_facts") or {}
+        self.assertIn("일룸", facts.get("seller") or "")
+        self.assertIn("일룸", facts.get("owner_of_goods") or "")
+
+    def test_unilateral_interpretation_finding_stays_high_not_capped_by_jurisdiction_calibration(self) -> None:
+        # 관할 자체는 원칙적으로 HIGH 금지이지만, 이 계약의 핵심 문제는
+        # 관할이 아니라 일방적 해석권이다 — clr_unilateral_interpretation_
+        # and_forum은 is_common_legal_risk=True라 jurisdiction_risk_
+        # calibration의 대상이 아니며, HIGH로 유지되어야 한다.
+        crs = [cr for cr in self.bundle.clause_results if isinstance(cr, dict)]
+        cr = next((c for c in crs if c.get("clause_id") == "clr_unilateral_interpretation_and_forum"), None)
+        self.assertIsNotNone(cr)
+        self.assertEqual(cr.get("risk_tier"), "HIGH")
+        self.assertTrue(cr.get("is_common_legal_risk"))
+
+
 if __name__ == "__main__":
     unittest.main()

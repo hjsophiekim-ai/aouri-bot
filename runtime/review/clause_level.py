@@ -3522,8 +3522,31 @@ def build_clause_level_result(
     _cited_statutes = _cited_statutes + infer_additional_relevant_statutes(
         review_focus=review_focus, text=str(text or ""), already_cited=_cited_statutes,
     )
-    _legal_applicability_results = build_mandatory_legal_applicability_review(
-        statutes=_cited_statutes,
+    # [기존 대리점(위탁판매)관계가 있는 계약 — 대리점법/하도급법 상시 보장]
+    # (2026-09-04 지시, 그림닷컴 사례) — 사용자가 "그 외 법령"처럼 포괄적
+    # 검토를 요청한 경우에만 대리점법/하도급법이 추가되던 기존 방식은,
+    # 사용자가 그런 문구를 쓰지 않으면 이 계약유형에서 가장 핵심적인 두
+    # 법률이 통째로 검토되지 않을 수 있었다 — "기존 대리점(위탁판매)
+    # 관계가 있다"는 신호(원문의 대리점/위탁판매/가맹 언급, 또는 사용자가
+    # 답변한 existing_related_contract)가 감지되면 사용자 요청 여부와
+    # 무관하게 항상 독립 분석 대상에 포함한다. 이 신호는 sales_transaction_
+    # rules.py의 기존계약연계 rule과 동일한 것을 재사용한다 — 단순 판매
+    # 모호성(detect_sales_transaction_ambiguity, 예: 렌탈·매매 혼재 계약)
+    # 까지 넓히면 대리점/위탁판매와 무관한 계약에도 불필요하게 번져
+    # 과대적용된다. 실제 적용 여부는 이후 calibration이 구조 신호로 다시
+    # 판정하므로, 여기서는 "검토 대상에서 누락되지 않는다"만 보장한다.
+    # _cited_statutes(사용자가 직접 지정 — AI 없이는 REVIEW_FAILED_USER_
+    # LEGAL_SCOPE_MISSING 대상)에는 넣지 않는다 — 이건 사용자 요청이 아니라
+    # 시스템이 이 계약유형에 대해 스스로 보장하는 검토이므로, AI 미가동
+    # stub이 남아도 실패 사유가 아니다.
+    from runtime.review.statute_applicability_calibration import has_existing_dealer_relationship_signal
+    _system_guaranteed_statutes: list[str] = []
+    if has_existing_dealer_relationship_signal(str(text or ""), _legal_map.fields):
+        _system_guaranteed_statutes = [
+            s for s in ("대리점법", "하도급법") if s not in _cited_statutes
+        ]
+    _legal_applicability_results_raw = build_mandatory_legal_applicability_review(
+        statutes=_cited_statutes + _system_guaranteed_statutes,
         contract_legal_map=_legal_map.to_dict(),
         text=str(text or ""),
         entity=str(entity),
@@ -3532,6 +3555,16 @@ def build_clause_level_result(
         ai_timeout_sec=ai_timeout_sec,
         ai_max_tokens=ai_max_tokens,
         ai_temperature=ai_temperature,
+    )
+    # [대리점법/하도급법 적용가능성 보정] (2026-09-04 지시, 그림닷컴 사례) —
+    # AI/stub이 만든 결과를 계약의 구조적 신호(기존 대리점관계·경제적
+    # 연계·자율참여, 제조/설계/시공 위탁 여부)로 검증한다. 대리점법은
+    # 절대 임의로 낮추지 않고 floor만(위탁판매를 재판매 자기명의가 아니라는
+    # 이유만으로 배제하지 않도록), 하도급법은 절대 올리지 않고 ceiling만
+    # (단순 판매지원만으로 자동 승격되지 않도록) 적용한다.
+    from runtime.review.statute_applicability_calibration import calibrate_statute_applicability_results
+    _legal_applicability_results = calibrate_statute_applicability_results(
+        [r.to_dict() for r in _legal_applicability_results_raw], str(text or ""), _legal_map.fields,
     )
 
     # [REMOVED] 관련 법령 retrieval 영구 비활성화 — requirement.md > Section Removal Specs
@@ -6009,7 +6042,7 @@ def build_clause_level_result(
         mandatory_review_targets=_mandatory_target_status,
         final_findings_clause_ids=_final_findings_clause_ids,
         legal_map_fields=_legal_map.fields,
-        legal_applicability_results=[r.to_dict() for r in _legal_applicability_results],
+        legal_applicability_results=_legal_applicability_results,
     )
 
     # ── [Self-Check 이후 재계산] (2026-09-04 지시로 발견) ────────────────────
@@ -6130,14 +6163,14 @@ def build_clause_level_result(
         for cr in clause_results
         if isinstance(cr, dict) and cr.get("semantic_mismatch")
     ]
-    meta["legal_applicability_review"] = [r.to_dict() for r in _legal_applicability_results]
+    meta["legal_applicability_review"] = _legal_applicability_results
     meta["user_cited_statutes"] = _cited_statutes
     # 사용자가 명시적으로 지정한 법률(_cited_statutes)만 "누락되면 실패"
     # 대상이다 — AI가 스스로 추가 판단한 법률(source="ai_self_identified")
     # 은 사용자가 요청한 것이 아니므로 빠져도 REVIEW_FAILED 사유가 아니다.
     _missing_statutes = [
-        r.statute for r in _legal_applicability_results
-        if r.statute in _cited_statutes and r.source != "ai"
+        r.get("statute") for r in _legal_applicability_results
+        if r.get("statute") in _cited_statutes and r.get("source") != "ai"
     ]
     if _missing_statutes:
         meta["review_status"] = "REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING"
