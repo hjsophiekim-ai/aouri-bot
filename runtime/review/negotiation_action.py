@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from runtime.review.jurisdiction_risk_calibration import JURISDICTION_TOPIC_MARKER
 from runtime.review.legal_effect_taxonomy import infer_legal_effects
 
 # 정부/지원기관 상대 계약에서 "지원조건/관리권한"류로 보아 자동 MUST_FIX를
@@ -83,6 +84,23 @@ def classify_negotiation_action(cr: dict[str, Any], *, counterparty_role: str) -
         #    "상호"라는 단어만으로 면제하지 않는다).
         if priority == "NEGOTIATE_IF_POSSIBLE" and _RX_LEGITIMATE_COUNTERPARTY_PROTECTION.search(text):
             priority = "ACCEPT"
+
+        # 6. 관할/준거법/중재는 MUST_FIX 대상이 아니다(2026-09-04 지시) —
+        # MUST_FIX는 "직접 금전·보증·무제한 책임·핵심 권리 손실"로 한정하고,
+        # 관할 문제는 아무리 legal_risk가 HIGH로 남아있어도(예: 비대칭 관할·
+        # 상충 조항처럼 jurisdiction_risk_calibration이 캡을 걸지 않은 진짜
+        # 예외 사례) 최대 NEGOTIATE_IF_POSSIBLE까지만 올라간다 — 관할 문제가
+        # Article 4.3류 직접 보증책임보다 협상 우선순위에서 앞서지 않게 한다.
+        _jurisdiction_haystack = " ".join(
+            s for s in (
+                str(cr.get("clause_title") or ""),
+                str(cr.get("rewrite_reason") or ""),
+                str(cr.get("legal_business_reason") or ""),
+                text,
+            ) if s
+        )
+        if priority == "MUST_FIX" and JURISDICTION_TOPIC_MARKER.search(_jurisdiction_haystack):
+            priority = "NEGOTIATE_IF_POSSIBLE"
 
     recommended_starting_tier = (
         "practical" if counterparty_role in ("government_or_funding_agency", "customer") else "ideal"

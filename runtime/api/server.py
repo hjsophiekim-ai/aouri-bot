@@ -1772,6 +1772,37 @@ def create_handler(service: RuleQueryService):
                             _cr_gld["must_fix"] = False
                             _cr_gld["keep_as_is"] = True
 
+                    # [관할/준거법/중재 리스크 과대평가 방지, 2026-09-04 지시] —
+                    # clause_level.py의 초기 리뷰에서 한 번 계산되지만, 이 다운로드
+                    # 경로가 _all_results를 독립적으로 재구성하므로 여기서도 다시
+                    # 적용해야 새로 바뀐/재주입된 finding까지 반영된다.
+                    from runtime.review.jurisdiction_risk_calibration import (
+                        calibrate_jurisdiction_finding_severity as _calibrate_jurisdiction,
+                    )
+                    for _cr_jr in _all_results:
+                        if not isinstance(_cr_jr, dict):
+                            continue
+                        if bool(_cr_jr.get("dedup_suppressed")) or bool(_cr_jr.get("keep_as_is")) or bool(_cr_jr.get("is_common_legal_risk")):
+                            continue
+                        _cur_sev_jr = str(_cr_jr.get("risk_tier") or "LOW").upper()
+                        _new_sev_jr, _calibrated_jr, _reason_jr = _calibrate_jurisdiction(
+                            severity=_cur_sev_jr,
+                            clause_text=str(_cr_jr.get("original_text") or ""),
+                            full_text=str(text or ""),
+                            clause_title=str(_cr_jr.get("clause_title") or ""),
+                            rewrite_reason=str(_cr_jr.get("rewrite_reason") or ""),
+                            legal_business_reason=str(_cr_jr.get("legal_business_reason") or ""),
+                        )
+                        if _calibrated_jr and _new_sev_jr != _cur_sev_jr:
+                            _cr_jr["risk_tier"] = _new_sev_jr
+                            _cr_jr["severity"] = _new_sev_jr
+                            _cr_jr["high_risk"] = _new_sev_jr == "HIGH"
+                            _cr_jr["approval_required"] = _new_sev_jr == "HIGH"
+                            _cr_jr["must_fix"] = _new_sev_jr == "HIGH"
+                            if _new_sev_jr == "LOW":
+                                _cr_jr["keep_as_is"] = True
+                            _cr_jr["jurisdiction_risk_calibration"] = _reason_jr
+
                     # [finding_id, 2026-09-03 지시] — 세션에서 로드된 항목은 이미
                     # UI 저장 시점에 부여된 finding_id를 그대로 유지하고, 이
                     # 경로에서만 새로 생긴 항목(있다면)에도 안정적 ID를 부여한다.

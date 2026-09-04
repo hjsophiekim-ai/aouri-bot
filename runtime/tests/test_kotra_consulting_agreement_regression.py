@@ -510,5 +510,123 @@ class GlobalCrossClauseFailureStatusTest(unittest.TestCase):
         self.assertEqual(report.get("review_status"), "REVIEW_FAILED_GLOBAL_CROSS_CLAUSE")
 
 
+class JurisdictionRiskCalibrationTest(unittest.TestCase):
+    """관할/준거법/중재 과대평가 방지(2026-09-04 지시) — 대한민국법+서울
+    중재/합의관할/통상적 중재조항은 원칙적으로 HIGH를 금지하고(기본 LOW),
+    비대칭 관할·상충되는 복수 조항·집행곤란·명시적 해외소송 불리함이 있을
+    때만 상위 판단(HIGH까지)을 그대로 인정한다."""
+
+    def test_kotra_domestic_law_seoul_arbitration_capped_to_low(self) -> None:
+        from runtime.review.jurisdiction_risk_calibration import calibrate_jurisdiction_finding_severity
+        text = (
+            "9.1 This Agreement shall be governed and interpreted by the laws of Republic of Korea.\n"
+            "9.2 Disputes shall be finally settled by arbitration in Seoul, in accordance with "
+            "and governed by the laws of Republic of Korea."
+        )
+        new_sev, changed, _ = calibrate_jurisdiction_finding_severity(
+            severity="HIGH", clause_text=text, full_text=text,
+            clause_title="준거법 및 중재", rewrite_reason="준거법/관할 검토",
+        )
+        self.assertTrue(changed)
+        self.assertEqual(new_sev, "LOW")
+
+    def test_plain_foreign_law_capped_to_medium_not_high(self) -> None:
+        from runtime.review.jurisdiction_risk_calibration import calibrate_jurisdiction_finding_severity
+        text = "This Agreement shall be governed by the laws of the State of Delaware."
+        new_sev, changed, _ = calibrate_jurisdiction_finding_severity(
+            severity="HIGH", clause_text=text, full_text=text,
+            clause_title="governing law", rewrite_reason="jurisdiction review",
+        )
+        self.assertTrue(changed)
+        self.assertEqual(new_sev, "MEDIUM")
+
+    def test_asymmetric_forum_not_capped(self) -> None:
+        from runtime.review.jurisdiction_risk_calibration import calibrate_jurisdiction_finding_severity
+        text = "갑의 본점 소재지를 관할하는 법원을 전속적 관할 법원으로 한다."
+        new_sev, changed, _ = calibrate_jurisdiction_finding_severity(
+            severity="HIGH", clause_text=text, full_text=text,
+            clause_title="관할", rewrite_reason="비대칭 관할",
+        )
+        self.assertFalse(changed)
+        self.assertEqual(new_sev, "HIGH")
+
+    def test_conflicting_governing_law_not_capped(self) -> None:
+        from runtime.review.jurisdiction_risk_calibration import calibrate_jurisdiction_finding_severity
+        text = "This Agreement shall be governed by the laws of Singapore. 준거법은 대한민국 법으로 한다."
+        new_sev, changed, _ = calibrate_jurisdiction_finding_severity(
+            severity="HIGH", clause_text=text, full_text=text,
+            clause_title="준거법", rewrite_reason="상충되는 준거법 조항",
+        )
+        self.assertFalse(changed)
+        self.assertEqual(new_sev, "HIGH")
+
+    def test_non_jurisdiction_finding_untouched(self) -> None:
+        from runtime.review.jurisdiction_risk_calibration import calibrate_jurisdiction_finding_severity
+        text = "갑은 을에게 손해를 배상하여야 한다."
+        new_sev, changed, _ = calibrate_jurisdiction_finding_severity(
+            severity="HIGH", clause_text=text, full_text=text,
+            clause_title="손해배상", rewrite_reason="배상책임",
+        )
+        self.assertFalse(changed)
+        self.assertEqual(new_sev, "HIGH")
+
+    def test_negotiation_action_never_must_fix_for_jurisdiction_topic(self) -> None:
+        from runtime.review.negotiation_action import classify_negotiation_action
+        cr = {
+            "clause_id": "ai-jurisdiction-1",
+            "risk_tier": "HIGH",
+            "exposure_category": "indirect_operational",
+            "clause_title": "Article 9 [비대칭 관할]",
+            "rewrite_reason": "갑의 소재지를 관할하는 법원으로만 전속 관할이 정해져 있다.",
+            "legal_business_reason": "",
+            "original_text": "갑의 본점 소재지를 관할하는 법원을 전속적 관할 법원으로 한다.",
+        }
+        result = classify_negotiation_action(cr, counterparty_role="customer")
+        self.assertNotEqual(result["negotiation_priority"], "MUST_FIX")
+
+    def test_kotra_article_9_end_to_end_calibrated_and_article_4_3_still_outranks(self) -> None:
+        # 실제 KOTRA 픽스처 전체를 common_legal_risk + jurisdiction 캘리브레이션
+        # 파이프라인에 준하는 방식으로 돌려, Article 9(대한민국법+서울중재)가
+        # 설령 어떤 상위 레이어(rule/AI)에서 HIGH로 잘못 매겨지더라도 이
+        # 계약 전체 텍스트 기준으로 LOW까지 캡되는지, 그리고 Article 4.3
+        # 보증책임의 MUST_FIX 우선순위가 그대로 유지되는지 확인한다.
+        from runtime.review.jurisdiction_risk_calibration import calibrate_jurisdiction_finding_severity
+        from runtime.review.negotiation_action import classify_negotiation_action
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        synthetic_article_9_finding = {
+            "clause_id": "ai-article-9",
+            "clause_title": "Article 9 [준거법 및 분쟁해결 검토]",
+            "rewrite_reason": "관할 및 중재 조항을 재검토할 필요가 있다.",
+            "legal_business_reason": "",
+            "original_text": (
+                "This Agreement shall be governed and interpreted by the laws of "
+                "[Republic of Korea]."
+            ),
+        }
+        new_sev, changed, _ = calibrate_jurisdiction_finding_severity(
+            severity="HIGH",
+            clause_text=synthetic_article_9_finding["original_text"],
+            full_text=text,
+            clause_title=synthetic_article_9_finding["clause_title"],
+            rewrite_reason=synthetic_article_9_finding["rewrite_reason"],
+            legal_business_reason=synthetic_article_9_finding["legal_business_reason"],
+        )
+        self.assertTrue(changed)
+        self.assertEqual(new_sev, "LOW")
+
+        synthetic_article_9_finding.update({"risk_tier": new_sev, "exposure_category": "indirect_operational"})
+        jurisdiction_action = classify_negotiation_action(synthetic_article_9_finding, counterparty_role="government_or_funding_agency")
+        self.assertNotEqual(jurisdiction_action["negotiation_priority"], "MUST_FIX")
+
+        clauses, _ = extract_clauses(text)
+        guarantee_results: list[dict] = []
+        _apply_common_legal_risk_rules(guarantee_results, text, clauses, our_party_aliases=["Fursys, Inc", "Company"])
+        guarantee_cr = next((r for r in guarantee_results if r.get("clause_id") == "clr_third_party_debt_guarantee"), None)
+        self.assertIsNotNone(guarantee_cr, "Article 4.3 보증책임 finding이 있어야 이 비교를 검증할 수 있다")
+        guarantee_action = classify_negotiation_action(guarantee_cr, counterparty_role="government_or_funding_agency")
+        self.assertEqual(guarantee_action["negotiation_priority"], "MUST_FIX")
+
+
 if __name__ == "__main__":
     unittest.main()

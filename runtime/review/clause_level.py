@@ -5117,6 +5117,45 @@ def build_clause_level_result(
             _cr["keep_as_is"] = True
             _cr["review_tier"] = "NOTE"
             _cr["adequacy_downgrade_reason"] = "governing_law_dispute_resolution_already_adequate"
+
+    # ── [관할/준거법/중재 리스크 과대평가 방지] (2026-09-04 지시, 전체계약
+    # 대상) — 위 demote_adequate_governing_law_dispute_clause는 "이 조항
+    # 자체"가 완결돼 있는지만 본다. 여기서는 계약 전체 텍스트를 검색해 실제
+    # 국내법/국내법원(서울중재)인지, 비대칭·상충·집행곤란 신호가 있는지를
+    # 판정해 severity 상한을 건다 — 대한민국법+서울중재/합의관할/통상적
+    # 중재조항은 원칙적으로 HIGH를 금지하고, 우리 회사에 실제로 불리한
+    # 해외관할·비대칭 관할·상충 조항·집행곤란 신호가 있을 때만 MEDIUM/HIGH를
+    # 그대로 인정한다.
+    from runtime.review.jurisdiction_risk_calibration import calibrate_jurisdiction_finding_severity
+    _full_text_for_jurisdiction = str(text or "")
+    for _cr in clause_results:
+        if not isinstance(_cr, dict):
+            continue
+        if bool(_cr.get("dedup_suppressed")) or bool(_cr.get("keep_as_is")) or bool(_cr.get("is_checklist_item")):
+            continue
+        if bool(_cr.get("is_common_legal_risk")):
+            continue
+        _cur_sev4 = str(_cr.get("risk_tier") or "LOW").upper()
+        _new_sev4, _calibrated4, _reason4 = calibrate_jurisdiction_finding_severity(
+            severity=_cur_sev4,
+            clause_text=str(_cr.get("original_text") or ""),
+            full_text=_full_text_for_jurisdiction,
+            clause_title=str(_cr.get("clause_title") or ""),
+            rewrite_reason=str(_cr.get("rewrite_reason") or ""),
+            legal_business_reason=str(_cr.get("legal_business_reason") or ""),
+        )
+        if _calibrated4 and _new_sev4 != _cur_sev4:
+            _cr["risk_tier"] = _new_sev4
+            _cr["severity"] = _new_sev4
+            _cr["high_risk"] = _new_sev4 == "HIGH"
+            _cr["approval_required"] = _new_sev4 == "HIGH"
+            _cr["must_fix"] = _new_sev4 == "HIGH"
+            if _new_sev4 == "LOW":
+                _cr["keep_as_is"] = True
+                _cr["review_tier"] = "NOTE"
+            else:
+                _cr["review_tier"] = "SUGGEST"
+            _cr["jurisdiction_risk_calibration"] = _reason4
             _cr["auto_severity_downgrade"] = ["adequate_governing_law_dispute_clause"]
             _cr["display_kind"] = "note"
 
