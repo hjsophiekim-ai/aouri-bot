@@ -3473,12 +3473,29 @@ def build_clause_level_result(
         contract_type_code=str(_canonical_profile.contract_type or ""),
         text=str(text or ""),
         clauses=clauses,
+        answers=answers,
     )
     # [거래구조 확인 질문 답변 반영, 2026-09-04 지시] — AI 없이도(regex
     # fallback 경로 포함) 사용자가 Q-TXN-* 질문에 실제로 답변한 판매자·
     # 소유권·대금수령 등 사실관계를 Contract Legal Map에 채운다.
     from runtime.review.transaction_structure_answers import apply_transaction_structure_answers
     apply_transaction_structure_answers(_legal_map.fields, answers)
+
+    # [canonical_transaction_facts, 2026-09-04 지시] — 사용자가 Q-TXN-*에
+    # 답변한 거래실질 사실관계를 구조화된 단일 원본으로 만든다. 이후 모든
+    # 모듈(AI 프롬프트/missing-clause review/final_review_context/self-check/
+    # UI/DOCX)이 이 값을 그대로 참조하고, 원문을 다시 보고 재추정하지
+    # 않는다 — "질문을 잘 만드는 것보다 그 답변이 이후 모든 법률판단을
+    # 실제로 바꾸는 것이 중요하다"는 원칙을 반영.
+    from runtime.review.canonical_transaction_facts import (
+        build_ai_fact_directive,
+        build_canonical_transaction_facts,
+    )
+    _canonical_txn_facts = build_canonical_transaction_facts(_legal_map.fields)
+    _ai_fact_directive = build_ai_fact_directive(_canonical_txn_facts)
+    if _ai_fact_directive:
+        review_focus = f"{review_focus}\n\n{_ai_fact_directive}" if review_focus else _ai_fact_directive
+
     from runtime.review.contract_overview import build_contract_overview
     _contract_overview = build_contract_overview(clauses=clauses, full_text=str(text or ""))
     _contract_overview_dict = {**_contract_overview.to_dict(), **_legal_map.to_dict()}
@@ -5510,7 +5527,10 @@ def build_clause_level_result(
         }
         if a
     ]
-    _apply_common_legal_risk_rules(clause_results, str(text or ""), clauses, our_party_aliases=_our_party_aliases)
+    _apply_common_legal_risk_rules(
+        clause_results, str(text or ""), clauses,
+        our_party_aliases=_our_party_aliases, legal_map_fields=_legal_map.fields,
+    )
     # 1-4. [Layer 2 — 시험·검사·인증 용역 특화] testing_service 계약에서만 실행.
     from runtime.review.testing_service_rules import _apply_testing_service_checklist
     _apply_testing_service_checklist(clause_results, str(text or ""), _contract_class, clauses)
@@ -5864,6 +5884,14 @@ def build_clause_level_result(
             pass
     # ─────────────────────────────────────────────────────────────────────────
 
+    # ── [canonical_transaction_facts 최종 안전망] (2026-09-04 지시, 요청 5) ──
+    # 개별 rule이 생성 단계에서 canonical facts를 참조하지 못한 경우(특히
+    # AI가 생성한 자유 텍스트)에도, 사용자가 이미 확정한 판매자/소유자
+    # 사실관계가 있다면 "[실제 판매자/소유자]" 류 자리표시자가 최종 출력에
+    # 남지 않도록 마지막으로 한 번 더 치환한다.
+    from runtime.review.canonical_transaction_facts import substitute_resolved_placeholders
+    _placeholder_substituted_clause_ids = substitute_resolved_placeholders(clause_results, _canonical_txn_facts)
+
     # ── [Senior Counsel 판단] legal_risk와 negotiation_priority 분리 ────────
     # "법적으로 문제인가"(risk_tier/severity)와 "지금 협상 테이블에 올릴
     # 가치가 있는가"(negotiation_priority)를 별도 축으로 계산해 각 finding에
@@ -6005,6 +6033,11 @@ def build_clause_level_result(
 
     meta = {
         "self_check": _self_check_report,
+        # canonical_transaction_facts(2026-09-04 지시) — UI/DOCX/PDF가 이
+        # 값을 그대로 표시해야 한다(원문을 다시 보고 재추정 금지). 사용자
+        # 답변이 반영돼 자동 치환된 finding 목록도 함께 남긴다(감사 추적용).
+        "canonical_transaction_facts": _canonical_txn_facts,
+        "placeholder_substituted_clause_ids": _placeholder_substituted_clause_ids,
         "mandatory_review_targets": _mandatory_target_status,
         "review_posture": review_posture,
         "party_role": party.to_dict(),

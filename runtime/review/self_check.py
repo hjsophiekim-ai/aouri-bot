@@ -456,6 +456,30 @@ def run_self_check(
         ],
     }
 
+    # (12) 사전질문 답변 미반영 검증 (2026-09-04 지시, 요청 4/8) —
+    # 사용자가 이미 seller/owner_of_goods/payment_recipient/revenue_recipient
+    # 중 하나라도 명시적으로 답변했는데(Contract Legal Map에 반영된 값
+    # 기준), 최종 clause_results에 "[실제 판매자/소유자]"류 자리표시자가
+    # 여전히 남아있으면 사용자의 답변이 실제로 반영되지 않은 것이다 — 질문을
+    # 잘 만드는 것보다 그 답변이 법률판단을 실제로 바꾸는 것이 중요하다는
+    # 원칙을 게이트로 강제한다.
+    from runtime.review.canonical_transaction_facts import (
+        build_canonical_transaction_facts,
+        find_unresolved_fact_placeholders,
+        resolved_mandatory_fields,
+    )
+    _canonical_facts_for_check = build_canonical_transaction_facts(_lm_fields)
+    _resolved_mandatory = resolved_mandatory_fields(_canonical_facts_for_check)
+    _unresolved_placeholders = (
+        find_unresolved_fact_placeholders(clause_results, _canonical_facts_for_check)
+        if _resolved_mandatory else []
+    )
+    user_facts_failed = bool(_resolved_mandatory) and bool(_unresolved_placeholders)
+    report["canonical_transaction_facts"] = _canonical_facts_for_check
+    report["resolved_mandatory_fact_fields"] = _resolved_mandatory
+    report["unresolved_fact_placeholders"] = _unresolved_placeholders
+    report["user_facts_applied_ok"] = not user_facts_failed
+
     # 10-1의 결과(백스톱이 새로 억제한 건)는 "다른 조항에 이미 있는 답을
     # 다시 지적"하는 구조적 오류로, 나머지 global reasoning 항목들과는 성격이
     # 달라 전용 상태(REVIEW_FAILED_GLOBAL_CROSS_CLAUSE)로 분리한다 — KOTRA
@@ -486,6 +510,8 @@ def run_self_check(
     hard_integrity_failed = bool(missing_clause_id_ids) or final_findings_count_mismatch
     if missing_targets:
         report["review_status"] = "REVIEW_FAILED_USER_REQUEST_MISSING"
+    elif user_facts_failed:
+        report["review_status"] = "REVIEW_FAILED_USER_FACTS_NOT_APPLIED"
     elif hard_integrity_failed:
         report["review_status"] = "REVIEW_FAILED"
     elif language_quality_failed:
@@ -509,5 +535,6 @@ def run_self_check(
         and not global_reasoning_failed
         and not language_quality_failed
         and not cross_clause_failed
+        and not user_facts_failed
     )
     return report

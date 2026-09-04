@@ -10,6 +10,7 @@ from runtime.review.contract_classifier import (
     ContractProfile as DetailedContractProfile,
     classify_contract_detailed,
 )
+from runtime.review.canonical_transaction_facts import build_canonical_transaction_facts_from_answers
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class FinalReviewContext:
     user_focus_issues: list[UserFocusObjective]
     review_objectives: list[UserFocusObjective]
     factual_answers: dict[str, Any]
+    canonical_transaction_facts: dict[str, Any]
     party_role: dict[str, Any] | None
     expert_mode: bool
     expert_strategy: list[str]
@@ -30,6 +32,10 @@ class FinalReviewContext:
             "user_focus_issues": [x.to_dict() for x in self.user_focus_issues],
             "review_objectives": [x.to_dict() for x in self.review_objectives],
             "factual_answers": dict(self.factual_answers or {}),
+            # canonical_transaction_facts(2026-09-04 지시) — UI가 원문을
+            # 다시 보고 seller/owner_of_goods 등을 재추정하지 않도록, 이미
+            # 구조화된 사실관계를 그대로 노출한다.
+            "canonical_transaction_facts": dict(self.canonical_transaction_facts or {}),
             "party_role": self.party_role,
             "expert_mode": bool(self.expert_mode),
             "expert_strategy": list(self.expert_strategy or []),
@@ -100,6 +106,7 @@ def build_final_review_context(
         user_focus_issues=focus,
         review_objectives=review_objectives,
         factual_answers=ans,
+        canonical_transaction_facts=build_canonical_transaction_facts_from_answers(ans),
         party_role=party_role,
         expert_mode=expert_mode,
         expert_strategy=expert_strategy,

@@ -847,6 +847,7 @@ def _apply_common_legal_risk_rules(
     full_text: str,
     clauses: list[ClauseChunk] | None = None,
     our_party_aliases: list[str] | None = None,
+    legal_map_fields: dict[str, Any] | None = None,
 ) -> None:
     """[Layer 1] Common legal risk checklist — runs for EVERY contract type.
 
@@ -978,7 +979,7 @@ def _apply_common_legal_risk_rules(
     _apply_confidentiality_survival_undefined_check(clause_results, clauses)
     _apply_conditional_funding_review(clause_results, text)
     _apply_indemnifying_party_unclear_check(clause_results, clauses)
-    apply_sales_transaction_rules(clause_results, text, clauses)
+    apply_sales_transaction_rules(clause_results, text, clauses, legal_map_fields=legal_map_fields)
 
 
 _RX_SURVIVAL_NO_TERM = re.compile(

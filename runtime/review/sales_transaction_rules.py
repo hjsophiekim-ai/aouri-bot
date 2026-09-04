@@ -319,7 +319,11 @@ _RX_CONSUMER_PRODUCT_LIABILITY_ALLOCATION = re.compile(
 )
 
 
-def _apply_missing_consumer_product_liability_check(clause_results: list[dict[str, Any]], full_text: str) -> None:
+def _apply_missing_consumer_product_liability_check(
+    clause_results: list[dict[str, Any]],
+    full_text: str,
+    legal_map_fields: dict[str, Any] | None = None,
+) -> None:
     existing = {str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)}
     if "clr_missing_consumer_product_liability_allocation" in existing:
         return
@@ -331,6 +335,25 @@ def _apply_missing_consumer_product_liability_check(clause_results: list[dict[st
         return
     if _RX_CONSUMER_PRODUCT_LIABILITY_ALLOCATION.search(text):
         return
+
+    # [사전질문 답변 반영, 2026-09-04 지시] — 사용자가 이미 "실제 판매자/
+    # 소유자"가 누구인지 답변했다면(Contract Legal Map의 seller/owner_of_goods
+    # 필드), 조항 원문에 넣을 자리표시자(bracket placeholder)를 계속 남기지
+    # 말고 그 실명으로 치환한다. canonical_transaction_facts.py의
+    # resolved_party_label()을 그대로 써서 "판매자=소유자 동일 주체" 판정
+    # 로직을 이 파일에 따로 복제하지 않는다(single source of truth 원칙).
+    # 둘 다 답변이 없으면(질문에 아직 응답하지 않은 상태) 기존과 같은
+    # placeholder를 유지한다 — 이 경우는 "확정할 수 없는 사실"이 실제로
+    # 남아있는 것이므로 placeholder 자체가 정확한 표현이다.
+    from runtime.review.canonical_transaction_facts import (
+        build_canonical_transaction_facts,
+        resolved_party_label,
+    )
+    _facts_for_liability = build_canonical_transaction_facts(legal_map_fields or {})
+    seller = _facts_for_liability.get("seller") or ""
+    owner = _facts_for_liability.get("owner_of_goods") or ""
+    resolved_party = resolved_party_label(_facts_for_liability) or "[실제 판매자/소유자]"
+
     clause_results.append({
         "clause_id": "clr_missing_consumer_product_liability_allocation",
         "article_number": None,
@@ -346,8 +369,8 @@ def _apply_missing_consumer_product_liability_check(clause_results: list[dict[st
         "approval_required": False,
         "review_tier": "SUGGEST",
         "suggested_rewrite": (
-            "상품의 배송·하자·반품·환불에 관한 책임은 [실제 판매자/소유자]가 부담하며, 상품의 진위·품질·"
-            "저작권 등 지식재산권 침해에 대한 책임도 [실제 판매자/소유자]가 부담한다. 을은 판매지원 "
+            f"상품의 배송·하자·반품·환불에 관한 책임은 {resolved_party}가 부담하며, 상품의 진위·품질·"
+            f"저작권 등 지식재산권 침해에 대한 책임도 {resolved_party}가 부담한다. 을은 판매지원 "
             "업무 범위 내에서 자신의 고의 또는 과실로 발생한 손해에 대해서만 책임을 진다."
         ),
         "rewrite_reason": "고객을 직접 상대하는 판매 구조인데, 배송·하자·반품·환불 및 상품 진위·저작권 관련 책임을 누가 부담하는지 계약서에 전혀 규정되어 있지 않다.",
@@ -367,6 +390,7 @@ def _apply_missing_consumer_product_liability_check(clause_results: list[dict[st
         "user_focus_hit": False,
         "factual_hit": False,
         "ai_deep_reviewed": False,
+        "transaction_facts_applied": bool(seller or owner),
     })
 
 
@@ -374,10 +398,17 @@ def apply_sales_transaction_rules(
     clause_results: list[dict[str, Any]],
     full_text: str,
     clauses: list[ClauseChunk] | None = None,
+    legal_map_fields: dict[str, Any] | None = None,
 ) -> None:
-    """`common_legal_risk.py`의 Layer-1 dispatcher에서 호출되는 진입점."""
+    """`common_legal_risk.py`의 Layer-1 dispatcher에서 호출되는 진입점.
+
+    `legal_map_fields`: Contract Legal Map의 seller/owner_of_goods 등 —
+    사용자가 사전질문에 답변한 거래실질 사실관계(2026-09-04 지시). 이
+    값이 있으면 소비자책임 finding의 수정안이 "[실제 판매자/소유자]" 같은
+    자리표시자 대신 실제 당사자명을 사용한다.
+    """
     _apply_linked_contract_dependency_check(clause_results, full_text)
     _apply_fault_blind_commission_clawback_check(clause_results, clauses)
     _apply_unbounded_scope_expansion_check(clause_results, clauses, full_text)
     _apply_unilateral_interpretation_and_forum_check(clause_results, clauses, full_text)
-    _apply_missing_consumer_product_liability_check(clause_results, full_text)
+    _apply_missing_consumer_product_liability_check(clause_results, full_text, legal_map_fields)

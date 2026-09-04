@@ -1803,6 +1803,38 @@ def create_handler(service: RuleQueryService):
                                 _cr_jr["keep_as_is"] = True
                             _cr_jr["jurisdiction_risk_calibration"] = _reason_jr
 
+                    # [canonical_transaction_facts 최종 안전망 + 게이트,
+                    # 2026-09-04 지시] — 이 다운로드 경로도 _all_results를
+                    # 독립적으로 재구성하므로, clause_level.py의 초기 리뷰와
+                    # 동일하게 사용자 답변으로 확정된 판매자/소유자 사실관계로
+                    # 남은 자리표시자를 치환하고, 그래도 남아있으면 정상
+                    # 완료를 차단한다(요청 4/5/8).
+                    from runtime.review.canonical_transaction_facts import (
+                        build_canonical_transaction_facts_from_answers as _build_facts_from_answers,
+                        find_unresolved_fact_placeholders as _find_unresolved_placeholders,
+                        resolved_mandatory_fields as _resolved_mandatory_fields,
+                        substitute_resolved_placeholders as _substitute_placeholders,
+                    )
+                    _canonical_facts_docx = _build_facts_from_answers(answers)
+                    _substitute_placeholders(_all_results, _canonical_facts_docx)
+                    _resolved_mandatory_docx = _resolved_mandatory_fields(_canonical_facts_docx)
+                    _unresolved_placeholders_docx = (
+                        _find_unresolved_placeholders(_all_results, _canonical_facts_docx)
+                        if _resolved_mandatory_docx else []
+                    )
+                    if _resolved_mandatory_docx and _unresolved_placeholders_docx:
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "REVIEW_FAILED_USER_FACTS_NOT_APPLIED: user-answered transaction facts not reflected in final output",
+                                "review_status": "REVIEW_FAILED_USER_FACTS_NOT_APPLIED",
+                                "resolved_mandatory_fact_fields": _resolved_mandatory_docx,
+                                "unresolved_fact_placeholders": _unresolved_placeholders_docx,
+                            },
+                        )
+                        return
+
                     # [finding_id, 2026-09-03 지시] — 세션에서 로드된 항목은 이미
                     # UI 저장 시점에 부여된 finding_id를 그대로 유지하고, 이
                     # 경로에서만 새로 생긴 항목(있다면)에도 안정적 ID를 부여한다.
@@ -1882,6 +1914,31 @@ def create_handler(service: RuleQueryService):
                                     },
                                 )
                                 return
+
+                    # [REVIEW_FAILED_OUTPUT_FACT_MISMATCH gate, 2026-09-04
+                    # 지시, 요청 9] — UI가 저장한 canonical_transaction_facts
+                    # (사용자가 답변한 seller/owner_of_goods 등)와 이 다운로드
+                    # 경로가 answers로부터 직접 재구성한 facts가 서로 다르면,
+                    # Word에 표시될 계약구조가 UI에서 확인한 사실관계와
+                    # 어긋난다는 뜻이므로 다운로드를 차단한다.
+                    _ui_facts = clause_meta.get("canonical_transaction_facts") if isinstance(clause_meta, dict) else None
+                    if isinstance(_ui_facts, dict) and _ui_facts:
+                        _fact_mismatches = {
+                            k: (_ui_facts.get(k), _canonical_facts_docx.get(k))
+                            for k in set(_ui_facts) | set(_canonical_facts_docx)
+                            if _ui_facts.get(k) and _canonical_facts_docx.get(k) and _ui_facts.get(k) != _canonical_facts_docx.get(k)
+                        }
+                        if _fact_mismatches:
+                            _json_response(
+                                self,
+                                HTTPStatus.CONFLICT,
+                                {
+                                    "error": "REVIEW_FAILED_OUTPUT_FACT_MISMATCH: UI-confirmed transaction facts diverge from DOCX reconstruction",
+                                    "review_status": "REVIEW_FAILED_OUTPUT_FACT_MISMATCH",
+                                    "fact_mismatches": _fact_mismatches,
+                                },
+                            )
+                            return
 
                     _final_findings_clause_ids = {
                         str(i.get("clause_id") or "")

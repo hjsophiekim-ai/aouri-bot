@@ -108,6 +108,13 @@ _SYSTEM_PROMPT = """당신은 계약서 전체를 처음부터 끝까지 읽고 
 펜스 금지). 각 값은 원문에 근거해 한국어로 간결하게 서술하고, 원문에 없는
 내용을 지어내지 마십시오 — 확인할 수 없으면 null을 반환하십시오.
 
+입력에 "confirmed_transaction_facts"가 있으면, 이는 사용자가 사전질문에
+직접 답변해 이미 확정한 사실관계입니다. 해당 필드(예: seller, owner_of_goods,
+payment_recipient, revenue_recipient)는 원문에 명시되어 있지 않더라도
+"null"이나 "미확인"으로 되돌리지 말고 그 값을 그대로 채우며, 관련된 다른
+필드(예: consumer_liability_holder, party_roles)의 서술도 이 확정된
+사실관계와 일관되게 작성하십시오.
+
 필수 필드: parties, our_party, counterparty, party_roles, contract_purpose,
 primary_obligations, payment_flow, term, termination_structure,
 liability_structure, indemnity_structure, third_party_liability,
@@ -244,6 +251,7 @@ def build_contract_legal_map(
     contract_type_code: str,
     text: str,
     clauses: list[ClauseChunk] | None,
+    answers: dict[str, Any] | None = None,
 ) -> ContractLegalMap:
     is_nda = contract_type_code in _NDA_TYPE_CODES
     ai_enabled = bool(ai_provider and ai_model and ai_timeout_sec is not None and ai_max_tokens is not None and ai_temperature is not None)
@@ -255,6 +263,19 @@ def build_contract_legal_map(
             is_nda=is_nda,
         )
 
+    # [canonical_transaction_facts, 2026-09-04 지시] — 사용자가 사전질문에
+    # 이미 답변한 판매자/소유자 등 사실관계가 있으면, Layer-0 AI 호출부터
+    # 이를 확정된 값으로 전제하도록 명시한다 — AI가 원문에 없다는 이유로
+    # 스스로 "미확인"이라 적거나 다른 당사자로 추정하는 것을 막는다. 이후
+    # `apply_transaction_structure_answers()`가 이 필드를 어떤 경우에도
+    # 사용자 답변으로 최종 덮어쓰지만, 그 전 단계인 AI의 다른 필드 추론
+    # (예: 거래구조 설명)도 이 사실과 일관되도록 미리 전달한다.
+    from runtime.review.canonical_transaction_facts import (
+        build_ai_fact_directive,
+        build_canonical_transaction_facts_from_answers,
+    )
+    _fact_directive = build_ai_fact_directive(build_canonical_transaction_facts_from_answers(answers)) if answers else ""
+
     user_payload = {
         "entity": entity,
         "contract_type": contract_type,
@@ -265,6 +286,7 @@ def build_contract_legal_map(
         # 앞부분(당사자/목적/정의) + 뒷부분(서명/부속서)이 구조 파악에
         # 가장 중요하므로 앞 12000자로 자른다.
         "contract_text": (text or "")[:12000],
+        "confirmed_transaction_facts": _fact_directive or None,
     }
     import json as _json
     user = _json.dumps(user_payload, ensure_ascii=False)

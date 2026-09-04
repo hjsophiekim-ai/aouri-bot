@@ -80,10 +80,14 @@ class TransactionStructureAnswersTest(unittest.TestCase):
         self.assertIn("일룸", fields["payment_recipient"])
         self.assertEqual(fields["sales_support_provider"], "단순 판매지원 용역자(매매계약 당사자 아님)")
 
-    def test_does_not_overwrite_existing_values(self) -> None:
-        fields = {"seller": "AI가 이미 판단한 값"}
-        apply_transaction_structure_answers(fields, {"Q-TXN-001-seller": "다른 값"})
-        self.assertEqual(fields["seller"], "AI가 이미 판단한 값")
+    def test_explicit_user_answer_overrides_ai_inferred_value(self) -> None:
+        # 2026-09-04 지시 — "explicit user answer > AI inference": 사용자가
+        # 사전질문에 명시적으로 답변하면, AI/rule이 먼저 채워둔 값이라도
+        # 그 답변으로 덮어써야 한다. 계약서만으로 확정할 수 없는 거래실질을
+        # 사용자가 보충한 사실이므로 어떤 추정보다 신뢰도가 높다.
+        fields = {"seller": "AI가 이미 판단한 값(오추정)"}
+        apply_transaction_structure_answers(fields, {"Q-TXN-001-seller": "(주)일룸"})
+        self.assertEqual(fields["seller"], "(주)일룸")
 
 
 class SalesTransactionRulesTest(unittest.TestCase):
@@ -289,6 +293,90 @@ class MandatoryIssuesNeverDowngradesTest(unittest.TestCase):
         )
         mine = next(cr for cr in result if cr.get("clause_id") == "some_other_finding")
         self.assertNotEqual(mine["risk_tier"], "LOW")
+
+
+class GeurimdotcomUserAnswersAppliedEndToEndTest(unittest.TestCase):
+    """사전질문 답변 미반영 근본 수정(2026-09-04 지시) — 사용자가 이미
+    판매자=일룸/소유자=일룸/매출귀속=일룸/대금수령=일룸/대리점=판매지원
+    이라고 답변했으면, 그 사실관계가 Contract Legal Map·소비자책임
+    finding·self_check 전체에 동일하게 반영되어야 한다. "고객 계약 당사자:
+    미확인"/"[실제 판매자/소유자]" 같은 결과가 나오면 회귀다."""
+
+    _ANSWERS = {
+        "Q-TXN-001-seller": "(주)일룸",
+        "Q-TXN-002-owner": "(주)일룸 — 일룸이 상품을 매입한 후 재판매",
+        "Q-TXN-003-revenue": "(주)일룸 매출로 인식",
+        "Q-TXN-004-payment-collection": "매장 POS로 결제되나 위탁매매 구조로 (주)일룸 명의로 결제됨",
+        "Q-TXN-008-relationship-type": "sales_support_service",
+    }
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from runtime.review.clause_level import build_clause_level_result
+        from runtime.rules.loader import RuleLoader
+        from runtime.services.query_service import RuleQueryService
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        cls.bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="영업지원 용역계약",
+            text=text, filename="geurimdotcom.pdf",
+            answers=dict(cls._ANSWERS), review_focus=None, law_service=None,
+            ai_provider=None, ai_model=None, ai_timeout_sec=None, ai_max_tokens=None, ai_temperature=None,
+        )
+
+    def test_canonical_transaction_facts_resolved_to_illoom(self) -> None:
+        facts = self.bundle.meta.get("canonical_transaction_facts") or {}
+        self.assertIn("일룸", facts.get("seller") or "")
+        self.assertIn("일룸", facts.get("owner_of_goods") or "")
+        self.assertIn("일룸", facts.get("revenue_recipient") or "")
+        self.assertIn("일룸", facts.get("payment_recipient") or "")
+        self.assertTrue(facts.get("sales_support_provider"), "판매지원 역할 답변이 필드에 반영되어야 한다")
+        self.assertTrue(facts.get("resale_structure"), "판매자=소유자=일룸이면 재판매 구조로 판정되어야 한다")
+
+    def test_consumer_liability_finding_uses_resolved_seller_not_placeholder(self) -> None:
+        crs = [cr for cr in self.bundle.clause_results if isinstance(cr, dict)]
+        cr = next((c for c in crs if c.get("clause_id") == "clr_missing_consumer_product_liability_allocation"), None)
+        self.assertIsNotNone(cr, "소비자책임 finding이 있어야 한다")
+        rewrite = str(cr.get("suggested_rewrite") or "")
+        self.assertNotIn("[실제 판매자/소유자]", rewrite)
+        self.assertIn("일룸", rewrite)
+
+    def test_self_check_not_blocked_by_unresolved_placeholder_gate(self) -> None:
+        self_check = self.bundle.meta.get("self_check") or {}
+        self.assertNotEqual(self_check.get("review_status"), "REVIEW_FAILED_USER_FACTS_NOT_APPLIED")
+        resolved = set(self_check.get("resolved_mandatory_fact_fields") or [])
+        self.assertEqual(resolved, {"seller", "owner_of_goods", "payment_recipient", "revenue_recipient"})
+        self.assertTrue(self_check.get("user_facts_applied_ok"))
+        self.assertEqual(self_check.get("unresolved_fact_placeholders"), [])
+
+
+class TransactionFactsExplicitAnswerOverridesAiInferenceTest(unittest.TestCase):
+    """우선순위(요청 3): explicit user answer > AI inference — 사용자가
+    명확히 답한 사실을 rule/AI가 이미 채워둔 값이 덮어써서는 안 된다."""
+
+    def test_user_answer_overrides_prefilled_wrong_value(self) -> None:
+        fields = {"seller": "잘못 추정된 값", "owner_of_goods": None}
+        apply_transaction_structure_answers(fields, {"Q-TXN-001-seller": "(주)일룸"})
+        self.assertEqual(fields["seller"], "(주)일룸")
+
+
+class QuestionSessionDocumentScopingTest(unittest.TestCase):
+    """질문 answer state는 document-scoped(요청 7) — 새로 업로드한 문서의
+    세션은 이전 세션의 답변을 자동 승계하지 않는다."""
+
+    def test_new_session_starts_with_no_inherited_answers(self) -> None:
+        from runtime.questions.storage import create_text_session, save_answers
+
+        text_a = FIXTURE_PATH.read_text(encoding="utf-8")
+        doc_a = create_text_session(entity="퍼시스", contract_type="", filename="a.txt", text=text_a, review_focus=None)
+        save_answers(doc_a["session_id"], {"Q-TXN-001-seller": "(주)일룸"})
+
+        doc_b = create_text_session(entity="퍼시스", contract_type="", filename="b.txt", text="전혀 다른 계약서 본문.", review_focus=None)
+        self.assertNotEqual(doc_a["session_id"], doc_b["session_id"])
+        self.assertFalse(doc_b.get("answers"), "새 문서 세션은 이전 세션의 답변을 승계하면 안 된다")
 
 
 if __name__ == "__main__":
