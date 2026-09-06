@@ -463,5 +463,189 @@ class GeurimdotcomGoldenAnswerApplicabilityTest(unittest.TestCase):
         self.assertTrue(cr.get("is_common_legal_risk"))
 
 
+class GeurimdotcomArticleNumberingCanonicalizationTest(unittest.TestCase):
+    """조항번호 인식/세그멘테이션 보정(2026-09-04 지시) — "1. 목적"류 번호+
+    마침표 형식의 top-level heading도 제N조로 canonicalize 되어야 한다.
+    "문단 N"이 최종 결과에 하나라도 남으면 회귀 실패로 처리한다."""
+
+    _EXPECTED_ARTICLE_TITLES = {
+        "1": "목적",
+        "2": "약정 기간",
+        "3": "판매취소 시 정산",
+        "4": "용역수수료 지급 금액 (VAT 별도)",
+        "5": "영업지원 범위",
+        "6": "용역수수료 지급시기 및 방법",
+        "7": "영업배상책임",
+        "8": "기타",
+    }
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        cls.chunks, cls.report = extract_clauses(text)
+
+    def test_no_paragraph_fallback_ids_anywhere(self) -> None:
+        for c in self.chunks:
+            self.assertFalse(c.clause_id.startswith("P-"), f"{c.clause_id}는 문단 fallback id다")
+            self.assertNotIn("문단", c.display_path)
+            self.assertNotIn("문단", c.title)
+
+    def test_all_eight_sections_mapped_to_correct_article_numbers(self) -> None:
+        by_article: dict[str, str] = {}
+        for c in self.chunks:
+            if c.article_number and c.article_number not in by_article:
+                by_article[c.article_number] = c.title
+        for num, expected_title in self._EXPECTED_ARTICLE_TITLES.items():
+            self.assertIn(num, by_article, f"제{num}조가 인식되지 않았다")
+            self.assertEqual(by_article[num], expected_title)
+
+    def test_display_paths_use_canonical_article_format(self) -> None:
+        top_level = next(c for c in self.chunks if c.clause_id == "KR-1")
+        self.assertEqual(top_level.display_path, "제1조")
+        nested = next(c for c in self.chunks if c.clause_id == "KR-3-p1")
+        self.assertEqual(nested.display_path, "제3조 제1항")
+
+    def test_headings_found_not_fallback_strategy(self) -> None:
+        self.assertTrue(self.report.headings_found)
+        self.assertFalse(self.report.fallback_only)
+        self.assertEqual(self.report.strategy, "heading")
+
+    def test_full_pipeline_uses_canonical_article_numbers_not_paragraph_ids(self) -> None:
+        # 세그멘테이션 결과가 clause_level.py 전체 파이프라인까지 그대로
+        # 이어져, 최종 clause_results/self_check에도 "문단"이 남지 않아야
+        # 한다.
+        from runtime.review.clause_level import build_clause_level_result
+        from runtime.rules.loader import RuleLoader
+        from runtime.services.query_service import RuleQueryService
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="영업지원 용역계약",
+            text=text, filename="geurimdotcom.pdf",
+            answers=None, review_focus=None, law_service=None,
+            ai_provider=None, ai_model=None, ai_timeout_sec=None, ai_max_tokens=None, ai_temperature=None,
+        )
+        for cr in bundle.clause_results:
+            if not isinstance(cr, dict):
+                continue
+            for field in ("display_path", "clause_title"):
+                val = cr.get(field)
+                if isinstance(val, str):
+                    self.assertNotIn("문단", val, f"{cr.get('clause_id')}의 {field}에 '문단'이 남아있다: {val}")
+
+
+class BareNumberedHeadingFalsePositiveGuardTest(unittest.TestCase):
+    """날짜·금액·본문 중 우연한 숫자를 조항번호로 오인하지 않아야 한다 —
+    순차 번호(1,2,3...)를 실제로 이루지 못하면 canonicalize하지 않는다."""
+
+    def test_non_sequential_bare_numbers_do_not_get_promoted_to_articles(self) -> None:
+        text = (
+            "안내문\n"
+            "본 문서는 참고용입니다.\n\n"
+            "5. 이 항목만 번호가 있고 다른 항목은 없습니다.\n"
+            "일부 내용입니다.\n\n"
+            "이 계약은 2026. 3. 31에 체결되었으며 금액은 10. 000원이다.\n"
+        )
+        chunks, report = extract_clauses(text)
+        # 순차성이 없으므로(5 하나뿐, 1부터 시작하지 않음) 조항으로 승격되면
+        # 안 된다 — 문단 fallback으로 처리되어야 한다(오탐 방지가 최우선).
+        self.assertTrue(all(c.article_number is None for c in chunks))
+
+    def test_genuine_sequential_headings_are_promoted(self) -> None:
+        text = (
+            "1. 목적\n본 계약의 목적을 정한다.\n\n"
+            "2. 정의\n용어를 정의한다.\n\n"
+            "3. 계약기간\n계약기간을 정한다.\n"
+        )
+        chunks, report = extract_clauses(text)
+        articles = {c.article_number for c in chunks if c.article_number}
+        self.assertEqual(articles, {"1", "2", "3"})
+
+
+class GeurimdotcomRedlineInstructionGoldenTest(unittest.TestCase):
+    """실무 Redline 고도화(2026-09-04 지시) — 5개 HIGH/MEDIUM finding 모두
+    수정 위치·방식·완성문구·이유를 mandatory 구조로 가지고 있어야 하며,
+    위치는 이번 계약의 실제 조항번호(세그멘테이션 결과)를 그대로 가리켜야
+    한다(하드코딩 아님 — extract_clauses()가 실제로 찾은 구조에서 도출)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from runtime.review.clause_level import build_clause_level_result
+        from runtime.rules.loader import RuleLoader
+        from runtime.services.query_service import RuleQueryService
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        loader = RuleLoader()
+        loader.load()
+        service = RuleQueryService(loader)
+        cls.bundle = build_clause_level_result(
+            service=service, entity="퍼시스", contract_type="영업지원 용역계약",
+            text=text, filename="geurimdotcom.pdf",
+            answers=None, review_focus=None, law_service=None,
+            ai_provider=None, ai_model=None, ai_timeout_sec=None, ai_max_tokens=None, ai_temperature=None,
+        )
+        cls.by_id = {cr.get("clause_id"): cr for cr in cls.bundle.clause_results if isinstance(cr, dict)}
+
+    def test_no_incomplete_redline_gate_triggered(self) -> None:
+        self.assertIsNone(self.bundle.meta.get("review_status"))
+        self.assertEqual(self.bundle.meta.get("incomplete_redline_clause_ids"), [])
+
+    def test_all_five_findings_have_redline_instruction(self) -> None:
+        for cid in (
+            "clr_linked_contract_dependency_no_voluntary_clause",
+            "clr_fault_blind_commission_clawback",
+            "clr_unbounded_scope_expansion",
+            "clr_unilateral_interpretation_and_forum",
+            "clr_missing_consumer_product_liability_allocation",
+        ):
+            cr = self.by_id.get(cid)
+            self.assertIsNotNone(cr, f"{cid} finding이 있어야 한다")
+            rl = cr.get("redline_instruction")
+            self.assertIsInstance(rl, dict, f"{cid}에 redline_instruction이 있어야 한다")
+            self.assertTrue(rl.get("edit_location"))
+            self.assertIn(rl.get("edit_type"), ("replace", "insert_after", "insert_before", "delete", "new_clause"))
+            self.assertTrue(rl.get("final_clause_text"))
+            self.assertTrue(rl.get("reason"))
+
+    def test_linked_contract_dependency_location_matches_actual_article(self) -> None:
+        rl = self.by_id["clr_linked_contract_dependency_no_voluntary_clause"]["redline_instruction"]
+        self.assertEqual(rl["edit_location"], "제2조(약정 기간) 제3항 뒤에 제4항 신설")
+        self.assertEqual(rl["edit_type"], "insert_after")
+        self.assertIn("자율적인 의사", rl["final_clause_text"])
+
+    def test_fault_blind_commission_clawback_location(self) -> None:
+        rl = self.by_id["clr_fault_blind_commission_clawback"]["redline_instruction"]
+        self.assertEqual(rl["edit_location"], "제3조 제1항 교체")
+        self.assertEqual(rl["edit_type"], "replace")
+
+    def test_unilateral_interpretation_location_targets_article_8(self) -> None:
+        rl = self.by_id["clr_unilateral_interpretation_and_forum"]["redline_instruction"]
+        self.assertIn("제8조 제2항", rl["edit_location"])
+        self.assertEqual(rl["edit_type"], "replace")
+        # final_clause_text는 부분 교체 후 나머지 원문(관할 조항 등)을 그대로
+        # 보존하므로 "관할"이라는 단어 자체는 남아있을 수 있다 — 우리가
+        # "새로 제안하는 문구"(replacement_text)에 관할 변경이 없는지가
+        # 핵심이다(요청: 핵심 수정대상은 일방적 해석권으로 한정).
+        self.assertNotIn("관할", rl["replacement_text"], "핵심 수정대상은 일방적 해석권이며 관할 변경을 제안하면 안 된다")
+
+    def test_missing_consumer_product_liability_location_is_new_article(self) -> None:
+        rl = self.by_id["clr_missing_consumer_product_liability_allocation"]["redline_instruction"]
+        self.assertIn("제5조", rl["edit_location"])
+        self.assertIn("신설", rl["edit_location"])
+        self.assertEqual(rl["edit_type"], "new_clause")
+
+    def test_format_redline_display_produces_four_line_block(self) -> None:
+        from runtime.review.redline_instruction import format_redline_display
+        rl = self.by_id["clr_fault_blind_commission_clawback"]["redline_instruction"]
+        display = format_redline_display(rl)
+        self.assertIn("수정 위치:", display)
+        self.assertIn("수정 방식:", display)
+        self.assertIn("수정 문구:", display)
+        self.assertIn("수정 이유:", display)
+
+
 if __name__ == "__main__":
     unittest.main()

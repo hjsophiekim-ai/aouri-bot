@@ -5925,6 +5925,47 @@ def build_clause_level_result(
     from runtime.review.canonical_transaction_facts import substitute_resolved_placeholders
     _placeholder_substituted_clause_ids = substitute_resolved_placeholders(clause_results, _canonical_txn_facts)
 
+    # ── [실무 Redline 고도화] 모든 HIGH/MEDIUM finding에 수정 위치·방식·
+    # 완성문구 mandatory 구조 부착 (2026-09-04 지시) ────────────────────────
+    # 개별 rule(sales_transaction_rules.py의 5개 등)이 이미 정교한
+    # redline_instruction을 직접 만든 경우는 그대로 두고, 그렇지 않은
+    # finding(다른 rule/AI 생성)에는 기존 필드(display_path/original_text/
+    # suggested_rewrite)로부터 일반적인 방식으로 구조를 채운다 — "자동수정
+    # 보류"/"수정방향만 제시" 수준으로 끝나는 것을 방지한다.
+    from runtime.review.redline_instruction import build_redline_instruction
+    for _cr_rl in clause_results:
+        if not isinstance(_cr_rl, dict) or bool(_cr_rl.get("dedup_suppressed")):
+            continue
+        if str(_cr_rl.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
+            continue
+        if isinstance(_cr_rl.get("redline_instruction"), dict):
+            continue
+        _display_path_rl = str(_cr_rl.get("display_path") or "").strip()
+        _original_rl = str(_cr_rl.get("original_text") or "").strip()
+        _rewrite_rl = str(
+            _cr_rl.get("suggested_rewrite") or _cr_rl.get("proposed_revision")
+            or _cr_rl.get("recommendation_text") or ""
+        ).strip()
+        _is_new_clause_rl = bool(_cr_rl.get("is_checklist_item")) or not _original_rl
+        if not _rewrite_rl:
+            continue
+        if _is_new_clause_rl:
+            _edit_type_rl = "new_clause"
+            _edit_location_rl = f"{_display_path_rl} 뒤에 신설" if _display_path_rl else "신설 조항 추가 — 위치 확인 필요"
+        else:
+            _edit_type_rl = "replace"
+            _edit_location_rl = f"{_display_path_rl} 교체" if _display_path_rl else "위치 확인 필요 — 원문에서 해당 조항을 특정하지 못함"
+        _cr_rl["redline_instruction"] = build_redline_instruction(
+            clause_id=str(_cr_rl.get("clause_id") or ""),
+            severity=str(_cr_rl.get("risk_tier") or ""),
+            edit_location=_edit_location_rl,
+            edit_type=_edit_type_rl,
+            target_text=_original_rl,
+            replacement_text=_rewrite_rl,
+            original_text=_original_rl,
+            reason=str(_cr_rl.get("rewrite_reason") or _cr_rl.get("legal_business_reason") or "").strip(),
+        )
+
     # ── [Senior Counsel 판단] legal_risk와 negotiation_priority 분리 ────────
     # "법적으로 문제인가"(risk_tier/severity)와 "지금 협상 테이블에 올릴
     # 가치가 있는가"(negotiation_priority)를 별도 축으로 계산해 각 finding에
@@ -5997,6 +6038,13 @@ def build_clause_level_result(
     except Exception:
         _filtered_output = {}
         _low_count_in_output = 0
+
+    # _cr_to_ri()가 방금 clause_results에 finding_id를 부여했으므로, 이미
+    # 만들어둔 redline_instruction에도 그대로 복사해 UI/DOCX가 finding_id로
+    # 서로 다른 화면의 같은 redline을 매칭할 수 있게 한다.
+    for _cr_fid in clause_results:
+        if isinstance(_cr_fid, dict) and isinstance(_cr_fid.get("redline_instruction"), dict):
+            _cr_fid["redline_instruction"]["finding_id"] = str(_cr_fid.get("finding_id") or "")
 
     # ── [UI/DOCX 일치 강제] ───────────────────────────────────────────────
     # output_filter의 dedup(같은 조항 병합 + 같은 rule의 정적 issue_title
@@ -6175,6 +6223,26 @@ def build_clause_level_result(
     if _missing_statutes:
         meta["review_status"] = "REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING"
         meta["review_status_detail"] = f"AI 분석 없이 확인 필요 상태로 남은 법률: {', '.join(_missing_statutes)}"
+
+    # [실무 Redline 완성도 HARD GATE] (2026-09-04 지시) — 위에서 모든 HIGH/
+    # MEDIUM finding에 redline_instruction을 부착했으므로, 여기서 그 결과가
+    # 실제로 완성됐는지 최종 확인한다. self_check.py의 run_self_check()가
+    # 아니라 여기서 하는 이유: run_self_check()는 redline_instruction이
+    # 아직 없는 합성 clause_results로도 단위 테스트되므로, 그 함수 자체의
+    # 책임으로 만들면 이 파이프라인(clause_level.py)의 부착 여부와 무관한
+    # 오탐 차단이 발생한다.
+    from runtime.review.redline_instruction import is_incomplete_redline as _is_incomplete_redline_final
+    _incomplete_redline_ids = [
+        str(cr.get("clause_id") or "")
+        for cr in clause_results
+        if isinstance(cr, dict) and not bool(cr.get("dedup_suppressed"))
+        and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+        and _is_incomplete_redline_final(cr.get("redline_instruction"))
+    ]
+    if _incomplete_redline_ids and not meta.get("review_status"):
+        meta["review_status"] = "REVIEW_FAILED_INCOMPLETE_REDLINE"
+        meta["review_status_detail"] = f"수정 위치/방식/완성문구가 불완전한 finding: {', '.join(_incomplete_redline_ids)}"
+    meta["incomplete_redline_clause_ids"] = _incomplete_redline_ids
 
     return ClauseLevelResult(
         review={

@@ -456,6 +456,24 @@ def run_self_check(
         ],
     }
 
+    # (11b) 실무 Redline 완성도 보고 (2026-09-04 지시) — HIGH/MEDIUM finding에
+    # 수정 위치·방식·완성문구가 있는지 집계한다(보고 전용 — 여기서 게이트를
+    # 걸지는 않는다). 실제 REVIEW_FAILED_INCOMPLETE_REDLINE 차단은
+    # clause_level.py가 clause_results 전체에 redline_instruction을 부착한
+    # *이후* meta 레벨에서 수행한다 — 이 함수(run_self_check)는 합성
+    # clause_results로 단위 테스트되는 경우가 많아, 아직 redline_instruction이
+    # 부착되지 않은 입력을 이 함수 자체의 실패로 오판하면 안 되기 때문이다.
+    from runtime.review.redline_instruction import is_incomplete_redline
+    _incomplete_redline_clause_ids = [
+        str(cr.get("clause_id") or "")
+        for cr in active_clause_results
+        if str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+        and is_incomplete_redline(cr.get("redline_instruction"))
+    ]
+    incomplete_redline_failed = bool(_incomplete_redline_clause_ids)
+    report["incomplete_redline_clause_ids"] = _incomplete_redline_clause_ids
+    report["redline_complete_ok"] = not incomplete_redline_failed
+
     # (12) 사전질문 답변 미반영 검증 (2026-09-04 지시, 요청 4/8) —
     # 사용자가 이미 seller/owner_of_goods/payment_recipient/revenue_recipient
     # 중 하나라도 명시적으로 답변했는데(Contract Legal Map에 반영된 값

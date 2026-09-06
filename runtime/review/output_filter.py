@@ -68,6 +68,11 @@ class ReviewIssue:
     recommended_starting_tier: str = ""
     negotiation_priority_depends_on: str = ""
     negotiation_feasibility: str = ""
+    # 실무 Redline 고도화(2026-09-04 지시) — 수정 위치/방식/완성문구/이유의
+    # mandatory 구조. output_filter가 UI/DOCX/PDF가 공유하는 canonical
+    # 변환 지점이므로, 여기 없으면 build_final_findings()를 거치는 모든
+    # 다운로드 경로에서 조용히 사라진다.
+    redline_instruction: dict[str, Any] | None = None
 
     @property
     def display_bucket(self) -> str:
@@ -109,6 +114,7 @@ class ReviewIssue:
             "recommended_starting_tier": self.recommended_starting_tier,
             "negotiation_priority_depends_on": self.negotiation_priority_depends_on,
             "negotiation_feasibility": self.negotiation_feasibility,
+            "redline_instruction": self.redline_instruction,
         }
 
 
@@ -353,6 +359,7 @@ def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
                     recommended_starting_tier=issue.recommended_starting_tier or existing.recommended_starting_tier,
                     negotiation_priority_depends_on=issue.negotiation_priority_depends_on or existing.negotiation_priority_depends_on,
                     negotiation_feasibility=issue.negotiation_feasibility or existing.negotiation_feasibility,
+                    redline_instruction=issue.redline_instruction or existing.redline_instruction,
                 )
             else:
                 # Add new clause_id to existing's related list
@@ -555,6 +562,7 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             recommended_starting_tier=str(cr.get("recommended_starting_tier") or "").strip(),
             negotiation_priority_depends_on=str(cr.get("negotiation_priority_depends_on") or "").strip(),
             negotiation_feasibility=str(cr.get("negotiation_feasibility") or "").strip(),
+            redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
         ))
     return out
 

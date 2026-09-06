@@ -87,6 +87,7 @@ class ReviewIssue:
     confidence: float = 0.75
     is_checklist_item: bool = False
     is_mandatory_target: bool = False
+    redline_instruction: dict[str, Any] | None = None
 
     @property
     def display_bucket(self) -> str:
@@ -116,6 +117,7 @@ class ReviewIssue:
             "related_clauses": list(self.related_clauses),
             "confidence": self.confidence,
             "is_checklist_item": self.is_checklist_item,
+            "redline_instruction": self.redline_instruction,
         }
 
 
@@ -228,6 +230,33 @@ def _para(body: ET.Element, text: str, *, color: str | None = None,
     _t(run, prefix + str(text or ""))
 
 
+def _render_redline_instruction(body: ET.Element, redline: dict[str, Any], *, color: str) -> None:
+    """실무 Redline 고도화(2026-09-04 지시) — 수정 위치/방식/문구/이유를
+    UI와 동일한 4줄 형태로 DOCX에 그대로 노출한다. 초보 사용자가 그대로
+    복사해 계약서에 반영할 수 있도록, 완성문구(final_clause_text)를
+    그대로 보여준다 — placeholder 없이."""
+    _EDIT_TYPE_LABELS = {
+        "replace": "교체", "insert_after": "신설(뒤에 추가)",
+        "insert_before": "신설(앞에 추가)", "delete": "삭제", "new_clause": "신설",
+    }
+    edit_type_label = _EDIT_TYPE_LABELS.get(str(redline.get("edit_type") or ""), str(redline.get("edit_type") or ""))
+    _para(body, f"수정 위치: {redline.get('edit_location') or ''}", bold=True, color=color, indent=1)
+    _para(body, f"수정 방식: {edit_type_label}", indent=1)
+    _para(body, "수정 문구:", bold=True, color=color, indent=1)
+    final_text = str(redline.get("final_clause_text") or "")
+    for line in final_text.splitlines()[:20] or [""]:
+        line = line.strip()
+        if line:
+            p_line = _p(body)
+            r_line = _r(p_line, color=color)
+            t_elem = ET.SubElement(r_line, _w("t"))
+            t_elem.set(f"{{{XML_NS}}}space", "preserve")
+            t_elem.text = "      " + safe_truncate(_clean_text(line), 400)
+    reason = str(redline.get("reason") or "")
+    if reason:
+        _para(body, f"수정 이유: {safe_truncate(reason, 350)}", indent=1, italic=True)
+
+
 def _separator(body: ET.Element) -> None:
     _blank(body)
 
@@ -315,6 +344,7 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         # regardless of which path produced this dict.
         related_clauses=[str(r) for r in (d.get("related_clause_ids") or d.get("related_clauses") or [])][:6],
         confidence=float(d.get("confidence") or 0.75),
+        redline_instruction=d.get("redline_instruction") if isinstance(d.get("redline_instruction"), dict) else None,
     )
 
 
@@ -400,6 +430,7 @@ def _build_review_issues(
             confidence=float(cr.get("confidence") or 0.75),
             is_checklist_item=bool(cr.get("is_checklist_item")),
             is_mandatory_target=bool(cr.get("is_mandatory_review_target") or cr.get("is_mandatory")),
+            redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
         )
         issues.append(ri)
 
@@ -854,7 +885,9 @@ def build_legal_review_docx(
             _para(body, f"문제점: {safe_truncate(issue.problem, 350)}", indent=1)
             _para(body, f"법적/실무상 이유: {safe_truncate(issue.legal_business_reason, 350)}", indent=1)
 
-            if issue.proposed_revision:
+            if issue.redline_instruction:
+                _render_redline_instruction(body, issue.redline_instruction, color=COLOR_HIGH)
+            elif issue.proposed_revision:
                 _para(body, "수정문안:", bold=True, color=COLOR_HIGH, indent=1)
                 for line in issue.proposed_revision.splitlines()[:15]:
                     line = line.strip()
@@ -896,7 +929,10 @@ def build_legal_review_docx(
                 _para(body, f"원문: {safe_truncate(issue.original_text, 200)}", indent=1)
 
             _para(body, f"문제점: {safe_truncate(issue.problem, 300)}", indent=1)
-            _para(body, f"수정방향: {safe_truncate(issue.proposed_revision, 350)}", indent=1)
+            if issue.redline_instruction:
+                _render_redline_instruction(body, issue.redline_instruction, color=COLOR_MEDIUM)
+            else:
+                _para(body, f"수정방향: {safe_truncate(issue.proposed_revision, 350)}", indent=1)
 
             neg = issue.negotiation_position
             if neg and not _has_placeholder(neg):

@@ -1690,6 +1690,18 @@ def create_handler(service: RuleQueryService):
                     for _cr in _all_results:
                         if not isinstance(_cr, dict) or _cr.get("is_mandatory"):
                             continue
+                        # common_legal_risk.py/sales_transaction_rules.py의
+                        # 결정론적 Layer-1 rule은 원문에 실제로 등장하는 문구를
+                        # 정규식으로 직접 확인해 만든 고정밀 finding이므로,
+                        # contract_type_code 오분류 하나로 "조항 주제와 수정문안
+                        # 불일치"라 단정해 수정문안을 "자동수정 보류"로 덮어쓰면
+                        # 안 된다 — output_filter.is_valid_issue()/self_check
+                        # 백스톱/mandatory_issues에 이미 적용된 것과 동일한
+                        # 예외를 이 지점에도 적용한다(2026-09-04, 실무 Redline
+                        # 회귀에서 발견 — 손수 만든 수정문안이 전부 "자동수정
+                        # 보류"로 대체되고 있었다).
+                        if _cr.get("is_common_legal_risk"):
+                            continue
                         _sr = str(_cr.get("suggested_rewrite") or "").strip()
                         if _sr:
                             _clause_title_lo = str(_cr.get("clause_title") or "").lower()
@@ -1840,6 +1852,68 @@ def create_handler(service: RuleQueryService):
                     # 경로에서만 새로 생긴 항목(있다면)에도 안정적 ID를 부여한다.
                     from runtime.review.output_finalize import ensure_finding_ids as _ensure_finding_ids_docx
                     _ensure_finding_ids_docx(_all_results)
+
+                    # [실무 Redline 고도화, 2026-09-04 지시] — 이 다운로드
+                    # 경로는 _all_results를 독립적으로 재구성하므로, clause_
+                    # level.py의 초기 리뷰에서 각 rule이 직접 만든
+                    # redline_instruction(있는 경우)은 그대로 두고, 없는
+                    # HIGH/MEDIUM finding에는 여기서도 동일한 방식으로
+                    # 일반적인 구조를 채운다. 그 후 완성도를 검증해 미완성
+                    # (자동수정 보류/placeholder/위치 불명확)이면 다운로드를
+                    # 차단한다.
+                    from runtime.review.redline_instruction import build_redline_instruction as _build_redline_docx, is_incomplete_redline as _is_incomplete_redline_docx
+                    for _cr_rl_docx in _all_results:
+                        if not isinstance(_cr_rl_docx, dict) or bool(_cr_rl_docx.get("dedup_suppressed")):
+                            continue
+                        if str(_cr_rl_docx.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
+                            continue
+                        if isinstance(_cr_rl_docx.get("redline_instruction"), dict):
+                            _cr_rl_docx["redline_instruction"]["finding_id"] = str(_cr_rl_docx.get("finding_id") or "")
+                            continue
+                        _display_path_rl_docx = str(_cr_rl_docx.get("display_path") or "").strip()
+                        _original_rl_docx = str(_cr_rl_docx.get("original_text") or "").strip()
+                        _rewrite_rl_docx = str(
+                            _cr_rl_docx.get("suggested_rewrite") or _cr_rl_docx.get("proposed_revision")
+                            or _cr_rl_docx.get("recommendation_text") or ""
+                        ).strip()
+                        if not _rewrite_rl_docx:
+                            continue
+                        _is_new_clause_rl_docx = bool(_cr_rl_docx.get("is_checklist_item")) or not _original_rl_docx
+                        if _is_new_clause_rl_docx:
+                            _edit_type_rl_docx = "new_clause"
+                            _edit_location_rl_docx = f"{_display_path_rl_docx} 뒤에 신설" if _display_path_rl_docx else "신설 조항 추가 — 위치 확인 필요"
+                        else:
+                            _edit_type_rl_docx = "replace"
+                            _edit_location_rl_docx = f"{_display_path_rl_docx} 교체" if _display_path_rl_docx else "위치 확인 필요 — 원문에서 해당 조항을 특정하지 못함"
+                        _cr_rl_docx["redline_instruction"] = _build_redline_docx(
+                            finding_id=str(_cr_rl_docx.get("finding_id") or ""),
+                            clause_id=str(_cr_rl_docx.get("clause_id") or ""),
+                            severity=str(_cr_rl_docx.get("risk_tier") or ""),
+                            edit_location=_edit_location_rl_docx,
+                            edit_type=_edit_type_rl_docx,
+                            target_text=_original_rl_docx,
+                            replacement_text=_rewrite_rl_docx,
+                            original_text=_original_rl_docx,
+                            reason=str(_cr_rl_docx.get("rewrite_reason") or _cr_rl_docx.get("legal_business_reason") or "").strip(),
+                        )
+                    _incomplete_redline_ids_docx = [
+                        str(cr.get("clause_id") or "")
+                        for cr in _all_results
+                        if isinstance(cr, dict) and not bool(cr.get("dedup_suppressed"))
+                        and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+                        and _is_incomplete_redline_docx(cr.get("redline_instruction"))
+                    ]
+                    if _incomplete_redline_ids_docx:
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": "REVIEW_FAILED_INCOMPLETE_REDLINE: HIGH/MEDIUM finding missing complete edit location/wording",
+                                "review_status": "REVIEW_FAILED_INCOMPLETE_REDLINE",
+                                "incomplete_redline_clause_ids": _incomplete_redline_ids_docx,
+                            },
+                        )
+                        return
 
                     _docx_final = _build_final_findings(_all_results, contract_type_code=_ct_code, include_low=False)
                     _docx_high = int(_docx_final.get("high_count") or 0)
@@ -2210,6 +2284,9 @@ def create_handler(service: RuleQueryService):
                                 _cr2["severity"] = _new2
                 for _cr2 in _cr_list2:
                     if not isinstance(_cr2, dict) or _cr2.get("is_mandatory"):
+                        continue
+                    # (위 다운로드 경로와 동일 — 결정론적 Layer-1 rule 예외)
+                    if _cr2.get("is_common_legal_risk"):
                         continue
                     _sr2 = str(_cr2.get("suggested_rewrite") or "").strip()
                     if _sr2:

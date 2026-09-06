@@ -225,7 +225,13 @@ def _parse_item_start(line: str) -> tuple[str, str] | None:
         return None
     m = re.match(r"^\(?(\d{1,3})\)?\s*(?:호|[.)])\s*(.+)$", l)
     if m:
-        return str(int(m.group(1))), (m.group(2) or "").strip()
+        body = (m.group(2) or "").strip()
+        # 날짜 기입란("20    .    .    .")이 "호"로 오인되는 것을 방지한다
+        # (2026-09-04 지시 회귀조건) — 실제 호는 항상 실질 내용을 담지만,
+        # 이런 자리표시자는 점/공백만 남는다.
+        if re.match(r"^[.\s]*$", body):
+            return None
+        return str(int(m.group(1))), body
     return None
 
 
@@ -694,7 +700,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             ids[i] = "KR-" + _normalize_clause_id(num)
             continue
 
-        m2 = re.match(r"^Article\s+(\d{1,3}|[IVXLC]{1,10})\.?\s*(.*)$", l, flags=re.IGNORECASE)
+        m2 = re.match(r"^(?:Article|Section)\s+(\d{1,3}|[IVXLC]{1,10})\.?\s*(.*)$", l, flags=re.IGNORECASE)
         if m2:
             idxs.append(i)
             num = (m2.group(1) or "").strip()
@@ -740,6 +746,80 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
                 titles[i] = f"{num}. {rest[:120]}"
                 ids[i] = f"EN-{num}"
 
+    # Phase 1-3: bare numbered heading format "1. 제목" / "1) 제목" / "① 제목"
+    # (2026-09-04 지시 — 그림닷컴 판매지원 용역계약 실사례) — 제N조/Article N이
+    # 전혀 없는 계약(특히 한국어)에서 "1. 목적"/"2. 약정 기간"처럼 번호+구두점
+    # 만으로 표기된 top-level heading을 조 구조로 승격한다. 페이지번호·금액·
+    # 날짜·본문 중 우연한 숫자를 조항번호로 오인하지 않도록, 실제로 1부터
+    # 시작해 +1씩 증가하는 순차 번호를 이루는 경우에만 승격한다 — 그렇지
+    # 않으면(중복·큰 건너뜀 등) 여기서 확정하지 않고 아래 문단 fallback으로
+    # 넘어가되, 그 사실을 warnings에 "clause_numbering_uncertain"으로 남겨
+    # self-check가 재분석 대상으로 알 수 있게 한다.
+    def _longest_sequential_run(candidates: list[tuple[int, int, str]]) -> list[tuple[int, int, str]]:
+        seq: list[tuple[int, int, str]] = []
+        expected = 1
+        for item in candidates:
+            if item[1] == expected:
+                seq.append(item)
+                expected += 1
+            elif item[1] == expected - 1:
+                continue  # 같은 번호 재등장 — 무시하고 계속
+            elif not seq:
+                continue  # 아직 1을 못 찾음 — 계속 탐색
+            else:
+                break  # 순서가 깨지면 여기까지만 확정 구간으로 채택(예: 별첨)
+        return seq
+
+    _numbering_uncertain = False
+    if not idxs:
+        # 시도 1: "1. 제목"/"1) 제목" — digit 기반 top-level heading. ①②③는
+        # 이미 다른 조 본문 안에서 항(paragraph) 마커로 흔히 쓰이므로, digit
+        # 기반 후보와 같은 목록에 섞으면 항 마커가 순차성을 깨뜨려 최상위
+        # 구조 자체를 오검출하게 된다 — 완전히 별도 시도로 분리한다.
+        _digit_candidates: list[tuple[int, int, str]] = []
+        for i, line in enumerate(lines):
+            l = (line or "").strip()
+            if not l:
+                continue
+            m4 = re.match(r"^(\d{1,2})[.)]\s+(\S.{0,58})$", l)
+            if not m4:
+                continue
+            rest = (m4.group(2) or "").strip()
+            # 날짜("31일")·금액("000원")·단위로 시작하는 본문 중 숫자 목록은
+            # 조항 제목이 아니다 — 제목은 숫자/통화기호로 시작하지 않는다.
+            if re.match(r"^[\d,.\s%]", rest) or re.match(r"^(?:원|년|월|일)\b", rest):
+                continue
+            _digit_candidates.append((i, int(m4.group(1)), rest))
+
+        _seq = _longest_sequential_run(_digit_candidates)
+
+        # 시도 2(시도 1이 실패한 경우에만): "① 제목" — 계약 전체가 처음부터
+        # 원문자 번호를 top-level 구조로 쓰는 드문 경우.
+        if len(_seq) < 2:
+            _circled_candidates: list[tuple[int, int, str]] = []
+            for i, line in enumerate(lines):
+                l = (line or "").strip()
+                if not l or l[0] not in _CIRCLED_NUMS:
+                    continue
+                num_str = _circled_to_int(l[0])
+                rest = l[1:].strip()
+                if not num_str or not rest:
+                    continue
+                _circled_candidates.append((i, int(num_str), rest))
+            _seq2 = _longest_sequential_run(_circled_candidates)
+            if len(_seq2) >= 2:
+                _seq = _seq2
+            elif _circled_candidates:
+                _numbering_uncertain = True
+
+        if len(_seq) >= 2:
+            for i, num, rest in _seq:
+                idxs.append(i)
+                titles[i] = rest[:120]
+                ids[i] = "KR-" + str(num)
+        elif _digit_candidates:
+            _numbering_uncertain = True
+
     if not idxs:
         chunks = _fallback_split(cleaned)
         out = [
@@ -757,6 +837,9 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             )
             for i, t in enumerate(chunks)
         ]
+        _warnings = ["fallback_used"] if out else ["no_clauses"]
+        if _numbering_uncertain:
+            _warnings.append("clause_numbering_uncertain")
         rep = ClauseExtractionReport(
             strategy="fallback",
             clause_count=len(out),
@@ -764,7 +847,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             fallback_only=True if out else False,
             dropped_lines=dropped,
             split_long_clauses=sum(1 for x in out if len(x.text) > 1800),
-            warnings=["fallback_used"] if out else ["no_clauses"],
+            warnings=_warnings,
         )
         return out, rep
 
