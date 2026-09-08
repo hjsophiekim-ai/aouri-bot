@@ -36,6 +36,14 @@ logger = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT))
 
+from runtime.ai.dotenv import ensure_dotenv_loaded  # noqa: E402
+
+# Must run before ANY os.environ read below: .env loading in this repo is
+# otherwise lazy (it only happens inside load_ai_config / load_law_api_config),
+# so this script used to see an empty OPENAI_API_KEY and silently drop to the
+# rule-based path even though the key was configured.
+ensure_dotenv_loaded()
+
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="아우리봇 계약 검토 DOCX 생성")
@@ -108,17 +116,34 @@ def main() -> None:
     loader.load()
     service = RuleQueryService(loader)
 
-    # AI setup
+    # AI setup — is_ai_enabled() is the single source of truth (it also honours
+    # a configured Anthropic key, which the old raw OPENAI_API_KEY check ignored).
+    # The old code imported `create_provider` from runtime.ai.provider, which
+    # does not exist; the bare `except Exception` swallowed the ImportError and
+    # forced the rule-based path on every run.
     ai_provider = ai_model = ai_timeout_sec = ai_max_tokens = ai_temperature = None
-    if os.environ.get("OPENAI_API_KEY") and args.mode == "legal-team":
-        try:
-            from runtime.ai.provider import create_provider
-            ai_provider = create_provider()
-            ai_model = os.environ.get("AI_MODEL", "gpt-4.1")
-            ai_timeout_sec, ai_max_tokens, ai_temperature = 45.0, 2000, 0.1
-            print(f"[아우리봇] AI 검토 활성화: {ai_model}")
-        except Exception:
-            print("[아우리봇] AI 비활성화 — 규칙 기반 모드")
+    if args.mode == "legal-team":
+        from runtime.ai.config import load_ai_config
+        from runtime.ai.factory import create_ai_provider, is_ai_enabled
+
+        ai_cfg = load_ai_config()
+        if is_ai_enabled(ai_cfg):
+            try:
+                ai_provider = create_ai_provider(ai_cfg)
+                ai_model = os.environ.get("AI_MODEL") or ai_cfg.model
+                ai_timeout_sec = ai_cfg.timeout_sec or 45.0
+                ai_max_tokens = ai_cfg.max_tokens or 2000
+                ai_temperature = ai_cfg.temperature
+                print(f"[아우리봇] AI 검토 활성화: {ai_cfg.provider} / {ai_model}")
+            except Exception:
+                ai_provider = ai_model = ai_timeout_sec = ai_max_tokens = ai_temperature = None
+                logger.exception("AI provider 생성 실패 — 규칙 기반 모드로 전환")
+                print("[아우리봇] AI 비활성화 — 규칙 기반 모드")
+        else:
+            print(
+                "[아우리봇] AI 비활성화 — 규칙 기반 모드 "
+                f"(provider={ai_cfg.provider}, API key 미설정)"
+            )
 
     from runtime.review.clause_level import build_clause_level_result
 

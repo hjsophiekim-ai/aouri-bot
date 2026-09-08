@@ -59,6 +59,19 @@ LEGAL_EFFECT_TAGS: tuple[str, ...] = (
     # "원문 태그 없음=무조건 통과"로 처리해, 불가항력 조항에 SLA/지체상금류
     # 문구가 섞여도 REVIEW_FAILED_SEMANTIC_MISMATCH가 못 잡는 구멍이 있었다.
     "force_majeure",
+    # NDA/IP 계약군(2026-09-08 지시, 항목 3) — 같은 이유의 구멍을 메운다.
+    # 예컨대 "무보증" 조항(no_warranty)에 "광고 콘텐츠 저작권 이전"
+    # (ip_ownership_transfer) 수정문안이 붙어도, 두 효과 모두 태그가
+    # 없으면 effects_overlap()이 무조건 통과시켜 semantic gate가 침묵했다.
+    "no_warranty",
+    "ip_ownership_allocation",
+    "ip_ownership_transfer",
+    "license_grant",
+    "data_processing_restriction",
+    "personal_data_protection",
+    "content_deliverable_inspection",
+    "advertising_media_license",
+    "portrait_or_location_release",
 )
 
 # Each tag maps to a list of (regex, requires_dotall) fairly specific phrase
@@ -130,6 +143,34 @@ _PATTERNS: dict[str, list[re.Pattern[str]]] = {
     ],
     "force_majeure": [
         re.compile(r"불가항력|force\s+majeure", re.IGNORECASE),
+    ],
+    "no_warranty": [
+        re.compile(r"어떠한\s*보증도\s*하지\s*아니한다|보증하지\s*아니한다|현\s*상태\s*그대로\s*제공|as\s+is", re.IGNORECASE),
+    ],
+    "ip_ownership_allocation": [
+        re.compile(r"(지식재산권|저작권|특허권|소유권)[^.\n]{0,40}(귀속|에게\s*있다|보유한다)"),
+    ],
+    "ip_ownership_transfer": [
+        re.compile(r"(지식재산권|저작(?:재산)?권|특허권)[^.\n]{0,30}(양도|이전)(?:한다|하여야|하기로)"),
+    ],
+    "license_grant": [
+        re.compile(r"사용을?\s*허락|실시권을?\s*(?:부여|허락)|이용을?\s*허락|라이선스를?\s*부여"),
+    ],
+    "data_processing_restriction": [
+        re.compile(r"(학습|훈련|미세조정|파인튜닝|데이터셋)[^.\n]{0,30}(사용할\s*수\s*없|금지|제한)"
+                   r"|모델[^.\n]{0,20}(학습|개선)[^.\n]{0,30}(승인|동의|금지)"),
+    ],
+    "personal_data_protection": [
+        re.compile(r"개인정보[^.\n]{0,40}(처리|보호|위탁|파기|이전)|민감정보|정보주체"),
+    ],
+    "content_deliverable_inspection": [
+        re.compile(r"(콘텐츠|시안|산출물|납품물)[^.\n]{0,15}검수|검수\s*(기준|절차|기간)|수정\s*요청\s*횟수"),
+    ],
+    "advertising_media_license": [
+        re.compile(r"광고\s*매체|매체\s*사용권|광고\s*집행|SNS[^.\n]{0,12}(게재|노출|활용)"),
+    ],
+    "portrait_or_location_release": [
+        re.compile(r"초상권|퍼블리시티권|촬영\s*장소|출연\s*동의"),
     ],
 }
 

@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from runtime.ai.dotenv import load_dotenv, resolve_dotenv_paths
-from runtime.project_paths import DOCS_REPO_ROOT as REPO_ROOT
+from runtime.ai.dotenv import ensure_dotenv_loaded
 
 
 @dataclass(frozen=True)
@@ -37,13 +35,12 @@ def _coerce_int(v: Any, default: int) -> int:
 
 
 def load_ai_config() -> AIConfig:
-    dotenv_disabled = (os.getenv("AOURIBOT_DOTENV_DISABLED") or "").strip().lower() in ("1", "true", "yes")
-    existing = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-    if not dotenv_disabled and (existing is None or str(existing).strip() == ""):
-        load_dotenv(
-            resolve_dotenv_paths(cwd=Path.cwd(), repo_root=REPO_ROOT),
-            override=False,
-        )
+    # Idempotent and cwd-independent — see runtime/ai/dotenv.py. Called
+    # unconditionally rather than only "when OPENAI_API_KEY looks unset",
+    # because the old guard read `OPENAI_API_KEY or ANTHROPIC_API_KEY` and so
+    # skipped the whole load whenever *either* key happened to be exported,
+    # leaving the other one empty for the rest of the process.
+    ensure_dotenv_loaded()
 
     provider_env = (os.getenv("LLM_PROVIDER") or "").strip().lower()
 

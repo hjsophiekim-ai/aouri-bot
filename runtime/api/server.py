@@ -1861,7 +1861,39 @@ def create_handler(service: RuleQueryService):
                     # 일반적인 구조를 채운다. 그 후 완성도를 검증해 미완성
                     # (자동수정 보류/placeholder/위치 불명확)이면 다운로드를
                     # 차단한다.
+                    # ── [Contract Semantic Scope + Finding 무결성 HARD GATE] ──
+                    # (2026-09-08 지시, 항목 1·3·4·9) 이 다운로드 경로는
+                    # _all_results를 독립적으로 재구성(mandatory_issues 재주입
+                    # 등)하므로, clause_level.py에서 이미 한 번 적용된 계약유형
+                    # rule whitelist / semantic gate / 조항참조 검증을 여기서도
+                    # 다시 적용해야 한다 — 그렇지 않으면 초기 검토에서 제거된
+                    # 계약유형 무관 finding이 다운로드 파일에서 되살아난다.
+                    from runtime.review.contract_scope_policy import enforce_contract_scope as _enforce_scope_docx
+                    from runtime.review.finding_integrity_gates import (
+                        enforce_clause_semantic_gate as _enforce_semantic_docx,
+                        enforce_valid_clause_references as _enforce_clause_refs_docx,
+                    )
+                    _scope_report_docx = _enforce_scope_docx(_all_results, contract_type_code=_ct_code)
+                    _semantic_report_docx = _enforce_semantic_docx(_all_results, contract_type_code=_ct_code)
+                    _clause_ref_report_docx = _enforce_clause_refs_docx(
+                        _all_results, original_clauses, contract_type_code=_ct_code,
+                    )
+
                     from runtime.review.redline_instruction import build_redline_instruction as _build_redline_docx, is_incomplete_redline as _is_incomplete_redline_docx
+                    # [2026-09-08 지시 항목 10] 신설 조항 권고를 "위치 확인
+                    # 필요"로 끝내지 않는다 — 확인된 조 구조의 마지막 번호
+                    # 다음 조로 위치를 지정한다(clause_level.py와 동일 규칙).
+                    _last_article_docx = 0
+                    for _c_last_docx in (original_clauses or []):
+                        _raw_last_docx = str(
+                            (_c_last_docx.get("article_number") if isinstance(_c_last_docx, dict) else None) or ""
+                        ).strip()
+                        if _raw_last_docx.isdigit():
+                            _last_article_docx = max(_last_article_docx, int(_raw_last_docx))
+                    _new_clause_fallback_docx = (
+                        f"제{_last_article_docx}조 뒤에 제{_last_article_docx + 1}조 신설"
+                        if _last_article_docx else "신설 조항 추가 — 위치 확인 필요"
+                    )
                     for _cr_rl_docx in _all_results:
                         if not isinstance(_cr_rl_docx, dict) or bool(_cr_rl_docx.get("dedup_suppressed")):
                             continue
@@ -1881,7 +1913,7 @@ def create_handler(service: RuleQueryService):
                         _is_new_clause_rl_docx = bool(_cr_rl_docx.get("is_checklist_item")) or not _original_rl_docx
                         if _is_new_clause_rl_docx:
                             _edit_type_rl_docx = "new_clause"
-                            _edit_location_rl_docx = f"{_display_path_rl_docx} 뒤에 신설" if _display_path_rl_docx else "신설 조항 추가 — 위치 확인 필요"
+                            _edit_location_rl_docx = f"{_display_path_rl_docx} 뒤에 신설" if _display_path_rl_docx else _new_clause_fallback_docx
                         else:
                             _edit_type_rl_docx = "replace"
                             _edit_location_rl_docx = f"{_display_path_rl_docx} 교체" if _display_path_rl_docx else "위치 확인 필요 — 원문에서 해당 조항을 특정하지 못함"
@@ -2034,6 +2066,68 @@ def create_handler(service: RuleQueryService):
                         )
                         return
 
+                    # [REVIEW_FAILED_USER_SCOPE_NOT_COVERED gate, 2026-09-08 지시 항목 2]
+                    # 사용자가 제시한 검토 쟁점(및 계약유형별 기본 이슈맵)은 각각
+                    # 적정/수정 필요/별도계약 필요 중 하나로 반드시 답변되어야
+                    # 한다. 위 _check_mandatory_targets는 "조항번호"를 인용한
+                    # 요청만 검증하므로, "쟁점"을 서술한 요청은 여기서 별도로
+                    # 검증한다.
+                    from runtime.review.mandatory_review_issues import (
+                        REVIEW_FAILED_USER_SCOPE_NOT_COVERED as _USER_SCOPE_FAIL,
+                        answer_mandatory_review_issues as _answer_issues_docx,
+                        check_all_issues_answered as _check_issues_docx,
+                        derive_mandatory_review_issues as _derive_issues_docx,
+                    )
+                    _issue_answers_docx = _answer_issues_docx(
+                        _derive_issues_docx(
+                            contract_type_code=_ct_code,
+                            review_focus=(review_focus if isinstance(review_focus, str) else None),
+                        ),
+                        clause_results=_all_results,
+                        full_text=str(text or ""),
+                    )
+                    # [사용자 자유서술 요청 coverage, 2026-09-08 지시]
+                    # 최초 검토에서 이미 의미 파싱해 둔 쟁점을 복원해, 이
+                    # 경로가 재구성한 _all_results에 대해 다시 답변한다 —
+                    # LLM을 다시 호출하지 않으면서도 UI와 다운로드 파일의
+                    # 판단이 어긋나지 않게 한다.
+                    from runtime.review.user_review_request import (
+                        build_user_request_coverage as _build_user_coverage_docx,
+                        check_user_request_coverage as _check_user_coverage_docx,
+                        issues_from_meta as _user_issues_from_meta,
+                        link_clauses_to_issues as _link_user_issues_docx,
+                    )
+                    _user_parse_meta_docx = (
+                        clause_meta.get("user_review_request_parse") if isinstance(clause_meta, dict) else None
+                    )
+                    _user_issues_docx = _user_issues_from_meta(_user_parse_meta_docx)
+                    if _user_issues_docx:
+                        _link_user_issues_docx(_user_issues_docx, original_clauses)
+                    _user_coverage_docx = _build_user_coverage_docx(
+                        _user_issues_docx,
+                        clause_results=_all_results,
+                        clauses=original_clauses,
+                        catalog_answers=_issue_answers_docx,
+                    )
+                    _user_parse_notice_docx = str(
+                        (_user_parse_meta_docx or {}).get("degraded_notice") or ""
+                    )
+                    _unanswered_issues_docx = (
+                        _check_issues_docx(_issue_answers_docx)
+                        + _check_user_coverage_docx(_user_coverage_docx)
+                    )
+                    if _unanswered_issues_docx:
+                        _json_response(
+                            self,
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": f"{_USER_SCOPE_FAIL}: user review focus issue(s) not answered in final output",
+                                "review_status": _USER_SCOPE_FAIL,
+                                "unanswered_review_issues": _unanswered_issues_docx,
+                            },
+                        )
+                        return
+
                     # [REVIEW_FAILED_GLOBAL_REASONING gate] (2026-09-03 지시, 요구 11)
                     # — 이 다운로드 경로는 _all_results를 독립적으로 재구성하므로
                     # self_check.py의 전체 판단축을 여기서 다시 돌릴 수는 없지만,
@@ -2161,6 +2255,9 @@ def create_handler(service: RuleQueryService):
                         high_issues_filtered=_docx_final.get("high_issues"),
                         medium_issues_filtered=_docx_final.get("medium_issues"),
                         mandatory_review_targets=_mandatory_target_status,
+                        mandatory_review_issues=_issue_answers_docx,
+                        user_review_coverage=_user_coverage_docx,
+                        user_review_parse_degraded_notice=_user_parse_notice_docx,
                         legal_applicability_review=(clause_meta.get("legal_applicability_review") if isinstance(clause_meta, dict) else None),
                     )
                 except Exception as exc:

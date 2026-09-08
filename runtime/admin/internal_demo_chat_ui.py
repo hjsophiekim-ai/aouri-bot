@@ -331,10 +331,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           </div>
 
           <div style="padding: 0 14px 14px 14px;">
-            <div class="h1" style="font-size:18px; margin-top:0;" id="conclusionTitle">-</div>
-            <div class="sub" id="conclusionBody">-</div>
-            <div class="meta" id="phaseNote">-</div>
-            <div class="meta" id="recommendedAction">-</div>
+            <div class="meta" id="analyzeErrorNote" hidden></div>
             <div class="meta" id="docxStatus">수정본: 미생성</div>
             <div class="analyzePanel" id="resultAnalyzePanel" style="margin-top:10px;">
               <div class="row" style="justify-content:space-between; align-items:center;">
@@ -571,6 +568,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       analyzeState.deepDone = false;
       analyzeState.lastError = null;
       analyzeState.retryFn = null;
+      clearAnalyzeError();
       analyzeState.startedAt = Date.now();
       analyzeState.expectedTotalSec = Math.max(20, Math.min(180, Number(expectedTotalSec || 60)));
       renderAnalyzeSteps();
@@ -895,7 +893,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         if (fastResult && fastResult.error) {
           analyzeState.lastError = fastResult.error;
           finishAnalyzeProgress(false);
-          document.getElementById('phaseNote').innerText = '1차 결과 생성 중 오류가 발생했어요. 잠시 후 재시도해 주세요.';
+          showAnalyzeError('1차 결과 생성 중 오류가 발생했어요. 잠시 후 재시도해 주세요.');
           for (const id of ['btnRetryAnalyze','btnRetryAnalyze2']) {
             const el = document.getElementById(id);
             if (el) el.style.display = 'inline-block';
@@ -916,7 +914,6 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
         showStage('stageResult');
         document.getElementById('resultTitle').innerText = '핵심 결과(1차)';
-        document.getElementById('phaseNote').innerText = '먼저 핵심 결과를 보여드리고, 조항별 수정안은 이어서 정리할게요.';
         document.getElementById('docxStatus').innerText = '수정본: 정밀 검토 후 준비됩니다';
         document.getElementById('btnConfirmRevision').disabled = true;
         document.getElementById('btnConfirmRevisionPdf').disabled = true;
@@ -930,6 +927,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           analyzeState.retryFn = deepRun;
           analyzeState.lastError = null;
           analyzeState.active = true;
+          clearAnalyzeError();
 
           setAnalyzeStage(2, '법령/판례 확인 중', '진행 중');
           const tAi = setTimeout(() => {
@@ -975,12 +973,11 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
               const el = document.getElementById(id);
               if (el) el.style.display = 'none';
             }
-            document.getElementById('phaseNote').innerText = '정밀 결과가 준비되었어요. 조항별 수정안을 확인해 주세요.';
             buildResult();
           } catch (e) {
             analyzeState.lastError = String(e || 'deep review failed');
             finishAnalyzeProgress(false);
-            document.getElementById('phaseNote').innerText = '정밀 결과 로딩 중 오류가 발생했어요. 네트워크 확인 후 재시도해 주세요.';
+            showAnalyzeError('정밀 결과 로딩 중 오류가 발생했어요. 네트워크 확인 후 재시도해 주세요.');
             for (const id of ['btnRetryAnalyze','btnRetryAnalyze2']) {
               const el = document.getElementById(id);
               if (el) el.style.display = 'inline-block';
@@ -1325,14 +1322,22 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       return { filtered, hidden };
     }
 
+    // #phaseNote 가 사라진 뒤 오류 메시지가 표시될 유일한 자리.
+    // 오류가 없으면 hidden 이므로 정상 화면에는 아무것도 나타나지 않는다.
+    function showAnalyzeError(msg) {
+      const el = document.getElementById('analyzeErrorNote');
+      if (!el) return;
+      el.innerText = String(msg || '');
+      el.hidden = !String(msg || '').trim();
+    }
+
+    function clearAnalyzeError() {
+      showAnalyzeError('');
+    }
+
     function buildResult() {
       const s = (reviewResult && reviewResult.summary) ? reviewResult.summary : {};
       const matched = Array.isArray(reviewResult && reviewResult.matched_rules) ? reviewResult.matched_rules : [];
-      const issueTitles = matched
-        .filter(x => x && !x.summary_suppress)
-        .map(x => x.title || x.rule_id || 'rule')
-        .slice(0, 6);
-
       const revSum = (revisionResult && revisionResult.revision && revisionResult.revision.summary) ? revisionResult.revision.summary : {};
       const meta0 = (reviewResult && reviewResult.clause_meta) ? reviewResult.clause_meta : {};
       const _rawItems = Array.isArray(revisionResult && revisionResult.clause_results) ? revisionResult.clause_results
@@ -1458,49 +1463,16 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       else if (suggested.length > 0 && issueClauseCount === 0) action = 'draft';
       else if (suggested.length > 0 && (s.matched_rule_count || 0) <= 1) action = 'draft';
 
-      const conclusionTitle = document.getElementById('conclusionTitle');
-      const conclusionBody = document.getElementById('conclusionBody');
-
       const _selfCheck = (meta0 && meta0.self_check) ? meta0.self_check : null;
       const _reviewStatus = _selfCheck ? String(_selfCheck.review_status || '') : '';
       const _reviewFailed = _reviewStatus.indexOf('REVIEW_FAILED') === 0;
 
-      if (_reviewFailed) {
-        conclusionTitle.innerText = '검토 실패 (REVIEW_FAILED) — 결과를 신뢰할 수 없습니다';
-        const reasons = [];
-        if (_selfCheck.clause_id_missing_count) {
-          reasons.push(`조항 ID 누락: ${_selfCheck.clause_id_missing_count}건`);
-        }
-        if (_selfCheck.final_findings_count_mismatch) {
-          reasons.push('최종 결과 건수(final_findings)가 실제 조항 목록과 일치하지 않습니다.');
-        }
-        if (_reviewStatus === 'REVIEW_FAILED_LIKELY_FALSE_NEGATIVE') {
-          reasons.push('계약서에 위험 문구가 있으나 탐지된 이슈가 0건입니다 (탐지 누락 의심).');
-        }
-        reasons.push('이 결과를 그대로 사용하지 말고 원문/추출 상태를 다시 확인하세요.');
-        conclusionBody.innerText = reasons.join('\\n');
-      } else if (action === 'legal') {
-        conclusionTitle.innerText = '위험도가 높아 법무 검토가 필요합니다';
-        const reasons = [];
-        reasons.push('high risk 또는 결재/승인 필요 신호가 있어요.');
-        if (issueTitles.length > 0) reasons.push('주요 이슈: ' + issueTitles.join(', '));
-        reasons.push('먼저 수정 제안을 확인한 뒤, 법무 검토로 이어가는 흐름이 안전해요.');
-        conclusionBody.innerText = reasons.slice(0, 5).join('\\n');
-      } else if (action === 'draft') {
-        conclusionTitle.innerText = '이 유형은 템플릿 기반 초안 작성을 추천해요';
-        const reasons = [];
-        reasons.push('대부분 정형 계약으로 보여 템플릿 초안이 빠른 시작점이 될 수 있어요.');
-        if (suggested.length > 0) reasons.push('추천 템플릿: ' + suggested.slice(0, 3).join(', '));
-        if (issueTitles.length > 0) reasons.push('검토 포인트: ' + issueTitles.join(', '));
-        conclusionBody.innerText = reasons.slice(0, 5).join('\\n');
-      } else {
-        conclusionTitle.innerText = '이 조항은 수정 제안을 권장합니다';
-        const reasons = [];
-        reasons.push('계약서에서 바로 조정하면 좋은 표현/조항이 발견됐어요.');
-        if (issueTitles.length > 0) reasons.push('주요 이슈: ' + issueTitles.join(', '));
-        reasons.push('수정 제안은 “설명 가능한 뷰”로 정리되어 있어요(자동 redline 아님).');
-        conclusionBody.innerText = reasons.slice(0, 5).join('\\n');
-      }
+      // [상단 결론/추천 패널 제거 — 2026-09-08]
+      // 결과 카드 상단의 conclusionTitle/conclusionBody/phaseNote/
+      // recommendedAction 4개 요소를 UI에서 제거했다. 검토항목별 결론과
+      // 사용자 요청사항 검토 결과는 DOCX/PDF의 0-2·0-3절에 그대로 남는다
+      // (runtime/review/legal_review_docx.py, legal_review_pdf.py).
+      // _reviewFailed 는 아래 resultTitle 배지 색상에 계속 쓰인다.
 
       const high = !!s.high_risk;
       const appr = !!s.approval_required;
@@ -1520,7 +1492,6 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       const btnRev = document.getElementById('btnConfirmRevision');
       const btnRevPdf = document.getElementById('btnConfirmRevisionPdf');
       const btnDraft = document.getElementById('btnConfirmDraft');
-      const rec = document.getElementById('recommendedAction');
       const docxStatus = document.getElementById('docxStatus');
       const meta = (revisionResult && revisionResult.meta) ? revisionResult.meta : (reviewResult && reviewResult.clause_meta ? reviewResult.clause_meta : null);
 
@@ -1544,11 +1515,9 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       btnDraft.disabled = (suggested.length === 0);
 
       if (action === 'draft') {
-        rec.innerText = '대표 추천 액션: 초안 작성 확정';
         btnDraft.className = 'btn btnPrimary';
         btnRev.className = 'btn btnSecondary';
       } else {
-        rec.innerText = '대표 추천 액션: 최종 수정본 다운로드';
         btnRev.className = 'btn btnPrimary';
         btnDraft.className = 'btn btnSecondary';
       }

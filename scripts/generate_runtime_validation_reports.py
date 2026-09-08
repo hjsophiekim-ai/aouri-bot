@@ -8,6 +8,8 @@ import urllib.request
 from dataclasses import dataclass
 from multiprocessing import Process, Queue
 from pathlib import Path
+
+from runtime.ai.dotenv import resolve_dotenv_paths
 from typing import Any
 
 from runtime.ai.config import load_ai_config
@@ -102,10 +104,13 @@ def _http_json(method: str, url: str, *, body: dict[str, Any] | None = None, tim
 
 
 def _env_runtime_validation() -> dict[str, Any]:
-    root = _repo_root()
-    candidates = [".env", ".env.local", "docs/.env", "docs/.env.local"]
-    env_files = {c: (root / c).exists() for c in candidates}
+    # Report on the loader's own candidate list instead of guessing
+    # cwd/docs-root-relative paths, so the report matches runtime behaviour.
+    env_files = {str(c): c.exists() for c in resolve_dotenv_paths()}
 
+    # AOURIBOT_DOTENV_EAGER_EXEMPT: this reads the environment BEFORE the
+    # eager load on purpose - the whole point of the report is the
+    # before/after comparison of the loader's effect.
     before = {
         "OPENAI_API_KEY": _bool(os.getenv("OPENAI_API_KEY")),
         "LAW_API_KEY": _bool(os.getenv("LAW_API_KEY")),

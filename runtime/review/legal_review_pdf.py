@@ -158,6 +158,9 @@ def build_legal_review_pdf(
     high_issues_filtered: list[dict[str, Any]] | None = None,
     medium_issues_filtered: list[dict[str, Any]] | None = None,
     mandatory_review_targets: list[dict[str, Any]] | None = None,
+    mandatory_review_issues: list[dict[str, Any]] | None = None,
+    user_review_coverage: list[dict[str, Any]] | None = None,
+    user_review_parse_degraded_notice: str = "",
     legal_applicability_review: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review PDF.
@@ -225,6 +228,35 @@ def build_legal_review_pdf(
             sev_suffix = f" [{sev}]" if sev else ""
             _rows.append(f"- {disp}: {label}{sev_suffix}")
         _body(pdf, "\n".join(_rows))
+
+    # 사용자 검토항목 답변 (2026-09-08 지시 항목 2) — DOCX의 0-2절과 동일 내용.
+    if mandatory_review_issues:
+        _heading(pdf, "0-2. 사용자 검토항목 답변")
+        _issue_rows = [
+            f"- {str(a.get('title') or a.get('code') or '')}: {str(a.get('verdict') or '미답변')}"
+            for a in mandatory_review_issues if isinstance(a, dict)
+        ]
+        _body(pdf, "\n".join(_issue_rows))
+
+    # 사용자 요청사항 검토 결과 (2026-09-08 지시 항목 7) — DOCX의 0-3절과 동일.
+    if user_review_coverage:
+        _heading(pdf, "0-3. 사용자 요청사항 검토 결과")
+        if user_review_parse_degraded_notice:
+            _body(pdf, f"※ {user_review_parse_degraded_notice}")
+        _cov_rows: list[str] = []
+        for r in user_review_coverage:
+            if not isinstance(r, dict):
+                continue
+            paths = r.get("relevant_clause_paths") or []
+            _cov_rows.append(
+                f"요청사항: {str(r.get('original_user_text') or '')}\n"
+                f"  검토 쟁점: {str(r.get('normalized_issue') or '')}\n"
+                f"  관련 조항: {', '.join(str(x) for x in paths) if paths else '해당 조항 없음'}\n"
+                f"  판단: {str(r.get('review_status') or '미답변')}"
+                f" / 수정 필요 여부: {'예' if r.get('needs_revision') else '아니오'}\n"
+                f"  결론: {str(r.get('conclusion') or '')}"
+            )
+        _body(pdf, "\n\n".join(_cov_rows))
 
     _heading(pdf, "1. 계약 구조 및 우리 측 포지션")
     party = dp.get("party_role") if isinstance(dp.get("party_role"), dict) else {}

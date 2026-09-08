@@ -2227,11 +2227,21 @@ def _classify_contract_nature(contract_type: str, text: str) -> str:
     return "도급"
 
 
+# [2026-09-08 지시 — 에이슬립 NDA acceptance failure]
+# 이 패턴은 haystack(계약유형 라벨 + 파일명 + 원문 앞 600자)에 걸리기만 하면
+# 계약 전체를 content_production으로 확정시키므로, 콘텐츠 제작·광고 계약에
+# 고유한 문구만 담아야 한다. 종전에는 맨 단어 "모델"과 "촬영", 그리고
+# 탐욕적 와일드카드("저작권.*이전")가 들어 있어, "AI 모델·학습 데이터"를
+# 비밀정보로 정의하는 NDA 제2조가 content_production으로 오분류됐고 그
+# 결과 콘텐츠 제작 체크리스트(콘텐츠 검수·초상권·촬영장소·음원·포트폴리오
+# ·광고매체 사용권)가 통째로 NDA 검토 결과에 주입됐다. "모델"은 AI/통계/
+# 사업모델 등 어느 계약에나 등장하는 일반어이므로 단독으로는 신호가 아니다.
 _CONTENT_PRODUCTION_KW = re.compile(
     r"콘텐츠\s*제작|광고\s*콘텐츠|제품\s*광고|콘텐츠\s*제작\s*대행"
-    r"|콘텐츠의\s*제출\s*및\s*검수|소유권의\s*귀속"
-    r"|저작재산권|저작권.*이전|촬영|콘티|시안|제작\s*견적서"
-    r"|유상.*폰트|이미지.*비용|초상권|모델",
+    r"|콘텐츠의\s*제출\s*및\s*검수"
+    r"|저작재산권|저작권[^가-힣]{0,10}이전|콘티|시안|제작\s*견적서"
+    r"|유상\s*폰트|스톡\s*이미지|초상권|퍼블리시티권"
+    r"|모델\s*(?:섭외|출연|캐스팅|료)|촬영\s*(?:장소|일정|원본|분량|스튜디오)",
     re.IGNORECASE,
 )
 _AI_SEARCH_SPECIFIC_KW = re.compile(
@@ -3446,6 +3456,21 @@ def build_clause_level_result(
         _contract_class = "testing_service"
     else:
         _contract_class = _classify_contract_type(str(contract_type), str(text or ""), filename)
+    # [Contract Semantic Scope — 2026-09-08 지시] 정본 분류기가 구조 신호로
+    # 확정한 계약유형과 로컬 6분류가 충돌하면 정본 분류기를 신뢰한다.
+    # 로컬 분류는 haystack 키워드 한 번의 매치로 확정되는 얕은 판정이라,
+    # NDA처럼 구조가 명확한 계약이 본문에 등장한 단어 하나("모델") 때문에
+    # content_production으로 뒤집히면 그 유형 전용 체크리스트가 통째로
+    # 주입된다(에이슬립–일룸 NDA 실사례). 계약유형별 rule whitelist를 가진
+    # 유형(contract_scope_policy.CONTRACT_TYPE_DOMAIN_WHITELIST)에 대해서만
+    # 적용해, 기존 유형들의 분류 동작은 그대로 유지한다.
+    from runtime.review.contract_scope_policy import CONTRACT_TYPE_DOMAIN_WHITELIST as _SCOPED_TYPES
+    if str(_canonical_profile.contract_type or "") in _SCOPED_TYPES and _contract_class != "general":
+        logger.info(
+            "contract_class overridden by canonical type: %s -> general (canonical=%s)",
+            _contract_class, _canonical_profile.contract_type,
+        )
+        _contract_class = "general"
     _contract_nature = _classify_contract_nature(str(contract_type), str(text or ""))
     _is_advisory_class = (_contract_class == "advisory")
     _is_rental_class = (_contract_class == "rental")
@@ -3493,6 +3518,11 @@ def build_clause_level_result(
     )
     _canonical_txn_facts = build_canonical_transaction_facts(_legal_map.fields)
     _ai_fact_directive = build_ai_fact_directive(_canonical_txn_facts)
+    # 사용자가 실제로 입력한 검토요청 원문 — 아래에서 시스템이 생성한 fact
+    # directive를 review_focus에 덧붙이므로, 그 전에 원본을 보존한다.
+    # user_review_request.py의 의미 파싱은 반드시 이 원본만 읽어야 한다
+    # (시스템 문구를 사용자 요청으로 오인해 없는 쟁점을 만들지 않도록).
+    _user_review_focus_raw = str(review_focus or "").strip()
     if _ai_fact_directive:
         review_focus = f"{review_focus}\n\n{_ai_fact_directive}" if review_focus else _ai_fact_directive
 
@@ -4602,8 +4632,32 @@ def build_clause_level_result(
     _canonical_type_code = _canonical_profile.contract_type
     _our_role_bucket = _canonical_profile.our_role_bucket
 
+    # [Current Contract vs Future Transaction — 2026-09-08 지시 항목 1]
+    # 사용자가 설명한 "향후 사업"은 현재 계약의 목적과 리스크를 이해하기 위한
+    # context이지, 향후 계약의 모든 조항을 현재 계약에 삽입하라는 뜻이 아니다.
+    # 계약유형별 rule whitelist가 정의된 유형에서는 이 원칙을 프롬프트 차원에서
+    # 먼저 지시하고, 그래도 뚫린 경우 contract_scope_policy가 출력 단계에서
+    # HARD BLOCK한다(2중 방어).
+    from runtime.review.contract_scope_policy import CONTRACT_TYPE_DOMAIN_WHITELIST as _SCOPE_WHITELIST
+    _allowed_domains_for_prompt = _SCOPE_WHITELIST.get(str(_canonical_type_code or ""), ())
+    _current_vs_future_directive = (
+        (
+            "\n\n## [최우선] 현재 계약(Current Contract)과 향후 거래(Future Transaction)의 엄격한 구분\n"
+            f"- 지금 검토 대상은 '{_canonical_type_code}'이다. 사용자가 향후 개발·구매·라이선스·서비스 계약을 "
+            "예정하고 있다고 설명하더라도, **이 계약에서 정해야 할 사항만** 검토하라.\n"
+            "- 개발비, 검수, 납기, 성능보증, 유지보수, 콘텐츠 이용매체, 개발 성과의 최종 귀속 등 향후 계약의 "
+            "사항을 이 계약에 자동으로 삽입하지 마라. 이 계약에서는 그 사항이 '후속 계약에서 정하도록 적절히 "
+            "유보되어 있는가'만 검토한다.\n"
+            f"- 이 계약유형에서 활성화되는 검토영역: {', '.join(_allowed_domains_for_prompt)}.\n"
+            "- 이 영역 밖의 제안(광고·콘텐츠 제작·납품검수·지급조건·SLA·유지보수 등)은 생성하지 마라 — "
+            "생성해도 출력 단계에서 자동 삭제되고 REVIEW_FAILED로 기록된다.\n\n"
+        )
+        if _allowed_domains_for_prompt else ""
+    )
+
     _HYBRID_SCHEMA_AND_SEVERITY_INSTRUCTIONS = (
-        "\n\n## [핵심] 이 조항에 룰 엔진이 부여한 risk_tier/must_fix는 참고용 초기값일 뿐이다 — "
+        _current_vs_future_directive
+        + "\n\n## [핵심] 이 조항에 룰 엔진이 부여한 risk_tier/must_fix는 참고용 초기값일 뿐이다 — "
         "그대로 베끼지 말고, 아래 5단계에 따라 직접 재평가하라:\n"
         "1) 원문 의미: 이 조항이 실제로 규정하는 권리·의무가 무엇인가\n"
         "2) 당사자 권리·의무: 이 조항으로 각 당사자가 구체적으로 무엇을 하거나 하지 않아야 하는가\n"
@@ -5564,6 +5618,15 @@ def build_clause_level_result(
         clause_results, str(text or ""), clauses,
         our_party_aliases=_our_party_aliases, legal_map_fields=_legal_map.fields,
     )
+    # 1-3b. [Layer 2 — 비밀유지계약(NDA) 특화] nda_confidentiality에서만 실행.
+    # Background/Foreground IP 구분, AI 학습·재사용 목적 분리, 개인정보 계약
+    # 경계, 제3자 제공 범위(양도금지 조항과 혼동 금지), 반환·폐기 백업 예외,
+    # 가처분 요건 사전인정, 후속 계약 우선순위 — 2026-09-08 지시 항목 5~8·11.
+    from runtime.review.nda_scope_rules import apply_nda_scope_rules
+    apply_nda_scope_rules(
+        clause_results, str(text or ""), clauses,
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+    )
     # 1-4. [Layer 2 — 시험·검사·인증 용역 특화] testing_service 계약에서만 실행.
     from runtime.review.testing_service_rules import _apply_testing_service_checklist
     _apply_testing_service_checklist(clause_results, str(text or ""), _contract_class, clauses)
@@ -5933,6 +5996,19 @@ def build_clause_level_result(
     # suggested_rewrite)로부터 일반적인 방식으로 구조를 채운다 — "자동수정
     # 보류"/"수정방향만 제시" 수준으로 끝나는 것을 방지한다.
     from runtime.review.redline_instruction import build_redline_instruction
+    # [2026-09-08 지시 항목 10] 누락 조항 신설 권고도 "신설 조항 추가 — 위치
+    # 확인 필요"로 끝나서는 안 된다. 자기 display_path가 없는 신설 권고는
+    # 계약의 마지막 실재 조항 뒤에 신설하도록 실제 번호로 위치를 지정한다 —
+    # 조항 번호를 지어내는 것이 아니라, 확인된 구조에서 다음 번호를 계산한다.
+    _last_article_no = 0
+    for _c_last in (clauses or []):
+        _raw_last = str(getattr(_c_last, "article_number", None) or "").strip()
+        if _raw_last.isdigit():
+            _last_article_no = max(_last_article_no, int(_raw_last))
+    _new_clause_fallback_location = (
+        f"제{_last_article_no}조 뒤에 제{_last_article_no + 1}조 신설"
+        if _last_article_no else "신설 조항 추가 — 위치 확인 필요"
+    )
     for _cr_rl in clause_results:
         if not isinstance(_cr_rl, dict) or bool(_cr_rl.get("dedup_suppressed")):
             continue
@@ -5951,7 +6027,7 @@ def build_clause_level_result(
             continue
         if _is_new_clause_rl:
             _edit_type_rl = "new_clause"
-            _edit_location_rl = f"{_display_path_rl} 뒤에 신설" if _display_path_rl else "신설 조항 추가 — 위치 확인 필요"
+            _edit_location_rl = f"{_display_path_rl} 뒤에 신설" if _display_path_rl else _new_clause_fallback_location
         else:
             _edit_type_rl = "replace"
             _edit_location_rl = f"{_display_path_rl} 교체" if _display_path_rl else "위치 확인 필요 — 원문에서 해당 조항을 특정하지 못함"
@@ -6017,6 +6093,62 @@ def build_clause_level_result(
                     cr["negotiation_priority_depends_on"] = str(_guarantee_cr.get("clause_id") or "")
     except Exception:
         pass
+
+    # ── [Contract Semantic Scope + Finding 무결성 HARD GATE] ────────────────
+    # (2026-09-08 지시, 항목 1·3·4·9) 출력 필터 직전에 세 가지를 강제한다.
+    #   (a) 계약유형 Rule Whitelist — 이 계약유형에서 나올 수 없는 영역의
+    #       finding(광고매체·콘텐츠 검수·초상권·음원·포트폴리오·지급조건·
+    #       납품검수·SLA 등)을 HARD BLOCK.
+    #   (b) Current Contract vs Future Transaction — 향후 개발계약에서 정할
+    #       사항(개발비·검수·납기·성능보증·유지보수·최종 IP 귀속)을 현재
+    #       계약에 삽입하려는 finding을 차단. 단 "후속 계약에서 정하도록
+    #       유보한다"는 취지는 차단하지 않는다.
+    #   (c) Clause Semantic Gate / Invalid Clause Reference — 원문 조항의
+    #       법률효과와 다른 효과를 제안하거나, 실재하지 않는 조항번호를
+    #       가리키는 finding을 삭제.
+    # 출력 필터보다 먼저 실행해야 meta.final_findings(UI/DOCX 공유 원본)와
+    # 실제 반환되는 clause_results가 동일한 집합이 된다.
+    _scope_type_code = str(_canonical_profile.contract_type or "")
+    from runtime.review.contract_scope_policy import enforce_contract_scope
+    from runtime.review.finding_integrity_gates import (
+        enforce_clause_semantic_gate,
+        enforce_valid_clause_references,
+    )
+    _contract_scope_report = enforce_contract_scope(
+        clause_results, contract_type_code=_scope_type_code,
+    )
+    _semantic_gate_report = enforce_clause_semantic_gate(
+        clause_results, contract_type_code=_scope_type_code,
+    )
+    _clause_reference_report = enforce_valid_clause_references(
+        clause_results, clauses, contract_type_code=_scope_type_code,
+    )
+
+    # 이 패스는 build_final_findings() 보다 반드시 먼저 돌아야 한다 —
+    # meta.final_findings 는 UI/DOCX 공유 원본이므로, 병합·강등을 그 뒤에
+    # 하면 UI 는 병합 전 건수(10건), DOCX 다운로드 경로는 병합 후 건수(9건)를
+    # 보고해 REVIEW_FAILED_OUTPUT_MISMATCH 가 난다.
+    # ── [시니어 사내변호사 정리 패스] (2026-09-08 지시 항목 2·3·5) ──────────
+    # 리스크를 "찾는" 단계가 끝난 뒤, 협상할 조항만 남긴다:
+    #   항목 2  같은 조문·같은 legal effect finding 병합 (+ 잔존 중복은 실패)
+    #   항목 3  치명적 근거 없는 HIGH 강등, 가처분·통상 무보증은 MEDIUM/LOW
+    #   항목 5  일반 과실까지 면제하는 과도한 면책 문구 제거
+    # 사용자 요청 coverage 계산보다 **먼저** 돌아야 한다 — 병합·강등이 끝난
+    # 최종 finding에 답변이 연결되어야 하기 때문이다.
+    from runtime.review.senior_counsel_pass import (
+        REVIEW_FAILED_DUPLICATE_FINDINGS,
+        run_senior_counsel_pass,
+    )
+    _is_mutual_nda = "nda" in _scope_type_code.lower() and bool(
+        re.search(r"상호|쌍방|각\s*당사자|mutual", str(text or ""))
+    )
+    _senior_pass_report = run_senior_counsel_pass(
+        clause_results,
+        contract_type_code=_scope_type_code,
+        is_mutual_nda=_is_mutual_nda,
+    )
+    # meta 는 아래(build_final_findings 이후)에서 만들어지므로, 리포트는
+    # 지역변수로 들고 있다가 meta 생성 후에 기록한다.
 
     # ── [Output Filter] HIGH/MEDIUM 필터 + Top 5 핵심 리스크 ─────────────────
     # build_final_findings() is the single canonical clause_results -> final-
@@ -6213,6 +6345,101 @@ def build_clause_level_result(
     ]
     meta["legal_applicability_review"] = _legal_applicability_results
     meta["user_cited_statutes"] = _cited_statutes
+
+    # ── [Contract Semantic Scope 리포트 + HARD GATE 상태] (2026-09-08 지시) ──
+    meta["senior_counsel_pass"] = _senior_pass_report
+    # 동일 이슈가 두 번 보고되는 것은 정상 완료가 아니다(항목 2).
+    if _senior_pass_report.get("residual_duplicate_keys") and not meta.get("review_status"):
+        meta["review_status"] = REVIEW_FAILED_DUPLICATE_FINDINGS
+        meta["review_status_detail"] = (
+            "병합 후에도 중복으로 남은 finding: "
+            + ", ".join(_senior_pass_report["residual_duplicate_keys"])
+        )
+    meta["contract_scope_policy"] = _contract_scope_report
+    meta["finding_semantic_gate"] = _semantic_gate_report
+    meta["clause_reference_gate"] = _clause_reference_report
+    if _semantic_gate_report.get("status") and not meta.get("review_status"):
+        _sm = _semantic_gate_report["mismatches"]
+        meta["review_status"] = _semantic_gate_report["status"]
+        meta["review_status_detail"] = (
+            "원문 조항의 법률효과와 제안된 수정의 법률효과가 일치하지 않아 제외된 finding: "
+            + ", ".join(f"{m['clause_id']}({'/'.join(m['proposed_effect_tags'][:2])})" for m in _sm[:5])
+        )
+    if _clause_reference_report.get("status") and not meta.get("review_status"):
+        _ir = _clause_reference_report["invalid_references"]
+        meta["review_status"] = _clause_reference_report["status"]
+        meta["review_status_detail"] = (
+            "계약에 존재하지 않는 조항을 가리켜 제외된 finding: "
+            + ", ".join(f"{m['clause_id']}({','.join(m['invalid_articles'])})" for m in _ir[:5])
+        )
+
+    # ── [User Review Focus = mandatory_review_issues] (2026-09-08 지시 항목 2) ──
+    # 사용자가 제시한 검토사항(및 계약유형별 기본 이슈맵)은 각각 적정/수정
+    # 필요/별도계약 필요 중 하나로 반드시 답변되어야 한다. 하나라도 답변되지
+    # 않으면 REVIEW_FAILED_USER_SCOPE_NOT_COVERED.
+    from runtime.review.mandatory_review_issues import (
+        answer_mandatory_review_issues,
+        check_all_issues_answered,
+        derive_mandatory_review_issues,
+        REVIEW_FAILED_USER_SCOPE_NOT_COVERED,
+    )
+    _mandatory_issues = derive_mandatory_review_issues(
+        contract_type_code=_scope_type_code, review_focus=review_focus,
+    )
+    _mandatory_issue_answers = answer_mandatory_review_issues(
+        _mandatory_issues, clause_results=clause_results, full_text=str(text or ""),
+    )
+
+    # ── [User Review Request 의미 파싱] (2026-09-08 지시, 자유서술 보완) ─────
+    # 사용자의 검토요청은 검색 키워드가 아니라 이 검토의 scope instruction이다.
+    # 키워드 매칭만으로는 카탈로그에 없는 쟁점(신규 사업모델 책임, 고객데이터
+    # 이전, 공동 브랜드, 환수구조 등)이 통째로 누락되므로, 먼저 AI로 의미
+    # 단위 법률쟁점으로 구조화한 뒤 조항을 연결하고 각각에 대해 답변한다.
+    # 우선순위: explicit user request > contract-type default > rule catalogue.
+    from runtime.review.user_review_request import (
+        build_user_request_coverage,
+        check_user_request_coverage,
+        link_clauses_to_issues,
+        parse_user_review_request,
+        superseded_catalog_codes,
+    )
+    _user_request_parse = parse_user_review_request(
+        review_focus=_user_review_focus_raw,
+        contract_type_code=_scope_type_code,
+        ai_provider=ai_provider,
+        ai_model=ai_model,
+        ai_timeout_sec=ai_timeout_sec,
+        ai_max_tokens=ai_max_tokens,
+        ai_temperature=ai_temperature,
+    )
+    link_clauses_to_issues(_user_request_parse.issues, clauses)
+    _user_request_coverage = build_user_request_coverage(
+        _user_request_parse.issues,
+        clause_results=clause_results,
+        clauses=clauses,
+        catalog_answers=_mandatory_issue_answers,
+    )
+    # 사용자가 직접 요청한 쟁점은 계약유형 기본 이슈맵의 같은 항목보다
+    # 우선한다 — 같은 쟁점을 아우리봇의 문구와 사용자의 문구로 두 번
+    # 보고하지 않도록 기본 이슈맵 쪽에 표시만 남긴다(판단 자체는 유지).
+    _superseded = superseded_catalog_codes(_user_request_parse.issues)
+    for _a in _mandatory_issue_answers:
+        if str(_a.get("code") or "") in _superseded:
+            _a["superseded_by_user_request"] = True
+
+    meta["mandatory_review_issues"] = _mandatory_issue_answers
+    meta["user_review_request_parse"] = _user_request_parse.to_dict()
+    meta["user_review_coverage"] = _user_request_coverage
+
+    _unanswered_issue_codes = (
+        check_all_issues_answered(_mandatory_issue_answers)
+        + check_user_request_coverage(_user_request_coverage)
+    )
+    if _unanswered_issue_codes and not meta.get("review_status"):
+        meta["review_status"] = REVIEW_FAILED_USER_SCOPE_NOT_COVERED
+        meta["review_status_detail"] = (
+            "답변되지 않은 사용자 검토항목: " + ", ".join(_unanswered_issue_codes)
+        )
     # 사용자가 명시적으로 지정한 법률(_cited_statutes)만 "누락되면 실패"
     # 대상이다 — AI가 스스로 추가 판단한 법률(source="ai_self_identified")
     # 은 사용자가 요청한 것이 아니므로 빠져도 REVIEW_FAILED 사유가 아니다.

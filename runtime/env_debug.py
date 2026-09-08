@@ -5,14 +5,20 @@ from pathlib import Path
 from typing import Any
 
 from runtime.ai.config import load_ai_config
-from runtime.ai.dotenv import get_dotenv_debug_state, load_dotenv, resolve_dotenv_paths
+from runtime.ai.dotenv import (
+    canonical_dotenv_path,
+    dotenv_diagnostics,
+    ensure_dotenv_loaded,
+    get_dotenv_debug_state,
+    legacy_docs_dotenv_path,
+    resolve_dotenv_paths,
+)
 from runtime.law.config import load_law_api_config
 
 
-def load_dotenv_for_runtime(*, repo_root: Path) -> list[str]:
-    paths = resolve_dotenv_paths(cwd=Path.cwd(), repo_root=repo_root)
-    loaded = load_dotenv(paths, override=False)
-    return [str(p) for p in loaded]
+def load_dotenv_for_runtime(*, repo_root: Path | None = None) -> list[str]:
+    """Load the canonical .env. `repo_root` is ignored (kept for compatibility)."""
+    return [str(p) for p in ensure_dotenv_loaded()]
 
 
 def env_status(*, repo_root: Path) -> dict[str, Any]:
@@ -24,14 +30,24 @@ def env_status(*, repo_root: Path) -> dict[str, Any]:
         "cwd": str(Path.cwd()),
         "repo_root": str(repo_root.resolve()),
         "dotenv": {
-            "candidates": dbg.get("candidates"),
+            "canonical": str(canonical_dotenv_path()),
+            "candidates": dbg.get("candidates") or [str(p) for p in resolve_dotenv_paths()],
             "loaded": dbg.get("loaded"),
+            "disabled": dbg.get("disabled"),
         },
         "dotenv_exists": {
-            "repo_root/.env": bool((repo_root / ".env").exists()),
-            "repo_root/.env.local": bool((repo_root / ".env.local").exists()),
             "aouri-bot/.env": bool((app_root / ".env").exists()),
             "aouri-bot/.env.local": bool((app_root / ".env.local").exists()),
+            # Reported for visibility only — the docs repo is NOT a secret
+            # source any more and no value is read from it.
+            "repo_root/.env (RETIRED, not read)": bool((repo_root / ".env").exists()),
+            "repo_root/.env.local (RETIRED, not read)": bool((repo_root / ".env.local").exists()),
+        },
+        "dotenv_diagnostics": dotenv_diagnostics(),
+        "legacy_docs_dotenv": {
+            "path": str(legacy_docs_dotenv_path()),
+            "exists": legacy_docs_dotenv_path().exists(),
+            "is_runtime_fallback": False,
         },
         "OPENAI_API_KEY_present": bool((os.getenv("OPENAI_API_KEY") or "").strip()),
         "LAW_API_KEY_present": bool((os.getenv("LAW_API_KEY") or "").strip()),

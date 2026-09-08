@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from runtime.ai.dotenv import canonical_dotenv_path  # noqa: E402
+from runtime.project_paths import CODE_REPO_ROOT, DOCS_REPO_ROOT  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -16,7 +22,8 @@ class KeyCheck:
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    """Docs repo root — reports only. Secrets live at `canonical_dotenv_path()`."""
+    return DOCS_REPO_ROOT
 
 
 def _read_bytes(p: Path) -> bytes:
@@ -77,8 +84,11 @@ def _check_key(text: str, key: str) -> KeyCheck:
 
 def main() -> None:
     root = _repo_root()
-    env_path = root / ".env"
-    env_local_path = root / ".env.local"
+    # The canonical secret source is <code repo>/.env, not cwd/.env and not
+    # <docs repo>/.env — resolve it through the loader so this report can never
+    # disagree with what the runtime actually reads.
+    env_path = canonical_dotenv_path()
+    env_local_path = CODE_REPO_ROOT / ".env.local"
 
     b = _read_bytes(env_path)
     text, has_bom, utf8_ok = _decode_text(b)

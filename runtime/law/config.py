@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
-from runtime.ai.dotenv import load_dotenv, resolve_dotenv_paths
-from runtime.project_paths import DOCS_REPO_ROOT as REPO_ROOT
+from runtime.ai.dotenv import ensure_dotenv_loaded
 
 
 @dataclass(frozen=True)
@@ -46,12 +44,7 @@ def _coerce_bool(v: Any, default: bool) -> bool:
 
 
 def load_law_api_config() -> LawApiConfig:
-    existing = os.getenv("LAW_API_KEY") or os.getenv("LAW_API_ID")
-    if existing is None or str(existing).strip() == "":
-        load_dotenv(
-            resolve_dotenv_paths(cwd=Path.cwd(), repo_root=REPO_ROOT),
-            override=False,
-        )
+    ensure_dotenv_loaded()
 
     enabled = _coerce_bool(os.getenv("LAW_API_ENABLED", "false"), False)
 

@@ -29,6 +29,7 @@ from typing import Any, Literal
 from xml.etree import ElementTree as ET
 
 from runtime.review.language_quality_gate import safe_truncate
+from runtime.review.structure_summary_policy import render_rows as _structure_rows
 
 logger = logging.getLogger(__name__)
 
@@ -605,6 +606,9 @@ def build_legal_review_docx(
     contract_type_code: str = "general",
     is_counterparty_form: bool = True,
     mandatory_review_targets: list[dict[str, Any]] | None = None,
+    mandatory_review_issues: list[dict[str, Any]] | None = None,
+    user_review_coverage: list[dict[str, Any]] | None = None,
+    user_review_parse_degraded_notice: str = "",
     legal_applicability_review: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review DOCX.
@@ -684,6 +688,62 @@ def build_legal_review_docx(
         _blank(body)
         _separator(body)
 
+    # ── Section 0-2: 사용자 검토항목 답변 (2026-09-08 지시 항목 2) ───────────
+    # 사용자가 서술한 검토 쟁점(및 계약유형별 기본 이슈맵)은 참고문구가 아니라
+    # 반드시 답변해야 할 항목이다. 각 쟁점을 적정 / 수정 필요 / 별도계약 필요
+    # 중 하나로 표시한다. 하나라도 비면 REVIEW_FAILED_USER_SCOPE_NOT_COVERED
+    # 게이트가 다운로드 자체를 막으므로, 이 표는 항상 완전히 채워진다.
+    if mandatory_review_issues:
+        _heading1(body, "0-2. 사용자 검토항목 답변")
+        _verdict_color = {
+            "수정 필요": COLOR_HIGH,
+            "별도계약 필요": COLOR_MEDIUM,
+            "적정": COLOR_LOW,
+        }
+        for a in mandatory_review_issues:
+            if not isinstance(a, dict):
+                continue
+            verdict = str(a.get("verdict") or "미답변")
+            title = str(a.get("title") or a.get("code") or "")
+            p_row = _p(body)
+            r_row = _r(p_row, bold=True, color=_verdict_color.get(verdict, COLOR_HIGH))
+            _t(r_row, f"- {title}: {verdict}")
+        _blank(body)
+        _separator(body)
+
+    # ── Section 0-3: 사용자 요청사항 검토 결과 (2026-09-08 지시 항목 7) ──────
+    # 사용자가 자유서술로 요청한 각 쟁점에 대해 요청사항·관련 조항·판단·
+    # 수정 필요 여부를 그대로 보여준다. 0-2절(계약유형별 필수 검토항목)이
+    # "아우리봇이 반드시 봐야 할 것"이라면 이 절은 "사용자가 봐달라고 한 것"이다.
+    if user_review_coverage:
+        _heading1(body, "0-3. 사용자 요청사항 검토 결과")
+        if user_review_parse_degraded_notice:
+            # 의미 분석에 실패했다면 정상 완료로 위장하지 않고 명시한다(항목 6).
+            _para(body, f"※ {user_review_parse_degraded_notice}", bold=True, color=COLOR_HIGH)
+            _blank(body)
+        _verdict_color2 = {
+            "수정 필요": COLOR_HIGH,
+            "별도계약 필요": COLOR_MEDIUM,
+            "사실관계 추가확인": COLOR_MEDIUM,
+            "적정": COLOR_LOW,
+        }
+        for r in user_review_coverage:
+            if not isinstance(r, dict):
+                continue
+            verdict = str(r.get("review_status") or "미답변")
+            color = _verdict_color2.get(verdict, COLOR_HIGH)
+            _para(body, f"요청사항: {str(r.get('original_user_text') or '')}", bold=True)
+            _para(body, f"검토 쟁점: {str(r.get('normalized_issue') or '')}")
+            _clause_paths = r.get("relevant_clause_paths") or []
+            _para(body, "관련 조항: " + (", ".join(str(x) for x in _clause_paths) if _clause_paths else "해당 조항 없음"))
+            p_v = _p(body)
+            r_v = _r(p_v, bold=True, color=color)
+            _t(r_v, f"판단: {verdict} / 수정 필요 여부: {'예' if r.get('needs_revision') else '아니오'}")
+            if r.get("conclusion"):
+                _para(body, f"결론: {str(r.get('conclusion'))}")
+            _blank(body)
+        _separator(body)
+
     # ── Section 1: 계약 구조 및 검토 결론 ────────────────────────────────────
     _heading1(body, "1. 계약 구조 및 검토 결론")
 
@@ -733,33 +793,21 @@ def build_legal_review_docx(
     _para(body, f"계약유형: {ct_display}")
 
     # Customer contracting party
-    ccp = _format_val(dp.get("customer_contracting_party"))
-    if ccp == "needs_clarification_with_high_risk":
-        _para(body, "고객 계약 당사자: 명시 필요 — 현재 조항 간 표현 충돌 (HIGH RISK)", color=COLOR_HIGH)
-    elif ccp:
-        _para(body, f"고객 계약 당사자: {ccp}")
-
-    # Tax invoice issuer
-    tii = _format_val(dp.get("tax_invoice_issuer"))
-    if tii == "needs_clarification_with_high_risk":
-        _para(body, "세금계산서 발행 주체: 명시 필요 — 현재 대리점이 발행 주체처럼 기재 (HIGH RISK)", color=COLOR_HIGH)
-    elif tii:
-        _para(body, f"세금계산서 발행 주체: {tii}")
-
-    # Payment collection party
-    pcp = _format_val(dp.get("payment_collection_party"))
-    if pcp == "needs_clarification_with_high_risk":
-        _para(body, "대금청구/수금 주체: 명시 필요 — 대리점의 지원업무와 법적 주체 구분 필요 (HIGH RISK)", color=COLOR_HIGH)
-    elif pcp:
-        _para(body, f"대금청구/수금 주체: {pcp}")
-
-    agency = dp.get("agency_authority")
-    if agency is None or str(agency).strip() in ("None", ""):
-        _para(body, "대리점의 대리권: 명시 필요")
-    elif agency is False or str(agency).lower() in ("false", "없음", "none"):
-        _para(body, "대리점의 대리권: 없음 (또는 명시적 제한)")
-    else:
-        _para(body, f"대리점의 대리권: {agency}")
+    # ── 계약유형별 구조 요약 필드 (2026-09-08 지시 항목 4) ──────────────────
+    # 이전에는 고객 계약 당사자 / 세금계산서 발행 주체 / 대금청구·수금 주체 /
+    # 대리점의 대리권을 계약유형과 무관하게 항상 찍었다. 그래서 NDA 검토
+    # 결과에도 세금계산서 발행 주체 같은 stale 필드가 그대로 나왔다.
+    # structure_summary_policy가 이 계약유형에서 의미 있는 필드만 골라 준다.
+    _struct_type_code = contract_type_code or str(dp.get("contract_type") or contract_type or "")
+    for _row in _structure_rows(_struct_type_code, dp, include_missing=True):
+        if _row["key"] in ("our_party", "counterparty", "contract_type"):
+            # 위에서 이미 우리 회사 / 상대방 / 계약유형을 찍었다.
+            continue
+        _para(
+            body,
+            f"{_row['label']}: {_row['value']}",
+            color=COLOR_HIGH if _row["is_high_risk"] else None,
+        )
 
     conf = dp.get("confidence")
     if conf is not None:
