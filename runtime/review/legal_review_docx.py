@@ -29,7 +29,7 @@ from typing import Any, Literal
 from xml.etree import ElementTree as ET
 
 from runtime.review.language_quality_gate import safe_truncate
-from runtime.review.structure_summary_policy import render_rows as _structure_rows
+from runtime.review.report_header import SECTION1_TITLE, build_section1_rows
 
 logger = logging.getLogger(__name__)
 
@@ -745,95 +745,29 @@ def build_legal_review_docx(
         _separator(body)
 
     # ── Section 1: 계약 구조 및 검토 결론 ────────────────────────────────────
-    _heading1(body, "1. 계약 구조 및 검토 결론")
-
-    _para(body, f"계약명: {filename or '미상'}")
-    _para(body, f"우리 회사: {_format_val(dp.get('our_party') or entity)}")
-
-    # our_legal_role — must NOT show "미확정"
-    our_role = _format_val(dp.get("our_legal_role"))
-    role_label_map = {
-        "supplier": "공급업자",
-        "buyer": "구매자/발주자",
-        "contractor": "수급인",
-        "ordering_party": "도급인/발주자",
-        "도급인/발주자/콘텐츠 사용권자": "도급인/발주자/콘텐츠 사용권자",
-        "rental_provider": "렌탈업자",
-        "principal": "위탁자",
-        "client": "의뢰인",
-        "unknown": "미확인",
-    }
-    role_ko = role_label_map.get(our_role, our_role)
-    if role_ko and role_ko not in ("미확인", "미확정"):
-        _para(body, f"우리 측 지위: {role_ko}")
-    else:
-        _para(body, "우리 측 지위: 공급업자 (계약 내용 기반 판단)")
-
-    _para(body, f"상대방: {_format_val(dp.get('counterparty'))}")
-
-    _ct_label = _format_val(dp.get("contract_type") or contract_type)
-    # Map code to human-readable
-    _ct_map = {
-        "advertising_content_production": "제품 광고 콘텐츠 제작 대행 계약",
-        "content_production_service": "콘텐츠 제작 용역 계약",
-        "creative_agency_service": "광고 대행 용역 계약",
-        "consignment_sales_agency": "위탁판매 대리점 계약 / 고객 직접계약형 판매지원 구조",
-        "direct_customer_sales_support": "위탁판매 대리점 계약 / 고객 직접계약형 판매지원 구조",
-        "dealer_agency": "대리점 계약",
-        "distribution_resale": "유통/재판매 계약",
-        "software_app_development": "소프트웨어/앱 개발 계약",
-        "advisory_service": "자문/용역 계약",
-        "ai_search_marketing": "AI 검색·마케팅 서비스 계약",
-        "purchase_supply": "물품 구매·공급 계약",
-        "equipment_purchase_installation": "장비 구매·설치 계약",
-        "rental": "렌탈·임대 계약",
-        "construction": "건설·공사 계약",
-    }
-    ct_display = _ct_map.get(_ct_label, _ct_label)
-    _para(body, f"계약유형: {ct_display}")
-
-    # Customer contracting party
-    # ── 계약유형별 구조 요약 필드 (2026-09-08 지시 항목 4) ──────────────────
-    # 이전에는 고객 계약 당사자 / 세금계산서 발행 주체 / 대금청구·수금 주체 /
-    # 대리점의 대리권을 계약유형과 무관하게 항상 찍었다. 그래서 NDA 검토
-    # 결과에도 세금계산서 발행 주체 같은 stale 필드가 그대로 나왔다.
-    # structure_summary_policy가 이 계약유형에서 의미 있는 필드만 골라 준다.
-    _struct_type_code = contract_type_code or str(dp.get("contract_type") or contract_type or "")
-    for _row in _structure_rows(_struct_type_code, dp, include_missing=True):
-        if _row["key"] in ("our_party", "counterparty", "contract_type"):
-            # 위에서 이미 우리 회사 / 상대방 / 계약유형을 찍었다.
-            continue
+    # 행 구성은 report_header.build_section1_rows() 가 유일한 소스다 —
+    # DOCX/PDF 가 각자 만들다가 서로 다른 섹션 1 을 내보내던 문제를 막는다
+    # (2026-09-08 지시: DOCX 기준으로 통일).
+    _heading1(body, SECTION1_TITLE)
+    for _hr in build_section1_rows(
+        entity=entity,
+        contract_type=contract_type,
+        contract_type_code=contract_type_code,
+        filename=filename,
+        detailed_contract_profile=dp,
+        high_issues=high_issues,
+        medium_issues=medium_issues,
+        is_counterparty_form=is_counterparty_form,
+        format_val=_format_val,
+    ):
+        _color = COLOR_HIGH if _hr.is_high_risk else (COLOR_MEDIUM if _hr.is_medium_risk else None)
         _para(
             body,
-            f"{_row['label']}: {_row['value']}",
-            color=COLOR_HIGH if _row["is_high_risk"] else None,
+            _hr.text,
+            bold=(_hr.kind == "heading"),
+            color=_color,
+            indent=1 if _hr.kind == "bullet" else 0,
         )
-
-    conf = dp.get("confidence")
-    if conf is not None:
-        _para(body, f"분석 신뢰도: {float(conf):.0%}")
-
-    _para(body, "고객사(상대방) 양식 여부: " + ("고객사(상대방) 양식" if is_counterparty_form else "당사 표준 양식"))
-
-    _para(body, f"검토 결과: HIGH {len(high_issues)}건 | MEDIUM {len(medium_issues)}건 | 내부 승인 필요 {sum(1 for i in high_issues if i.approval_required)}건")
-
-    # 핵심 결론 3줄 — 변호사형 전체계약 판단(2026-08-31 지시): TOP 5 섹션을
-    # 별도로 두지 않는 대신, 첫 페이지 결론에 HIGH 우선 최대 3건을 한 줄
-    # 요약으로 압축해 "체결 전 반드시 봐야 할 것"을 바로 보여준다.
-    _conclusion_source = (high_issues or [])[:3]
-    if len(_conclusion_source) < 3:
-        _conclusion_source = _conclusion_source + (medium_issues or [])[: 3 - len(_conclusion_source)]
-    if _conclusion_source:
-        _para(body, "핵심 결론:", bold=True)
-        for _ci in _conclusion_source:
-            _cc = COLOR_HIGH if _ci.severity == "HIGH" else COLOR_MEDIUM
-            _para(body, f"- [{_ci.severity}] {_ci.clause_title} — {_ci.issue_title}", color=_cc, indent=1)
-
-    uq = dp.get("unresolved_questions") or []
-    if isinstance(uq, list) and uq:
-        _para(body, "미결 사항:", bold=True)
-        for q in uq[:5]:
-            _para(body, f"- {q}", color=COLOR_HIGH, indent=1)
 
     _blank(body)
 

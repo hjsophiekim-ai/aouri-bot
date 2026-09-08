@@ -816,20 +816,74 @@ _CLR_ITEMS: list[dict[str, Any]] = [
     },
 ]
 
+#: 지체상금 요율의 기준 금액을 가리키는 명사. 건설·공사 계약은 "대금" 대신
+#: "계약금액"·"공사대금"·"기성금" 등을 쓴다.
+_AMOUNT_NOUN = r"(?:총?\s*[“\"]?(?:대금|계약금액|계약대금|공사대금|도급금액|기성금|납품대금)[”\"]?)"
+
 _RX_LATE_PENALTY_RATE = re.compile(
-    r"지체일수\s*당\s*총?\s*[“\"]?대금[”\"]?의\s*(\d+)\s*/\s*(\d+)"
-    r"|지체.{0,10}(?:1\s*)?일.{0,10}당?.{0,10}(\d+(?:\.\d+)?)\s*%"
+    r"지체일수\s*당\s*" + _AMOUNT_NOUN + r"의\s*(\d+)\s*/\s*(\d+)"
+    # `일` 뒤의 filler 두 곳을 `[^\d%]{0,10}` 으로 좁힌다 — `.{0,10}` 이면
+    # "지체 1일당 0.3%" / "지체일수 1일당 1.5%" 에서 filler 가 "0." · "1." 을
+    # 삼켜 요율이 3% · 5%(10배 과대)로 잡혔다(2026-09-08 확인). 소수점
+    # 앞자리를 절대 버리지 않도록 숫자와 %를 filler 에서 제외한다.
+    r"|지체.{0,10}(?:1\s*)?일[^\d%]{0,10}당?[^\d%]{0,10}(\d+(?:\.\d+)?)\s*%"
     # 영문 계약(2026-09-02 KOTRA 3자 컨설팅계약 지시) — "10 % of total amount
     # of compensation ... for each day of delay" 형태. 한글 지체상금 요율만
     # 잡던 기존 정규식에 "N% ... (for) each/per day (of delay)" 패턴을 추가해
     # 같은 계산 로직(10일/30일 누적, 상한 유무)이 영문 계약에도 그대로
     # 적용되게 한다 — KOTRA 전용 규칙이 아니라 언어 확장.
-    r"|(\d+(?:\.\d+)?)\s*%[^.\n]{0,90}?(?:for\s+)?(?:each|per)\s+(?:calendar\s+)?day(?:\s+of\s+delay)?",
+    r"|(\d+(?:\.\d+)?)\s*%[^.\n]{0,90}?(?:for\s+)?(?:each|per)\s+(?:calendar\s+)?day(?:\s+of\s+delay)?"
+    # 한국식 천분율(2026-09-08 지시) — 국가계약법 표준 문구와 대부분의 공사
+    # 도급계약은 "지체일수 1일당 계약금액의 1천분의 3"처럼 **분모를 한글로**
+    # 쓴다. 위 세 갈래는 모두 `%` 또는 아라비아 분수만 잡아서 이 형태를
+    # 통째로 놓쳤고, 그 결과 지체상금 finding 이 생성되지 않아
+    # REVIEW_FAILED_GLOBAL_REASONING(monetary_risk_unconfirmed)으로
+    # 수정본 다운로드가 막혔다. 분자/분모를 각각 group 5/6 으로 잡는다.
+    # filler 에서 마침표만 배제하고 줄바꿈은 허용해야 한다 — 계약서는
+    # "계약금액의\n1천분의 3" 처럼 문장 중간에서 줄바꿈되므로 `[^.\n]` 으로
+    # 막으면 실제 원문을 통째로 놓친다(2026-09-08 실측).
+    r"|지체.{0,20}?일\s*당\s*[^.]{0,25}?(\d{1,3}(?:,\d{3})*|\d+)\s*(?:천|만)?\s*분의\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE | re.DOTALL,
 )
+
+#: "1천분의 3" / "1,000분의 3" / "1000분의 3" 의 분모를 실제 수치로 환산한다.
+#: 정규식이 "천"/"만" 접미사를 그룹 밖에 두므로 원문에서 다시 확인해야 한다.
+_RX_PERMILLE_DENOM = re.compile(r"(\d{1,3}(?:,\d{3})*|\d+)\s*(천|만)?\s*분의")
+
+
+def _permille_denominator(matched_text: str) -> float | None:
+    """'1천분의' -> 1000, '1,000분의' -> 1000, '1만분의' -> 10000."""
+    m = _RX_PERMILLE_DENOM.search(matched_text or "")
+    if not m:
+        return None
+    try:
+        base = float(m.group(1).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+    unit = m.group(2)
+    if unit == "천":
+        base *= 1000
+    elif unit == "만":
+        base *= 10000
+    return base or None
 _RX_PENALTY_CAP = re.compile(
     r"상한|한도|최대|초과할?\s*수\s*없다"
     r"|\bcap\b|\bmaximum\b|shall\s+not\s+exceed|not\s+to\s+exceed|up\s+to\s+a\s+maximum",
+    re.IGNORECASE,
+)
+
+#: 상한이 **없음**을 명시하는 표현. `_RX_PENALTY_CAP` 은 "상한을 두지
+#: 아니한다" 안의 "상한" 을 그대로 매칭하므로, 이 부정 표현을 별도로 확인해야
+#: 무상한 지체상금을 "상한 있음" 으로 오판하지 않는다(2026-09-08).
+#: 한국어 부정 어미는 음절 단위 코드포인트라 `아니?하` 로는 "아니**한**다"
+#: ("한" U+D55C ≠ "하" U+D558)를 잡지 못한다 — 열거해야 한다.
+_NEG_ENDING = r"(?:아니한|아니하|않)"
+
+_RX_CAP_NEGATED = re.compile(
+    r"(?:상한|한도|제한)[^.\n]{0,12}?(?:두지|정하지|설정하지)\s*" + _NEG_ENDING
+    + r"|(?:상한|한도)[^.\n]{0,8}?(?:없다|없으며|없음|부재)"
+    r"|무제한|제한\s*없이"
+    r"|\bno\s+cap\b|\bwithout\s+(?:any\s+)?limitation\b|\bunlimited\b|\bnot\s+capped\b",
     re.IGNORECASE,
 )
 
@@ -1180,9 +1234,19 @@ def _apply_late_penalty_uncapped_check(
             rate_pct = float(m.group(3))
         elif m.group(4):
             rate_pct = float(m.group(4))
+        elif m.group(6):
+            # 한국식 천분율: "계약금액의 1천분의 3" -> 3/1000*100 = 0.3%
+            denom = _permille_denominator(m.group(0))
+            if not denom:
+                continue
+            rate_pct = float(m.group(6)) / denom * 100
         else:
             continue
-        has_cap = bool(_RX_PENALTY_CAP.search(leaf_text))
+        # "상한을 두지 아니한다" 는 상한이 **없다**는 뜻인데, _RX_PENALTY_CAP 이
+        # 그 안의 "상한" 을 매칭해 has_cap=True 가 되어 무상한 지체상금이
+        # MEDIUM 으로 과소평가됐다(2026-09-08 실측: 공사도급계약 제5조).
+        # 부정 표현이 함께 있으면 상한이 있다고 보지 않는다.
+        has_cap = bool(_RX_PENALTY_CAP.search(leaf_text)) and not _RX_CAP_NEGATED.search(leaf_text)
         has_cumulative = bool(_RX_PENALTY_CUMULATIVE_DAMAGE.search(leaf_text))
         # [Exposure 분류, 2026-09-04 지시] — 이 지체상금의 채무자가 우리
         # 회사가 아니라 상대방(예: KOTRA 3자 컨설팅계약의 Consultant→KOTRA

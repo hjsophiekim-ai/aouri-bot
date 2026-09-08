@@ -14,6 +14,7 @@ from typing import Any
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
+from runtime.review.report_header import SECTION1_TITLE, build_section1_rows
 from runtime.review.legal_review_docx import (
     ReviewIssue,
     _build_review_issues,
@@ -258,18 +259,33 @@ def build_legal_review_pdf(
             )
         _body(pdf, "\n\n".join(_cov_rows))
 
-    _heading(pdf, "1. 계약 구조 및 우리 측 포지션")
-    party = dp.get("party_role") if isinstance(dp.get("party_role"), dict) else {}
-    must_fix_count = sum(1 for i in high_issues if i.approval_required)
-    lines = [
-        f"계약명: {_format_val(filename)}",
-        f"우리 회사: {_format_val(entity)}",
-        f"우리 측 지위: {_format_val((party or {}).get('our_role'))}",
-        f"상대방: {_format_val((party or {}).get('counterparty_role'))}",
-        f"계약유형: {_format_val(contract_type)}",
-        f"검토 결과: HIGH {len(high_issues)}건 | MEDIUM {len(medium_issues)}건 | 내부 승인 필요 {must_fix_count}건",
-    ]
-    _body(pdf, "\n".join(lines))
+    # 섹션 1 은 report_header.build_section1_rows() 가 유일한 소스다 —
+    # 이전에는 PDF 가 자체 구성을 써서 DOCX 에만 있는 핵심 결론·미결 사항·
+    # 구조 요약 필드·계약유형 한글 라벨이 빠지고 제목도 달랐다
+    # (2026-09-08 지시: DOCX 기준으로 통일).
+    _heading(pdf, SECTION1_TITLE)
+    for _hr in build_section1_rows(
+        entity=entity,
+        contract_type=contract_type,
+        contract_type_code=contract_type_code,
+        filename=filename,
+        detailed_contract_profile=dp,
+        high_issues=high_issues,
+        medium_issues=medium_issues,
+        is_counterparty_form=is_counterparty_form,
+        format_val=_format_val,
+    ):
+        if _hr.kind == "heading":
+            # 콜론을 떼지 않는다 — DOCX 는 "핵심 결론:" 그대로 찍으므로
+            # 두 포맷의 문자열이 완전히 같아야 한다.
+            _label(pdf, _hr.text)
+            continue
+        if _hr.is_high_risk:
+            pdf.set_text_color(*COLOR_HIGH)
+        elif _hr.is_medium_risk:
+            pdf.set_text_color(*COLOR_MEDIUM)
+        _body(pdf, ("    " + _hr.text) if _hr.kind == "bullet" else _hr.text)
+        pdf.set_text_color(0, 0, 0)
 
     _next_sec = 2
     if legal_applicability_review:
@@ -296,13 +312,12 @@ def build_legal_review_pdf(
         _body(pdf, "\n".join(_lines) if _lines else "분석 결과가 없습니다.")
         _next_sec += 1
 
-    _heading(pdf, f"{_next_sec}. TOP 5 핵심 리스크")
-    if not top_issues:
-        _body(pdf, "분석된 핵심 리스크가 없습니다.")
-    else:
-        for idx, issue in enumerate(top_issues, start=1):
-            _issue_block(pdf, issue, index=idx)
-    _next_sec += 1
+    # TOP 5 핵심 리스크 섹션은 폐지 — 바로 뒤 필수수정(HIGH) 섹션과 내용이
+    # 중복되어 같은 조항이 두 번 출력됐다(2026-09-08 지시). DOCX 리포트는
+    # 같은 이유로 2026-08-31에 이미 폐지했으므로, 이제 두 포맷의 섹션 번호가
+    # 일치한다: 1=계약구조, (2=관련 법률 적용성), 그 다음이 필수수정 HIGH.
+    # `top_issues`는 더 이상 별도 섹션으로 렌더링하지 않는다(파라미터는
+    # 호출자 호환을 위해 유지).
 
     _heading(pdf, f"{_next_sec}. 필수수정 조항 — HIGH")
     if not high_issues:
