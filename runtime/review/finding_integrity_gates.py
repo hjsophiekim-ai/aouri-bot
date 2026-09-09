@@ -36,6 +36,13 @@ from runtime.review.legal_effect_taxonomy import (
 )
 
 STATUS_SEMANTIC_MISMATCH = "REVIEW_FAILED_SEMANTIC_MISMATCH"
+
+#: 2026-09-09 지시 항목 10 이 요청한 명칭. 같은 게이트를 가리키는 별칭이다 —
+#: "건설 손해배상 조항에 비밀유지의무 문구가 들어가면 semantic failure".
+#: 기존 상태값을 바꾸면 저장된 세션·리포트의 상태 문자열이 깨지므로, 이름을
+#: 하나 더 노출하되 값은 유지한다.
+STATUS_SEMANTIC_REWRITE_MISMATCH = STATUS_SEMANTIC_MISMATCH
+REVIEW_FAILED_SEMANTIC_REWRITE_MISMATCH = STATUS_SEMANTIC_MISMATCH
 STATUS_INVALID_CLAUSE_REFERENCE = "REVIEW_FAILED_INVALID_CLAUSE_REFERENCE"
 
 _RX_ARTICLE_REF = re.compile(r"제\s*(\d{1,3})\s*조(?:\s*의\s*(\d{1,2}))?")

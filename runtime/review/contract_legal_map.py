@@ -83,6 +83,15 @@ UNIVERSAL_FIELDS: tuple[str, ...] = (
     "ip_authenticity_liability",
     "existing_related_contract",
     "dependency_on_existing_contract",
+    # ── Contract Legal Map 필수 15축 보완 (2026-09-09 지시 항목 1) ─────────
+    # 조항별 검토를 시작하기 전에 확정되어야 하는 축 중 아래 넷이 비어 있었다.
+    # 공사·물품공급·개발계약에서는 이 넷이 위험배분의 중심이다 — 언제 검수가
+    # 끝나고, 언제 위험이 넘어가고, 산출물의 권리가 누구에게 남고, 어떤 법이
+    # 적용되는지를 모르면 조항 문구만 다듬는 검토가 된다.
+    "acceptance_and_completion",
+    "risk_transfer_point",
+    "ip_and_data_ownership",
+    "applicable_statutes",
 )
 
 # NDA류 계약일 때만 추가로 요청하는 확장 필드.
@@ -126,7 +135,25 @@ guarantee_structure, failure_loss_allocation, termination_settlement_structure,
 party_rights_obligations_matrix, seller, owner_of_goods, payment_recipient,
 revenue_recipient, intermediary, sales_support_provider, inventory_risk_holder,
 consumer_liability_holder, refund_liability, ip_authenticity_liability,
-existing_related_contract, dependency_on_existing_contract.
+existing_related_contract, dependency_on_existing_contract,
+acceptance_and_completion, risk_transfer_point, ip_and_data_ownership,
+applicable_statutes.
+
+아래 4개 필드는 조항별 검토를 시작하기 전에 반드시 확정되어야 하는 축입니다.
+공사·물품공급·개발계약에서는 이 넷이 위험배분의 중심이므로, 원문에 근거가
+있으면 반드시 채우고 없으면 null 로 두십시오(추측 금지):
+- acceptance_and_completion: 급부가 "완료되었다"고 인정되는 조건과 절차는
+  무엇인가(검수·시운전·준공검사·사용승인·인수 확인서 등). 누가 판정하고,
+  판정에 걸리는 기간과 불합격 시 처리가 정해져 있는가.
+- risk_transfer_point: 목적물의 멸실·훼손 위험이 우리 회사에서 상대방으로
+  (또는 그 반대로) 넘어가는 시점은 언제인가(인도·검수 합격·설치 완료·소유권
+  이전 등). 소유권 이전 시점과 다를 수 있으므로 구분해 서술하십시오.
+- ip_and_data_ownership: 계약 수행 과정에서 작성·생성되는 산출물·설계도서·
+  기술자료·데이터의 권리가 누구에게 귀속되는가. 계약 전부터 각 당사자가
+  보유한 권리(Background IP)와 새로 생기는 권리를 구분하십시오.
+- applicable_statutes: 이 거래구조에 실제로 적용될 가능성이 있는 법률.
+  법률명만 나열하지 말고, "어떤 사실관계 때문에 적용되는지"를 함께 쓰십시오.
+  계약유형과 무관한 법률을 넣지 마십시오.
 
 아래 9개 필드는 "Transaction Map"입니다 — 돈이 실제로 어디서 흐르고, 누가
 누구의 책임을 떠안는지를 조항 하나하나를 보기 전에 먼저 파악하는 것이

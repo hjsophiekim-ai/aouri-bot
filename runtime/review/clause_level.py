@@ -6128,6 +6128,21 @@ def build_clause_level_result(
     # meta.final_findings 는 UI/DOCX 공유 원본이므로, 병합·강등을 그 뒤에
     # 하면 UI 는 병합 전 건수(10건), DOCX 다운로드 경로는 병합 후 건수(9건)를
     # 보고해 REVIEW_FAILED_OUTPUT_MISMATCH 가 난다.
+    # ── [Risk Allocation Matrix] (2026-09-09 지시 항목 4) ──────────────────
+    # 조항별 결론을 정리하기 전에 "무슨 일이 생기면 누가 돈을 내는가"를 먼저
+    # 그린다. 개별 조항은 각각 수용 가능해 보여도 지연·하자·안전·제3자·해지
+    # 위험이 한쪽에 몰리면 그 자체가 협상해야 할 구조적 문제이고, 조항 단위
+    # 검토로는 보이지 않는다.
+    from runtime.review.risk_allocation_matrix import (
+        build_risk_allocation_matrix as _build_risk_matrix,
+        concentrated_risk_axes as _concentrated_risk_axes,
+    )
+    _risk_matrix = _build_risk_matrix(
+        str(text or ""),
+        our_role_direction=str((_legal_map.fields or {}).get("our_role_direction") or ""),
+        contract_type_code=_scope_type_code,
+    )
+
     # ── [계약유형 법률효과 재판정] (2026-09-09 지시 항목 2) ─────────────────
     # 제목·파일명·세션값이 아니라 본문의 법률효과로 유형을 다시 확인한다.
     # 실측: 호텔 신축 공사도급계약이 "앱개발/소프트웨어개발/SI/유지보수/SaaS"로
@@ -6381,8 +6396,41 @@ def build_clause_level_result(
     meta["user_cited_statutes"] = _cited_statutes
 
     # ── [Contract Semantic Scope 리포트 + HARD GATE 상태] (2026-09-08 지시) ──
+    # ── [법률상 책임 vs 계약상 비용배분 / 협상 3단계] (항목 8·11) ──────────
+    # 정리 패스로 등급이 확정된 뒤에 해야 버킷이 최종 등급을 반영한다.
+    from runtime.review.senior_counsel_judgment import (
+        annotate_liability_nature as _annotate_liability_nature,
+        assign_negotiation_buckets as _assign_negotiation_buckets,
+        explain_statute_linkage as _explain_statute_linkage,
+        final_lawyer_self_check as _final_lawyer_self_check,
+        REVIEW_FAILED_LAWYER_SELF_CHECK as _RF_SELF_CHECK,
+    )
+    _liability_nature_report = _annotate_liability_nature(clause_results)
+    _negotiation_buckets = _assign_negotiation_buckets(clause_results)
+    _statute_linkage = _explain_statute_linkage(
+        str(text or ""), contract_type_code=_scope_type_code,
+    )
+
     meta["senior_counsel_pass"] = _senior_pass_report
+    meta["risk_allocation_matrix"] = _risk_matrix
+    meta["risk_concentration_warning"] = _concentrated_risk_axes(_risk_matrix)
+    meta["liability_nature"] = _liability_nature_report
+    meta["negotiation_buckets"] = _negotiation_buckets
+    meta["statute_linkage"] = _statute_linkage
     meta["contract_type_resolution"] = _type_resolution.to_dict()
+    # ── [Contract Legal Map 완결성] (항목 1) ────────────────────────────────
+    # "이 map 이 확정되지 않으면 조항별 검토를 시작하지 마세요." Map 은 이미
+    # 생성되고 있었지만 게이트가 아니어서, 절반이 비어도 finding 이 그대로
+    # 만들어졌다. 유형군별로 BLOCKING 축을 달리 잡는다 — NDA 에 위험이전
+    # 시점을 요구하면 전부 오탐이다.
+    from runtime.review.legal_map_gate import (
+        evaluate_legal_map as _evaluate_legal_map,
+    )
+    _legal_map_eval = _evaluate_legal_map(
+        _legal_map.fields,
+        contract_type_code=_type_resolution.contract_type_code or _scope_type_code,
+    )
+    meta["legal_map_completeness"] = _legal_map_eval
     if _senior_pass_report.get("contamination_removed_count"):
         meta["cross_document_contamination_removed"] = (
             (_senior_pass_report.get("contamination") or {}).get("removed") or []
@@ -6498,6 +6546,18 @@ def build_clause_level_result(
         meta["review_status_detail"] = (
             "답변되지 않은 사용자 검토항목: " + ", ".join(_unanswered_issue_codes)
         )
+    # ── [Final Lawyer Self-Check] (항목 13) ─────────────────────────────────
+    # 결과 제출 전 9개 항목을 스스로 점검한다. 하나라도 실패하면 정상 완료로
+    # 취급하지 않는다. 다른 게이트가 이미 상태를 세웠으면 덮지 않는다 —
+    # 먼저 잡힌 구체적 사유가 더 유용하다.
+    _self_check_report = _final_lawyer_self_check(
+        meta=meta, clause_results=clause_results, contract_text=str(text or ""),
+    )
+    meta["final_lawyer_self_check"] = _self_check_report
+    if _self_check_report.get("review_status") and not meta.get("review_status"):
+        meta["review_status"] = str(_self_check_report["review_status"])
+        meta["review_status_detail"] = str(_self_check_report.get("detail") or "")
+
     # 사용자가 명시적으로 지정한 법률(_cited_statutes)만 "누락되면 실패"
     # 대상이다 — AI가 스스로 추가 판단한 법률(source="ai_self_identified")
     # 은 사용자가 요청한 것이 아니므로 빠져도 REVIEW_FAILED 사유가 아니다.
