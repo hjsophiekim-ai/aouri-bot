@@ -6128,6 +6128,37 @@ def build_clause_level_result(
     # meta.final_findings 는 UI/DOCX 공유 원본이므로, 병합·강등을 그 뒤에
     # 하면 UI 는 병합 전 건수(10건), DOCX 다운로드 경로는 병합 후 건수(9건)를
     # 보고해 REVIEW_FAILED_OUTPUT_MISMATCH 가 난다.
+    # ── [계약유형 법률효과 재판정] (2026-09-09 지시 항목 2) ─────────────────
+    # 제목·파일명·세션값이 아니라 본문의 법률효과로 유형을 다시 확인한다.
+    # 실측: 호텔 신축 공사도급계약이 "앱개발/소프트웨어개발/SI/유지보수/SaaS"로
+    # 분류되어 계약유형별 체크리스트가 통째로 잘못 주입됐다. 불일치는 조용히
+    # 덮지 않고 meta 에 남긴다.
+    from runtime.review.contract_type_resolution import (
+        REVIEW_FAILED_CONTRACT_TYPE_UNCERTAIN as _RF_TYPE_UNCERTAIN,
+        declared_type_conflicts as _declared_type_conflicts,
+        resolve_contract_type as _resolve_contract_type,
+    )
+    _type_resolution = _resolve_contract_type(
+        str(text or ""), declared_type=str(contract_type or ""),
+    )
+    _type_conflict_note = _declared_type_conflicts(
+        _type_resolution, str(contract_type or ""),
+    )
+
+    # ── [핵심 상업조건 확정 여부] (2026-09-09 지시 항목 9) ──────────────────
+    # 금액·기간·지급시기가 비어 있으면 조항 문구보다 그것이 먼저다. 계약금액이
+    # 공란인데 지체상금·보증금이 모두 "계약금액의 N%"면 금전 노출 전부가
+    # 미확정이다 — 조항 단위 탐지기는 이를 통째로 놓친다.
+    from runtime.review.commercial_terms_gate import (
+        build_commercial_terms_findings as _build_ct_findings,
+    )
+    _ct_type_code = _type_resolution.contract_type_code or _scope_type_code
+    _ct_findings, _ct_rows = _build_ct_findings(
+        str(text or ""), contract_type_code=_ct_type_code,
+    )
+    if _ct_findings:
+        clause_results.extend(_ct_findings)
+
     # ── [시니어 사내변호사 정리 패스] (2026-09-08 지시 항목 2·3·5) ──────────
     # 리스크를 "찾는" 단계가 끝난 뒤, 협상할 조항만 남긴다:
     #   항목 2  같은 조문·같은 legal effect finding 병합 (+ 잔존 중복은 실패)
@@ -6146,6 +6177,9 @@ def build_clause_level_result(
         clause_results,
         contract_type_code=_scope_type_code,
         is_mutual_nda=_is_mutual_nda,
+        # 원문을 넘겨야 오염 탐지(항목 3)와 교차조항 사실검증(항목 5·6)이
+        # 동작한다 — "이 문서에 실제로 있는가"는 원문 없이는 판단 불가.
+        contract_text=str(text or ""),
     )
     # meta 는 아래(build_final_findings 이후)에서 만들어지므로, 리포트는
     # 지역변수로 들고 있다가 meta 생성 후에 기록한다.
@@ -6348,6 +6382,30 @@ def build_clause_level_result(
 
     # ── [Contract Semantic Scope 리포트 + HARD GATE 상태] (2026-09-08 지시) ──
     meta["senior_counsel_pass"] = _senior_pass_report
+    meta["contract_type_resolution"] = _type_resolution.to_dict()
+    if _senior_pass_report.get("contamination_removed_count"):
+        meta["cross_document_contamination_removed"] = (
+            (_senior_pass_report.get("contamination") or {}).get("removed") or []
+        )
+    meta["commercial_terms"] = _ct_rows
+    if _type_conflict_note:
+        meta["contract_type_conflict_note"] = _type_conflict_note
+    # 유형을 확신할 수 없으면 그 사실을 남긴다 — 틀린 유형의 체크리스트를
+    # 주입하는 것보다 "모른다"가 안전하다(항목 2).
+    if _type_resolution.uncertain and not meta.get("review_status"):
+        meta["review_status"] = _RF_TYPE_UNCERTAIN
+        meta["review_status_detail"] = _type_resolution.reason
+    # 다른 계약의 문안이 섞였으면 정상 완료로 취급하지 않는다(항목 3).
+    _contam = _senior_pass_report.get("contamination") or {}
+    if _contam.get("status") and not meta.get("review_status"):
+        meta["review_status"] = str(_contam["status"])
+        meta["review_status_detail"] = (
+            "이 계약 원문에 없는 용어가 검토 결과에 남아 있습니다: "
+            + ", ".join(
+                f"{h['clause_id']}({', '.join(h['terms'][:3])})"
+                for h in (_contam.get("residual") or [])[:3]
+            )
+        )
     # 동일 이슈가 두 번 보고되는 것은 정상 완료가 아니다(항목 2).
     if _senior_pass_report.get("residual_duplicate_keys") and not meta.get("review_status"):
         meta["review_status"] = REVIEW_FAILED_DUPLICATE_FINDINGS

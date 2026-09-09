@@ -391,6 +391,13 @@ def _catastrophic_basis(cr: dict[str, Any]) -> str:
         if pat.search(blob):
             return f"pattern:{name}"
 
+    # 계약 핵심조건 미확정은 지시 항목 7이 HIGH 사유로 명시한 항목이다
+    # ("계약 핵심조건 미확정"). 금액·기간이 공란이면 그 금액에 연동된
+    # 지체상금·보증금·손해배상 상한의 실제 노출 규모를 산정할 수 없어,
+    # 문구 개선 수준이 아니라 체결 여부에 영향을 준다(2026-09-09).
+    if cr.get("commercial_term_key") or bool(cr.get("is_commercial_terms_finding")):
+        return "declared:essential_commercial_term_unsettled"
+
     # 기존 룰/재분류기가 이미 치명 근거를 명시해 둔 경우는 존중한다.
     for key in ("severity_upgrade_reasons", "high_severity_basis", "structure_conflict"):
         v = cr.get(key)
@@ -576,13 +583,36 @@ def run_senior_counsel_pass(
     *,
     contract_type_code: str = "",
     is_mutual_nda: bool = False,
+    contract_text: str = "",
 ) -> dict[str, Any]:
-    """항목 2·3·5 를 정해진 순서로 적용하고 감사 리포트를 돌려준다.
+    """시니어 사내변호사 정리를 정해진 순서로 적용하고 감사 리포트를 돌려준다.
 
-    순서가 중요하다: 병합을 먼저 해야 중복된 항목에 severity 정책을 두 번
-    적용하지 않고, severity 확정 뒤에 문구 정리를 해야 강등으로 사라질
-    항목의 문구를 손대지 않는다.
+    순서가 중요하다:
+
+      1. **오염 제거**가 가장 먼저다. 다른 계약의 문안을 심은 finding 은
+         병합·등급 판단의 입력이 되어서는 안 된다(2026-09-09 항목 3).
+      2. **교차조항 정정** — "상한이 없다"는 주장이 사실인지 확인해 정정한다.
+         등급 판단 **전에** 해야 정정된 등급이 반영된다(항목 5·6).
+      3. 병합 — 중복된 항목에 severity 정책을 두 번 적용하지 않는다(항목 2).
+      4. severity 정책 — 치명 근거 없는 HIGH 강등(항목 3/7).
+      5. 문구 정리 — 강등으로 사라질 항목의 문구를 손대지 않도록 마지막.
+
+    `contract_text` 가 비면 1·2 단계는 건너뛴다 — 원문 없이는 "이 문서에
+    있는가"를 판단할 수 없고, 근거 없는 삭제·정정이 더 위험하다.
     """
+    contamination: dict[str, Any] = {}
+    cross_clause: dict[str, Any] = {}
+    if str(contract_text or "").strip():
+        from runtime.review.cross_clause_protection import reconcile_absence_claims
+        from runtime.review.review_isolation import scrub_contaminated_findings
+
+        contamination = scrub_contaminated_findings(
+            clause_results, contract_text=contract_text,
+        )
+        cross_clause = reconcile_absence_claims(
+            clause_results, contract_text=contract_text,
+        )
+
     merged = merge_duplicate_findings(clause_results)
     demoted = apply_high_severity_policy(clause_results)
     sanitized = sanitize_liability_revisions(clause_results, is_mutual_nda=is_mutual_nda)
@@ -593,6 +623,10 @@ def run_senior_counsel_pass(
     return {
         "contract_type_code": contract_type_code,
         "is_mutual_nda": bool(is_mutual_nda),
+        "contamination": contamination,
+        "contamination_removed_count": int(contamination.get("removed_count") or 0),
+        "cross_clause_protection": cross_clause,
+        "absence_claims_corrected_count": int(cross_clause.get("corrected_count") or 0),
         "merged_findings": merged,
         "merged_count": len(merged),
         "severity_demotions": demoted,
