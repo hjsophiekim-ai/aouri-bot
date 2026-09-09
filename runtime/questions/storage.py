@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -256,7 +257,31 @@ def save_answers(session_id: str, answers: dict[str, Any]) -> dict[str, Any]:
     return doc
 
 
-def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[str, Any]:
+#: 검토 엔진 지문. 캐시 시그니처에 포함되어, **코드가 바뀌면 캐시가 자동으로
+#: 무효화**된다. 이것이 없으면 같은 문서·같은 세션은 엔진을 아무리 고쳐도
+#: 예전에 저장된 결과(REVIEW_FAILED 포함)를 그대로 돌려주어, 사용자가 재시도해도
+#: 똑같은 실패만 반복된다(2026-09-09 실측: 공사도급계약 수정본 생성 실패).
+#:
+#: runtime/review 소스의 내용 해시라서 수동 관리가 필요 없다 — 룰·게이트·
+#: 정규식 중 무엇이 바뀌어도 값이 달라진다.
+_REVIEW_ENGINE_DIR = Path(__file__).resolve().parents[1] / "review"
+
+
+@lru_cache(maxsize=1)
+def _review_engine_fingerprint() -> str:
+    h = sha256()
+    for f in sorted(_REVIEW_ENGINE_DIR.rglob("*.py")):
+        try:
+            h.update(f.name.encode("utf-8"))
+            h.update(f.read_bytes())
+        except OSError:
+            continue
+    return h.hexdigest()[:16]
+
+
+def run_review_with_session(
+    service: RuleQueryService, session_id: str, *, force: bool = False,
+) -> dict[str, Any]:
     doc = load_session(session_id)
     text = doc.get("text", "") or ""
     entity = doc.get("entity", "all")
@@ -274,12 +299,20 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
                 "answers": answers if isinstance(answers, dict) else {},
                 "review_focus": review_focus if isinstance(review_focus, str) else None,
                 "mode": "deep",
+                "engine": _review_engine_fingerprint(),
+                "rules": _rules_sha256(),
             },
             ensure_ascii=False,
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
-    if isinstance(doc.get("review_result"), dict) and doc.get("review_result_sig") == base_sig:
+    # force=True 는 사용자가 명시적으로 재계산을 요청한 경우(다운로드의
+    # rebuild=true)다 — 이때 캐시를 반환하면 "다시 눌러도 같은 실패"가 된다.
+    if (
+        not force
+        and isinstance(doc.get("review_result"), dict)
+        and doc.get("review_result_sig") == base_sig
+    ):
         return doc["review_result"]
     law_cfg = load_law_api_config()
     law_cache = JsonFileCache(path=DATA_DIR / "law_cache.json")
@@ -344,7 +377,9 @@ def run_review_with_session(service: RuleQueryService, session_id: str) -> dict[
     return result
 
 
-def run_review_with_session_fast(service: RuleQueryService, session_id: str) -> dict[str, Any]:
+def run_review_with_session_fast(
+    service: RuleQueryService, session_id: str, *, force: bool = False,
+) -> dict[str, Any]:
     doc = load_session(session_id)
     text = doc.get("text", "") or ""
     entity = doc.get("entity", "all")
@@ -362,12 +397,18 @@ def run_review_with_session_fast(service: RuleQueryService, session_id: str) -> 
                 "answers": answers if isinstance(answers, dict) else {},
                 "review_focus": review_focus if isinstance(review_focus, str) else None,
                 "mode": "fast",
+                "engine": _review_engine_fingerprint(),
+                "rules": _rules_sha256(),
             },
             ensure_ascii=False,
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
-    if isinstance(doc.get("review_result_fast"), dict) and doc.get("review_result_fast_sig") == base_sig:
+    if (
+        not force
+        and isinstance(doc.get("review_result_fast"), dict)
+        and doc.get("review_result_fast_sig") == base_sig
+    ):
         return doc["review_result_fast"]
 
     bundle = build_clause_level_result(

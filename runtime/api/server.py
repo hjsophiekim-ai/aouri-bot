@@ -1462,7 +1462,9 @@ def create_handler(service: RuleQueryService):
                 review_result = doc.get("review_result")
                 if not (isinstance(review_result, dict) and isinstance(review_result.get("clause_results"), list)):
                     if rebuild:
-                        review_result = run_review_with_session(service, session_id)
+                        # force=True — rebuild 를 눌렀는데 캐시를 돌려주면
+                        # "다시 눌러도 같은 실패"가 된다(2026-09-09 실측).
+                        review_result = run_review_with_session(service, session_id, force=True)
                     else:
                         _json_response(
                             self,
@@ -1471,7 +1473,7 @@ def create_handler(service: RuleQueryService):
                         )
                         return
                 elif rebuild:
-                    review_result = run_review_with_session(service, session_id)
+                    review_result = run_review_with_session(service, session_id, force=True)
 
                 clause_meta = review_result.get("clause_meta") if isinstance(review_result, dict) else None
                 if isinstance(clause_meta, dict) and clause_meta.get("docx_allowed") is False:
@@ -1879,7 +1881,11 @@ def create_handler(service: RuleQueryService):
                         _all_results, original_clauses, contract_type_code=_ct_code,
                     )
 
-                    from runtime.review.redline_instruction import build_redline_instruction as _build_redline_docx, is_incomplete_redline as _is_incomplete_redline_docx
+                    from runtime.review.redline_instruction import (
+                        build_redline_instruction as _build_redline_docx,
+                        is_incomplete_redline as _is_incomplete_redline_docx,
+                        normalize_redline_instruction as _normalize_redline_docx,
+                    )
                     # [2026-09-08 지시 항목 10] 신설 조항 권고를 "위치 확인
                     # 필요"로 끝내지 않는다 — 확인된 조 구조의 마지막 번호
                     # 다음 조로 위치를 지정한다(clause_level.py와 동일 규칙).
@@ -1928,6 +1934,16 @@ def create_handler(service: RuleQueryService):
                             original_text=_original_rl_docx,
                             reason=str(_cr_rl_docx.get("rewrite_reason") or _cr_rl_docx.get("legal_business_reason") or "").strip(),
                         )
+                    # 룰이 스스로 만든 instruction 은 위에서 보존되므로,
+                    # 게이트 검증 직전에 정규화한다 — 대응 조항이 없는 계약
+                    # 전반 권고를 "위치 미상 교체" 가 아니라 "말미에 신설" 로
+                    # 바로잡는다(2026-09-09: clr_conditional_funding_unclear
+                    # 하나 때문에 수정본 다운로드 전체가 막혔다).
+                    for _cr_norm in _all_results:
+                        if isinstance(_cr_norm, dict) and _cr_norm.get("redline_instruction"):
+                            _cr_norm["redline_instruction"] = _normalize_redline_docx(
+                                _cr_norm["redline_instruction"]
+                            )
                     _incomplete_redline_ids_docx = [
                         str(cr.get("clause_id") or "")
                         for cr in _all_results

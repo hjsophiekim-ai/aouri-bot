@@ -6458,7 +6458,16 @@ def build_clause_level_result(
     # 아직 없는 합성 clause_results로도 단위 테스트되므로, 그 함수 자체의
     # 책임으로 만들면 이 파이프라인(clause_level.py)의 부착 여부와 무관한
     # 오탐 차단이 발생한다.
-    from runtime.review.redline_instruction import is_incomplete_redline as _is_incomplete_redline_final
+    from runtime.review.redline_instruction import (
+        is_incomplete_redline as _is_incomplete_redline_final,
+        normalize_redline_instruction as _normalize_redline_final,
+    )
+    # 대응 조항이 없는 계약 전반 권고를 신설로 정규화한 뒤 검증한다.
+    for _cr_norm in clause_results:
+        if isinstance(_cr_norm, dict) and _cr_norm.get("redline_instruction"):
+            _cr_norm["redline_instruction"] = _normalize_redline_final(
+                _cr_norm["redline_instruction"]
+            )
     _incomplete_redline_ids = [
         str(cr.get("clause_id") or "")
         for cr in clause_results

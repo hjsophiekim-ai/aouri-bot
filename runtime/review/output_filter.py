@@ -461,9 +461,22 @@ def filter_issues(
     # addition to, not counted against, the ordinary top-N MEDIUM slots.
     high = [i for i in valid if i.severity == "HIGH"]
     medium_all = [i for i in valid if i.severity == "MEDIUM"]
-    medium_mandatory = [i for i in medium_all if i.is_mandatory]
-    medium_other = [i for i in medium_all if not i.is_mandatory][:max_medium]
-    medium = medium_mandatory + medium_other
+
+    # 고노출(High Exposure) finding 도 mandatory 와 동일하게 cap 면제다.
+    # 이유가 표시 품질이 아니라 **정합성**이다: 다운로드 경로의 hard gate
+    # (REVIEW_FAILED_GLOBAL_REASONING 등)가 이 finding 들이 최종 결과에
+    # 살아있는지를 검사한다. 표시용 상한이 그중 하나를 잘라내면 게이트가
+    # "금전 리스크 미확인"으로 판단해 수정본 다운로드 전체가 409 로 막힌다
+    # — MEDIUM 이 10건을 넘는 계약(2026-09-09 실측: 공사도급계약,
+    # clr_late_penalty_rate_uncapped 가 11번째로 밀림)에서 재현된다.
+    # 실무적으로도 제3자 채무보증·무제한 배상·지체상금 같은 항목이 개수
+    # 제한 때문에 보고서에서 사라지는 것은 그 자체로 오답이다.
+    def _cap_exempt(i: ReviewIssue) -> bool:
+        return bool(i.is_mandatory) or str(i.clause_id or "") in _HIGH_EXPOSURE_CLAUSE_IDS
+
+    medium_exempt = [i for i in medium_all if _cap_exempt(i)]
+    medium_other = [i for i in medium_all if not _cap_exempt(i)][:max_medium]
+    medium = medium_exempt + medium_other
     low = [i for i in valid if i.severity == "LOW"] if include_low else []
 
     # Step 4: top risks (HIGH first, then MEDIUM, sorted by confidence).

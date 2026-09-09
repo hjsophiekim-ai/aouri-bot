@@ -47,6 +47,45 @@ _RX_INCOMPLETE_SIGNALS = re.compile(
 
 _LOCATION_UNCERTAIN = "위치 확인 필요 — 원문에서 해당 조항을 특정하지 못함"
 
+#: 특정 조항이 아니라 **계약 전반**에 대한 권고일 때 쓰는 위치 문구.
+#: 이런 finding 은 원문에 대응 조항이 없으므로 "교체" 가 아니라 "신설" 이며,
+#: 위치는 계약 말미가 된다. 실행 가능한 지시이므로 게이트를 통과한다.
+LOCATION_CONTRACT_WIDE_NEW = "본 계약 말미에 신설 (특정 조항 아님 — 계약 전반 사항)"
+
+#: 규칙이 대응 조항을 찾지 못했을 때 original_text 자리에 넣는 자리표시자.
+#: 예: "(조건부 자금 관련 조항 전반)", "(해당 조항 없음)". 실제 조문이
+#: 아니므로 이것을 "교체 대상 원문" 으로 다루면 안 된다 — 교체할 원문이
+#: 없는데 replace 로 만들어지면 edit_location 이 영영 특정되지 않아
+#: REVIEW_FAILED_INCOMPLETE_REDLINE 으로 다운로드가 막힌다(2026-09-09 실측:
+#: clr_conditional_funding_unclear).
+_RX_PLACEHOLDER_ORIGINAL = re.compile(
+    r"^\s*[（(][^)）]{0,40}(?:전반|전체|없음|미상|해당\s*조항)[^)）]{0,20}[)）]\s*$"
+)
+
+
+def is_placeholder_original(text: str | None) -> bool:
+    """original_text 가 실제 조문이 아니라 자리표시자인지."""
+    s = str(text or "").strip()
+    if not s:
+        return True
+    return bool(_RX_PLACEHOLDER_ORIGINAL.match(s))
+
+
+def strip_placeholder_prefix(text: str | None) -> str:
+    """신설 조문에서 선두의 자리표시자 줄을 제거한다.
+
+    수정문안이 "(조건부 자금 관련 조항 전반)\\n\\n[추가 권고]\\n…" 형태로
+    자리표시자를 머리에 달고 오는 경우, 신설 조문에 그대로 넣으면 계약서에
+    붙여넣을 수 없는 문장이 된다.
+    """
+    s = str(text or "").strip()
+    if not s:
+        return ""
+    lines = s.split("\n")
+    if lines and is_placeholder_original(lines[0]):
+        s = "\n".join(lines[1:]).strip()
+    return s
+
 
 def find_article_for_pattern(
     clauses: list[Any] | None, pattern: re.Pattern[str],
@@ -146,7 +185,27 @@ def build_redline_instruction(
     reason: str,
     original_text: str = "",
 ) -> dict[str, Any]:
-    """요청된 mandatory 구조를 그대로 만든다."""
+    """요청된 mandatory 구조를 그대로 만든다.
+
+    대응 조항이 없는 **계약 전반 권고**는 여기서 신설(new_clause)로 정규화한다.
+    그런 finding 은 original_text 가 자리표시자("(… 전반)")여서 replace 로
+    만들어지는데, 교체할 원문이 없으니 edit_location 이 영영
+    `_LOCATION_UNCERTAIN` 에 머물러 REVIEW_FAILED_INCOMPLETE_REDLINE 으로
+    수정본 다운로드가 통째로 막혔다(2026-09-09 실측). "위치 미상 교체" 보다
+    "계약 말미에 신설" 이 사실에도 맞고 실행도 가능하다.
+    """
+    _loc = str(edit_location or "").strip()
+    if (
+        (not _loc or _loc == _LOCATION_UNCERTAIN)
+        and str(replacement_text or "").strip()
+        and is_placeholder_original(original_text)
+    ):
+        edit_type = "new_clause"
+        edit_location = LOCATION_CONTRACT_WIDE_NEW
+        replacement_text = strip_placeholder_prefix(replacement_text)
+        target_text = ""
+        original_text = ""
+
     final_clause_text = compose_final_clause_text(
         edit_type=edit_type, original_text=original_text,
         target_text=target_text, replacement_text=replacement_text,
@@ -162,6 +221,41 @@ def build_redline_instruction(
         "final_clause_text": final_clause_text,
         "reason": reason,
     }
+
+
+def normalize_redline_instruction(instruction: dict[str, Any] | None) -> dict[str, Any] | None:
+    """이미 만들어진 instruction 에도 계약 전반 권고 정규화를 적용한다.
+
+    룰이 스스로 만든 instruction 은 그대로 보존되므로(다운로드 경로는 없는
+    것만 채운다), `build_redline_instruction()` 안의 정규화만으로는 이미
+    `_LOCATION_UNCERTAIN` 으로 저장된 것들을 구제하지 못한다. 게이트 검증
+    **직전**에 이 함수를 통과시켜, 대응 조항이 없는 권고를 신설로 바꾼다.
+
+    실제 조문이 있는데 위치만 못 찾은 경우는 손대지 않는다 — 그건 진짜
+    미완성이고 게이트가 계속 잡아야 한다.
+    """
+    if not isinstance(instruction, dict):
+        return instruction
+    loc = str(instruction.get("edit_location") or "").strip()
+    if loc and loc != _LOCATION_UNCERTAIN:
+        return instruction
+    replacement = str(instruction.get("replacement_text") or "").strip()
+    if not replacement:
+        return instruction
+    original = instruction.get("original_text")
+    if original is None:
+        original = instruction.get("target_text")
+    if not is_placeholder_original(original):
+        return instruction
+
+    out = dict(instruction)
+    out["edit_type"] = "new_clause"
+    out["edit_location"] = LOCATION_CONTRACT_WIDE_NEW
+    out["target_text"] = ""
+    out["replacement_text"] = strip_placeholder_prefix(replacement)
+    out["final_clause_text"] = out["replacement_text"]
+    out["normalized_as_contract_wide_new_clause"] = True
+    return out
 
 
 def is_incomplete_redline(instruction: dict[str, Any] | None) -> bool:
