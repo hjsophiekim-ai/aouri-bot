@@ -6431,6 +6431,24 @@ def build_clause_level_result(
         contract_type_code=_type_resolution.contract_type_code or _scope_type_code,
     )
     meta["legal_map_completeness"] = _legal_map_eval
+    # Map 이 확정되지 않은 채 만들어진 조항별 결론은 근거가 없다. 먼저 잡힌
+    # 구체적 사유가 더 유용하므로 이미 세워진 상태는 덮지 않는다.
+    #
+    # 단, Map 은 AI 산출물이다. ai_mode=off 나 키 부재로 regex fallback 을 탄
+    # 검토에서는 축이 비어 있는 것이 **구조적 결과**이지 검토 품질 문제가
+    # 아니다. 거기서 막으면 사용자가 고른 오프라인 모드 자체가 불가능해진다
+    # (2026-09-09 실측: ai_mode=off 다운로드 전부 409). Map 을 실제로 만들
+    # 수 있었는데 미완인 경우만 차단하고, 그 밖에는 보고만 남긴다.
+    if _legal_map.source != "ai":
+        _legal_map_eval = dict(
+            _legal_map_eval,
+            review_status="",
+            blocking_skipped_reason=f"legal_map_source={_legal_map.source}",
+        )
+        meta["legal_map_completeness"] = _legal_map_eval
+    if _legal_map_eval.get("review_status") and not meta.get("review_status"):
+        meta["review_status"] = str(_legal_map_eval["review_status"])
+        meta["review_status_detail"] = str(_legal_map_eval.get("detail") or "")
     if _senior_pass_report.get("contamination_removed_count"):
         meta["cross_document_contamination_removed"] = (
             (_senior_pass_report.get("contamination") or {}).get("removed") or []

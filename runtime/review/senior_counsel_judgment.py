@@ -346,10 +346,32 @@ def final_lawyer_self_check(
         "원문에 없는 용어가 남아 있습니다." if (contam.get("residual") or []) else "")
 
     # 8. 수정문구가 실제 조항의 법률효과와 맞는가
-    mismatches = m.get("semantic_mismatches") or []
+    # meta["semantic_mismatches"] 는 **이미 처리된** 기록이다 — 불일치를 잡은
+    # 두 지점 모두 그 자리에서 suggested_rewrite 를 버리고 감사용 흔적만
+    # 남긴다. 그 기록 수를 그대로 실패로 세면, 게이트가 제 일을 할수록 검토가
+    # 실패하는 역설이 된다(2026-09-09 실측: 5건 전부 폐기됐는데 blocking 실패).
+    # 오염 게이트를 residual 로만 판정한 것과 같은 이유로, 여기서도 **아직
+    # 수정문안이 붙어 있는** 불일치만 남은 문제로 본다.
+    _handled = {
+        str(c.get("clause_id") or "")
+        for c in crs
+        if c.get("semantic_mismatch") and not str(c.get("suggested_rewrite") or "").strip()
+    }
+    mismatches = [
+        r for r in (m.get("semantic_mismatches") or [])
+        if str((r or {}).get("clause_id") or "") not in _handled
+    ]
+    # 남은 것도 blocking 으로 쓰지 않는다. 실측(2026-09-09, 실제 공사도급계약)
+    # 에서 남은 2건은 모두 topic 분류 오탐이었다 — 현장대리인 배치 조항이
+    # safety 로, 하자담보 조항이 payment_settlement 로 분류돼 guardrail 이
+    # 걸렸고, 이후 단계가 복원한 수정문안은 조항과 정확히 맞았다(하자담보 →
+    # 하자보수보증금). 즉 이 기록만으로는 "처리됨 / 오탐 / 진짜 문제"를
+    # 구분할 수 없다. 실제 차단은 탐지 지점의 integrity gate 가 나쁜 수정문안을
+    # 그 자리에서 버리는 방식으로 이미 하고 있으므로, 여기서는 보고만 한다.
     add("semantic_fit", "수정문구가 실제 조항의 법률효과와 맞는가?",
         not mismatches,
-        f"의미 불일치 {len(mismatches)}건이 남아 있습니다." if mismatches else "")
+        f"의미 불일치 {len(mismatches)}건 확인 필요(수정문안 잔존)." if mismatches else "",
+        blocking=False)
 
     # 9. 변호사가 실제 협상에서 요구할 만한 문구인가
     overreach = [str(c.get("clause_id") or "") for c in crs if c.get("overreaching_rewrite")]

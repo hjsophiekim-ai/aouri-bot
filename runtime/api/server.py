@@ -1483,6 +1483,35 @@ def create_handler(service: RuleQueryService):
                         {"error": "insufficient contract text for docx generation", "meta": clause_meta},
                     )
                     return
+
+                # [Final Lawyer Self-Check 다운로드 차단, 2026-09-09 지시 항목 13]
+                # 검토 파이프라인이 meta["review_status"] 에 REVIEW_FAILED_* 를
+                # 세워도 이 경로는 그것을 읽지 않아, 자가점검이 blocking 실패로
+                # 판정한 결과가 그대로 "정상" 문서로 나갔다(실측). 아래 개별
+                # 게이트들과 같은 방식으로 409 로 막는다. 상태를 세운 게이트가
+                # 이미 구체적 사유를 넣어두므로 그것을 그대로 전달한다.
+                _meta_status = (
+                    str(clause_meta.get("review_status") or "")
+                    if isinstance(clause_meta, dict) else ""
+                )
+                if _meta_status.startswith("REVIEW_FAILED"):
+                    _json_response(
+                        self,
+                        HTTPStatus.CONFLICT,
+                        {
+                            "error": _meta_status,
+                            "review_status": _meta_status,
+                            "detail": (
+                                str(clause_meta.get("review_status_detail") or "")
+                                if isinstance(clause_meta, dict) else ""
+                            ),
+                            "final_lawyer_self_check": (
+                                clause_meta.get("final_lawyer_self_check")
+                                if isinstance(clause_meta, dict) else None
+                            ),
+                        },
+                    )
+                    return
                 original_clauses = None
                 if isinstance(review_result, dict) and isinstance(review_result.get("original_clauses"), list):
                     original_clauses = review_result.get("original_clauses")

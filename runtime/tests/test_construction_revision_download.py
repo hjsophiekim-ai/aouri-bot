@@ -33,7 +33,7 @@ from io import BytesIO
 from pathlib import Path
 
 from runtime.api.server import build_httpd
-from runtime.questions.storage import create_session
+from runtime.questions.storage import create_session, load_session, save_session
 from runtime.review.clause_extraction import extract_clauses
 from runtime.review.common_legal_risk import (
     _RX_CAP_NEGATED,
@@ -207,6 +207,48 @@ class ConstructionRevisionDownloadTest(unittest.TestCase):
         if resp.status != 200:
             self.fail(f"수정본(pdf) 생성 실패 status={resp.status}: {body[:600]!r}")
         self.assertTrue(body.startswith(b"%PDF"), "PDF 헤더가 아니다")
+
+    def test_meta_review_failed_blocks_the_download(self) -> None:
+        """검토 파이프라인이 세운 REVIEW_FAILED 상태가 실제로 다운로드를 막는가.
+
+        항목 13(Final Lawyer Self-Check)과 항목 1(Legal Map 완결성 게이트)은
+        meta["review_status"] 에 사유를 세운다. 그런데 이 다운로드 경로는
+        개별 게이트만 확인하고 그 상태는 읽지 않아, blocking 실패로 판정된
+        검토가 그대로 "정상" 문서로 나갔다(2026-09-09 실측).
+        """
+        # 먼저 정상 결과를 만들어 세션에 저장시킨다.
+        resp, body = self._post(
+            "/api/revision/download_docx",
+            {"session_id": self.session_id, "rebuild": True, "ai_mode": "off"},
+        )
+        self.assertEqual(resp.status, 200, body[:400])
+
+        doc = load_session(self.session_id)
+        meta = (doc.get("review_result") or {}).get("clause_meta")
+        self.assertIsInstance(meta, dict, "저장된 clause_meta 가 없다")
+        meta["review_status"] = "REVIEW_FAILED_LAWYER_SELF_CHECK"
+        meta["review_status_detail"] = "자체 점검 실패(테스트 주입)"
+        save_session(doc)
+        try:
+            for fmt in ("docx", "pdf"):
+                with self.subTest(format=fmt):
+                    resp, body = self._post(
+                        f"/api/revision/download_{fmt}",
+                        {"session_id": self.session_id},
+                    )
+                    self.assertEqual(resp.status, 409, f"{fmt}: 차단되지 않았다")
+                    payload = json.loads(body.decode("utf-8"))
+                    self.assertEqual(
+                        payload.get("review_status"),
+                        "REVIEW_FAILED_LAWYER_SELF_CHECK",
+                    )
+                    self.assertIn("테스트 주입", str(payload.get("detail") or ""))
+        finally:
+            doc = load_session(self.session_id)
+            meta = (doc.get("review_result") or {}).get("clause_meta") or {}
+            meta.pop("review_status", None)
+            meta.pop("review_status_detail", None)
+            save_session(doc)
 
     def test_no_global_reasoning_false_positive(self) -> None:
         """게이트가 오탐으로 다운로드를 막지 않는지 명시적으로 확인한다."""

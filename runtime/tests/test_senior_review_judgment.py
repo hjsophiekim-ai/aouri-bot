@@ -107,6 +107,52 @@ class LegalMapGateTest(unittest.TestCase):
         )
         self.assertFalse(rep["complete"], "'미확인'을 채워진 것으로 봤다")
 
+    def test_ai_off_review_is_not_blocked_by_an_empty_map(self) -> None:
+        """Map 은 AI 산출물이다 — AI 를 끈 검토에서 축이 비는 건 구조적 결과다.
+
+        게이트를 무조건 적용하면 ai_mode=off 나 키 부재로 regex fallback 을 탄
+        검토가 전부 차단되어, 사용자가 고른 오프라인 모드 자체가 불가능해진다
+        (2026-09-09 실측: 수정본 다운로드가 전부 409). Map 을 실제로 만들 수
+        있었는데 미완인 경우(source="ai")만 막는다.
+        """
+        from runtime.review.clause_level import build_clause_level_result
+        from runtime.rules.loader import RuleLoader
+        from runtime.services.query_service import RuleQueryService
+
+        loader = RuleLoader()
+        loader.load()
+        fixture = (
+            CODE_REPO_ROOT / "runtime" / "tests" / "fixtures"
+            / "construction_works_contract.txt"
+        )
+        bundle = build_clause_level_result(
+            service=RuleQueryService(loader),
+            entity="테스트법인",
+            contract_type="",
+            text=fixture.read_text(encoding="utf-8"),
+            filename="공사도급계약서.docx",
+            answers=None,
+            review_focus=None,
+            law_service=None,
+            ai_provider=None,   # AI 없음 → regex fallback
+            ai_model=None,
+            ai_timeout_sec=None,
+            ai_max_tokens=None,
+            ai_temperature=None,
+            max_clause_law_items=0,
+        )
+        rep = bundle.meta.get("legal_map_completeness") or {}
+        self.assertTrue(rep, "legal_map_completeness 가 보고되지 않았다")
+        self.assertEqual(
+            rep.get("review_status"), "",
+            "AI 없는 검토를 Legal Map 미완으로 차단했다",
+        )
+        self.assertIn("legal_map_source=", str(rep.get("blocking_skipped_reason") or ""))
+        self.assertNotEqual(
+            str(bundle.meta.get("review_status") or ""),
+            "REVIEW_FAILED_LEGAL_MAP_INCOMPLETE",
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 항목 4 — Risk Allocation Matrix
@@ -365,6 +411,50 @@ class FinalLawyerSelfCheckTest(unittest.TestCase):
         self.assertFalse(rep["complete"])
         self.assertIn("high_justified", rep["blocking_failed"])
         self.assertEqual(rep["review_status"], REVIEW_FAILED_LAWYER_SELF_CHECK)
+
+    def test_handled_semantic_mismatch_does_not_fail_the_review(self) -> None:
+        """게이트가 제 일을 할수록 검토가 실패하는 역설이 되면 안 된다.
+
+        의미 불일치를 잡은 두 지점 모두 그 자리에서 suggested_rewrite 를 버리고
+        감사용 흔적(semantic_mismatch)만 남긴다. 그 흔적 수를 그대로 실패로
+        세면, 나쁜 수정문안을 성공적으로 폐기한 검토가 blocking 실패가 된다
+        (2026-09-09 실측: 실제 공사도급계약에서 5건 전부 폐기됐는데 차단).
+        """
+        meta = dict(self._good_meta(), semantic_mismatches=[
+            {"clause_id": "KR-30", "status": "REVIEW_FAILED_SEMANTIC_MISMATCH"},
+            {"clause_id": "KR-31", "status": "REVIEW_FAILED_SEMANTIC_MISMATCH"},
+        ])
+        crs = [
+            {"clause_id": "KR-30", "semantic_mismatch": {"stage": "x"},
+             "suggested_rewrite": None},
+            {"clause_id": "KR-31", "semantic_mismatch": {"stage": "x"},
+             "suggested_rewrite": ""},
+        ]
+        rep = final_lawyer_self_check(meta=meta, clause_results=crs)
+        self.assertTrue(rep["complete"], rep["detail"])
+        self.assertNotIn("semantic_fit", rep["failed"])
+
+    def test_residual_semantic_mismatch_is_reported_but_advisory(self) -> None:
+        """수정문안이 남아 있어도 다운로드를 막지 않는다 — 신호를 믿을 수 없다.
+
+        실측(2026-09-09, 실제 공사도급계약): 남은 2건은 모두 topic 분류 오탐
+        이었다. 현장대리인 배치 조항이 safety 로, 하자담보 조항이
+        payment_settlement 로 분류돼 guardrail 이 걸렸고, 이후 단계가 복원한
+        수정문안은 조항과 정확히 맞았다. 이 기록만으로 "처리됨 / 오탐 / 진짜
+        문제"를 구분할 수 없으므로, 여기서 막으면 정상 계약의 수정본 생성이
+        실패한다. 실제 차단은 탐지 지점의 integrity gate 가 이미 한다.
+        """
+        meta = dict(self._good_meta(), semantic_mismatches=[
+            {"clause_id": "KR-30", "status": "REVIEW_FAILED_SEMANTIC_MISMATCH"},
+        ])
+        crs = [
+            {"clause_id": "KR-30", "semantic_mismatch": {"stage": "x"},
+             "suggested_rewrite": "제3자에게 즉시 통지하고 계약을 해지한다."},
+        ]
+        rep = final_lawyer_self_check(meta=meta, clause_results=crs)
+        self.assertIn("semantic_fit", rep["advisory_failed"])
+        self.assertNotIn("semantic_fit", rep["blocking_failed"])
+        self.assertEqual(rep["review_status"], "", "advisory 인데 검토를 실패시켰다")
 
     def test_unsettled_terms_are_advisory_not_a_failure(self) -> None:
         """계약이 미비하다는 발견으로 결과를 막으면, 그 사실을 알려줄 수 없다."""

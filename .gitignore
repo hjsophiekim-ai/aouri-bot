@@ -19,3 +19,6 @@ runtime/data/**
 # 로컬 서버 실행 로그 (스크래치)
 server_stdout*.log
 server_stderr*.log
+
+# 실제 고객 계약 원문 — 절대 커밋 금지 (저장소가 public)
+runtime/tests/fixtures/nda_ai_sleep_collaboration.txt
