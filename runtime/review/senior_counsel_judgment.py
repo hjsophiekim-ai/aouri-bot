@@ -374,10 +374,82 @@ def final_lawyer_self_check(
         blocking=False)
 
     # 9. 변호사가 실제 협상에서 요구할 만한 문구인가
+    # 과도한 수정안은 `assign_negotiation_buckets` 가 그 자리에서 처리한다 —
+    # 해당 finding 에 "최소수정안을 1차안으로 제시하라"는 지침(negotiation_position)
+    # 을 붙이고, Practical / Fallback 두 단계로 제시하게 만든다. 그러고 나서
+    # 여기서 다시 검토를 실패시키면, 44건 중 1건이 공격적이라는 이유로 문서
+    # 전체가 나가지 못한다(2026-09-09 실측: KR-26 하나 때문에 다운로드 409).
+    # 처리된 뒤 다시 막는 게이트는 오탐이다 — 보고만 한다.
     overreach = [str(c.get("clause_id") or "") for c in crs if c.get("overreaching_rewrite")]
     add("negotiable", "변호사가 실제 협상에서 요구할 만한 문구인가?",
         not overreach,
-        ("상대방이 수용하기 어려운 수정안: " + ", ".join(overreach[:5])) if overreach else "")
+        (
+            "상대방이 수용하기 어려운 수정안(최소수정안 지침 부여됨): "
+            + ", ".join(overreach[:5])
+        ) if overreach else "",
+        blocking=False)
+
+    # ── 2026-09-09 추가 지시 (Risk Package / Document Hierarchy 중심) ────────
+
+    # 10. 계약유형과 당사자 지위가 하나로 확정됐는가
+    # rule classifier 와 AI 분석이 서로 다른 답을 냈으면 그 상태로 낸 결론은
+    # 조용히 틀린다 — 유형이 다르면 체크리스트가, 지위가 다르면 위험배분이
+    # 좌우로 뒤집힌다.
+    ci = m.get("canonical_identity") or {}
+    ci_conflicts = list(ci.get("conflicts") or [])
+    add("canonical_identity", "계약유형과 당사자 지위가 하나로 확정됐는가?",
+        not ci_conflicts,
+        "; ".join(str(c.get("detail") or "") for c in ci_conflicts[:2]))
+
+    # 11. 문서 우선순위를 반영했는가 / 특수조건이 보호조항을 무력화하지 않는가
+    # 상위 문서가 하위 문서의 보호를 뒤집었다면 그 사실이 결과에 있어야 한다.
+    # **발견**이므로 advisory 다 — 무력화 자체는 계약의 성질이고, 그것을 알리는
+    # 것이 이 리포트의 일이다.
+    dh = m.get("document_hierarchy") or {}
+    overrides = list(dh.get("overrides") or [])
+    add("document_hierarchy", "문서 우선순위를 반영했는가?",
+        not overrides,
+        (
+            "상위 문서가 하위 문서의 보호를 무력화한 축: "
+            + ", ".join(str(o.get("axis_label") or "") for o in overrides[:5])
+        ) if overrides else "",
+        blocking=False)
+
+    # 12. 관련 조항을 risk package 로 연결했는가
+    # 같은 법률효과를 조항별로 흩어 놓으면 실제 최대 노출이 보이지 않는다.
+    pkgs = list(m.get("risk_packages") or [])
+    severe = [p for p in pkgs if str(p.get("exposure")) in ("high", "critical")]
+    linked = bool((m.get("risk_package_assignments") or {}).get("assignments"))
+    add("risk_package", "관련 조항을 하나의 risk package 로 연결했는가?",
+        (not severe) or linked,
+        (
+            "노출이 큰 패키지가 있는데 조항 연결이 없습니다: "
+            + ", ".join(str(p.get("label") or "") for p in severe[:3])
+        ) if severe and not linked else "")
+
+    # 13. 위험이 큰데 검토 의견이 없는 영역이 남았는가
+    # finding 수를 늘리려는 것이 아니라, 계약이 침묵해서 지적 대상이 없던
+    # 영역을 역으로 찾는 것이다. **발견**이므로 advisory.
+    bc = m.get("missing_risk_backcheck") or {}
+    gaps = list(bc.get("gaps") or [])
+    add("no_missing_risk", "위험이 큰 영역에 검토 의견이 모두 있는가?",
+        not gaps,
+        (
+            "검토 의견이 없는 축: "
+            + ", ".join(str(g.get("axis_label") or "") for g in gaps[:5])
+        ) if gaps else "",
+        blocking=False)
+
+    # 14. 수정안이 실무에서 쓸 수 있는 형태인가
+    # 위치·방식·문구·이유·우선순위가 갖춰지지 않은 수정안은 그대로 보낼 수 없다.
+    pp = m.get("practical_positions") or {}
+    missing_fields = list(pp.get("missing_fields") or [])
+    add("practical_rewrite", "수정안에 위치·방식·문구·이유·우선순위가 갖춰졌는가?",
+        not missing_fields,
+        (
+            "수정 위치가 비어 있는 finding: " + ", ".join(missing_fields[:5])
+        ) if missing_fields else "",
+        blocking=False)
 
     failed = [c for c in checks if not c["ok"]]
     blocking_failed = [c for c in failed if c["blocking"]]

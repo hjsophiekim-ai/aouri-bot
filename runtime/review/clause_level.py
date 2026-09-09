@@ -6137,9 +6137,41 @@ def build_clause_level_result(
         build_risk_allocation_matrix as _build_risk_matrix,
         concentrated_risk_axes as _concentrated_risk_axes,
     )
+    _our_role_direction = str(
+        (_legal_map.fields or {}).get("our_role_direction") or ""
+    ) or str(getattr(party, "our_role", "") or "")
     _risk_matrix = _build_risk_matrix(
         str(text or ""),
-        our_role_direction=str((_legal_map.fields or {}).get("our_role_direction") or ""),
+        our_role_direction=_our_role_direction,
+        contract_type_code=_scope_type_code,
+    )
+
+    # ── [Document Hierarchy] (2026-09-09 2차 지시 2·6항) ────────────────────
+    # 조항을 보기 전에 문서 우선순위를 복원한다. 실무 계약은 본계약서 + 일반조건
+    # + 특수조건 + 별첨이 한 파일에 들어오고, "상이한 사항이 있을 경우 A > B > C
+    # 순위에 의해서 해석된다"는 조항을 둔다. 이 순위를 모르면 일반조건에서 찾은
+    # 보호조항이 특수조건에서 이미 뒤집혀 있는데도 "보호장치가 있다"고 결론
+    # 내린다. 실측(공사도급계약): 특수조건이 일반조건의 공기연장·설계변경 보호를
+    # 실제로 무력화했고, 두 문서의 조문번호가 각각 제1조부터 다시 시작한다.
+    from runtime.review.document_hierarchy import (
+        find_priority_overrides as _find_priority_overrides,
+    )
+    _doc_hierarchy = _find_priority_overrides(
+        str(text or ""),
+        our_role_direction=_our_role_direction,
+        contract_type_code=_scope_type_code,
+    )
+
+    # ── [Risk Package] (2026-09-09 2차 지시 4항) ────────────────────────────
+    # 같은 법률효과를 만드는 조항들을 묶어 실제 최대 노출을 산정한다. 해지권·
+    # 보증금 몰취·손해배상·상계를 따로 보면 각각 흔한 조항이지만, 함께 걸리면
+    # 이미 수행한 일의 대금까지 회수하지 못한다.
+    from runtime.review.risk_package import (
+        build_risk_packages as _build_risk_packages,
+    )
+    _risk_packages = _build_risk_packages(
+        str(text or ""), _risk_matrix,
+        our_role_direction=_our_role_direction,
         contract_type_code=_scope_type_code,
     )
 
@@ -6158,6 +6190,23 @@ def build_clause_level_result(
     )
     _type_conflict_note = _declared_type_conflicts(
         _type_resolution, str(contract_type or ""),
+    )
+
+    # ── [Canonical Contract Type / Party Role] (2026-09-09 2차 지시 1항) ────
+    # 계약유형과 우리 지위는 downstream 전부가 참조하는 전제이므로 하나로
+    # 확정하고, rule classifier 와 AI 분석이 다른 답을 냈으면 그 사실을 남긴다.
+    # 유형이 다르면 체크리스트가, 지위가 다르면 위험배분이 좌우로 뒤집힌다.
+    from runtime.review.canonical_identity import (
+        resolve_canonical_identity as _resolve_canonical_identity,
+    )
+    _canonical_identity = _resolve_canonical_identity(
+        rule_type_code=str(_type_resolution.contract_type_code or ""),
+        rule_confidence=_type_resolution.confidence,
+        rule_uncertain=bool(_type_resolution.uncertain),
+        ai_type_text=str((_legal_map.fields or {}).get("contract_purpose") or ""),
+        ai_role_text=str((_legal_map.fields or {}).get("our_role_direction") or ""),
+        rule_role=str(getattr(party, "our_role", "") or ""),
+        declared_type_code="",
     )
 
     # ── [핵심 상업조건 확정 여부] (2026-09-09 지시 항목 9) ──────────────────
@@ -6411,12 +6460,42 @@ def build_clause_level_result(
         str(text or ""), contract_type_code=_scope_type_code,
     )
 
+    # ── [Risk Package 연결 / 누락 역검증 / Practical First] (2차 지시 4·10·11) ─
+    # 등급과 버킷이 확정된 뒤에 해야 한다: 패키지 연결은 최종 finding 목록을
+    # 대상으로 하고, 역검증은 그 목록에 무엇이 빠졌는지 보는 것이며, 수정안
+    # 우선순위는 확정된 버킷을 반영해야 한다.
+    from runtime.review.missing_risk_backcheck import (
+        backcheck_missing_risks as _backcheck_missing_risks,
+    )
+    from runtime.review.practical_rewrite import (
+        build_practical_positions as _build_practical_positions,
+    )
+    from runtime.review.risk_package import (
+        attach_packages_to_findings as _attach_packages,
+    )
+    _package_assignments = _attach_packages(clause_results, _risk_packages)
+    _missing_risk_report = _backcheck_missing_risks(
+        _risk_matrix, clause_results, contract_text=str(text or ""),
+    )
+    _practical_positions = _build_practical_positions(clause_results)
+
     meta["senior_counsel_pass"] = _senior_pass_report
     meta["risk_allocation_matrix"] = _risk_matrix
     meta["risk_concentration_warning"] = _concentrated_risk_axes(_risk_matrix)
     meta["liability_nature"] = _liability_nature_report
     meta["negotiation_buckets"] = _negotiation_buckets
     meta["statute_linkage"] = _statute_linkage
+    meta["canonical_identity"] = _canonical_identity
+    meta["document_hierarchy"] = _doc_hierarchy
+    meta["risk_packages"] = _risk_packages
+    meta["risk_package_assignments"] = _package_assignments
+    meta["missing_risk_backcheck"] = _missing_risk_report
+    meta["practical_positions"] = _practical_positions
+    # 유형·지위가 두 갈래로 갈렸으면 그 상태의 결론은 신뢰할 수 없다.
+    # 먼저 잡힌 구체적 사유가 더 유용하므로 이미 세워진 상태는 덮지 않는다.
+    if _canonical_identity.get("review_status") and not meta.get("review_status"):
+        meta["review_status"] = str(_canonical_identity["review_status"])
+        meta["review_status_detail"] = str(_canonical_identity.get("detail") or "")
     meta["contract_type_resolution"] = _type_resolution.to_dict()
     # ── [Contract Legal Map 완결성] (항목 1) ────────────────────────────────
     # "이 map 이 확정되지 않으면 조항별 검토를 시작하지 마세요." Map 은 이미

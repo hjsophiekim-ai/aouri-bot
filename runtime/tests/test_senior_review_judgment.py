@@ -396,9 +396,17 @@ class FinalLawyerSelfCheckTest(unittest.TestCase):
             "semantic_mismatches": [],
         }
 
-    def test_nine_checks_are_asked(self) -> None:
+    def test_all_check_questions_are_asked(self) -> None:
+        """1차 지시의 9문항 + 2차 지시(Risk Package·Document Hierarchy)의 5문항."""
         rep = final_lawyer_self_check(meta=self._good_meta(), clause_results=[])
-        self.assertEqual(rep["total_count"], 9)
+        self.assertEqual(rep["total_count"], 14)
+        keys = {c["key"] for c in rep["checks"]}
+        for required in ("contract_type", "our_role", "commercial_terms",
+                         "high_justified", "cross_clause", "linked_axes",
+                         "no_contamination", "semantic_fit", "negotiable",
+                         "canonical_identity", "document_hierarchy",
+                         "risk_package", "no_missing_risk", "practical_rewrite"):
+            self.assertIn(required, keys, f"{required} 점검 항목이 없다")
 
     def test_clean_review_passes(self) -> None:
         rep = final_lawyer_self_check(meta=self._good_meta(), clause_results=[])
@@ -471,10 +479,19 @@ class FinalLawyerSelfCheckTest(unittest.TestCase):
         rep = final_lawyer_self_check(meta=meta, clause_results=[])
         self.assertIn("no_contamination", rep["blocking_failed"])
 
-    def test_overreaching_rewrite_fails(self) -> None:
+    def test_overreaching_rewrite_is_reported_but_advisory(self) -> None:
+        """이미 최소수정안 지침이 붙은 뒤라 다시 막으면 오탐이다.
+
+        `assign_negotiation_buckets` 가 과도한 수정안에 "최소수정안을 1차안으로
+        제시하라"는 지침을 그 자리에서 붙인다. 여기서 검토를 실패시키면 44건 중
+        1건이 공격적이라는 이유로 문서 전체가 나가지 못한다(2026-09-09 실측:
+        실제 공사도급계약에서 KR-26 하나 때문에 다운로드가 409).
+        """
         crs = [{"clause_id": "x", "risk_tier": "MEDIUM", "overreaching_rewrite": True}]
         rep = final_lawyer_self_check(meta=self._good_meta(), clause_results=crs)
-        self.assertIn("negotiable", rep["blocking_failed"])
+        self.assertIn("negotiable", rep["advisory_failed"])
+        self.assertNotIn("negotiable", rep["blocking_failed"])
+        self.assertEqual(rep["review_status"], "")
 
     def test_uncertain_contract_type_fails(self) -> None:
         meta = self._good_meta()
