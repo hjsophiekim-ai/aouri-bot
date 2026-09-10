@@ -16,11 +16,14 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import tempfile
 import threading
 import unittest
 import zipfile
 from io import BytesIO
 from pathlib import Path
+
+from runtime.review.text_extract import extract_text_from_file
 
 from runtime.questions.storage import create_session
 from runtime.rules.loader import RuleLoader
@@ -122,11 +125,21 @@ class FitiDownloadDocxEndToEndTest(unittest.TestCase):
 
 class FinalFindingsCollapseReviewFailedTest(unittest.TestCase):
     """Regression (2026-08-28, real-world report): "final_findings_count(ui)=17,
-    docx=1인데 정상 완료로 표시" — the DOCX/PDF download must refuse (REVIEW_FAILED,
-    blocking) rather than silently serve a file whose real HIGH/MEDIUM count
-    collapsed relative to the raw clause_results feeding it, since that shape
-    (many raw candidates, almost none surviving) is a pipeline malfunction,
-    not a legitimate editorial filter."""
+    docx=1인데 정상 완료로 표시" — a document whose HIGH/MEDIUM count collapsed
+    relative to the raw clause_results feeding it must never be served as if
+    it were a normal, complete review.
+
+    2026-09-10 지시 항목 2로 그 처리 방식이 바뀌었다. 종전에는 409로 다운로드를
+    막았는데, 그러면 담당자는 아무것도 받지 못한 채 원인도 알 수 없었다(실제로
+    "수정본 생성 실패"가 반복된 주 원인 중 하나). 이제는
+
+      · 계약유형 기반 문구 필터를 해제하고 한 번 더 만들어 회복을 시도하고,
+      · 그래도 남는 붕괴는 문서 말미 "자동 검증에서 보류·제외된 항목"에 명시한 뒤
+      · 파일 자체는 정상적으로 내보낸다.
+
+    따라서 이 테스트가 고정하는 계약은 "차단"이 아니라 "**조용히 정상인 척하지
+    않는 것**"이다 — 200으로 내려오되 붕괴 사실이 문서 안에 반드시 적혀 있어야
+    한다."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -193,13 +206,31 @@ class FinalFindingsCollapseReviewFailedTest(unittest.TestCase):
         conn.close()
         return resp, resp_body
 
-    def test_collapsed_final_findings_blocks_docx_download(self) -> None:
+    def test_collapsed_final_findings_is_disclosed_not_silently_served(self) -> None:
         resp, body = self._post(
             "/api/revision/download_docx", {"session_id": self.session_id, "ai_mode": "off"}
         )
-        self.assertEqual(resp.status, 409, f"expected REVIEW_FAILED (409), got {resp.status}: {body[:300]!r}")
-        payload = json.loads(body)
-        self.assertEqual(payload.get("review_status"), "REVIEW_FAILED")
+        # 다운로드는 실패하지 않는다 — 담당자는 나머지 검토 결과를 즉시 쓸 수
+        # 있어야 한다(2026-09-10 지시 항목 2).
+        self.assertEqual(resp.status, 200, f"download must not fail, got {resp.status}: {body[:300]!r}")
+        self.assertGreater(len(body), 500, "docx body suspiciously small/empty")
+
+        # 그러나 붕괴 사실은 반드시 문서 안에 적혀 있어야 한다.
+        with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as fh:
+            fh.write(body)
+            tmp_path = Path(fh.name)
+        try:
+            text = extract_text_from_file(tmp_path).text
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        self.assertIn(
+            "자동 검증에서 보류·제외된 항목", text,
+            "collapsed output was served without disclosing the collapse",
+        )
+        self.assertIn(
+            "출력 필터가 검토항목 대부분을 제외했습니다", text,
+            "collapse disclosure must state what happened",
+        )
 
 
 class FitiMandatoryReviewTargetsPipelineTest(unittest.TestCase):

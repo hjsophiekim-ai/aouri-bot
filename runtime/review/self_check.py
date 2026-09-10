@@ -463,11 +463,15 @@ def run_self_check(
     # *이후* meta 레벨에서 수행한다 — 이 함수(run_self_check)는 합성
     # clause_results로 단위 테스트되는 경우가 많아, 아직 redline_instruction이
     # 부착되지 않은 입력을 이 함수 자체의 실패로 오판하면 안 되기 때문이다.
+    from runtime.review.delivery_gate import is_advisory_only
     from runtime.review.redline_instruction import is_incomplete_redline
+    # 무결성 게이트가 문안을 회수한 finding(advisory_only)은 "수정문안 없음"이
+    # 정상이므로 완성도 검사 대상이 아니다(2026-09-10 지시 항목 2).
     _incomplete_redline_clause_ids = [
         str(cr.get("clause_id") or "")
         for cr in active_clause_results
-        if str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+        if not is_advisory_only(cr)
+        and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
         and is_incomplete_redline(cr.get("redline_instruction"))
     ]
     incomplete_redline_failed = bool(_incomplete_redline_clause_ids)

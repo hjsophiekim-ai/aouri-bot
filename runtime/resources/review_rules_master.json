@@ -1292,7 +1292,7 @@
         ],
         "clause_type": "기술자료/자료요구",
         "rule_level": "risk",
-        "title": "기술자료/원가자료/도면/소스코드 요구 탐지",
+        "title": "기술자료·원가자료·도면 등 자료 제출 요구 탐지",
         "description": "기술자료 요구는 목적·범위·보유기간·반환/폐기 의무 및 목적 외 사용금지까지 명확히 해야 한다.",
         "contract_evidence": {
           "confirmed": true,

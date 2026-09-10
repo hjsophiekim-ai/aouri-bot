@@ -152,6 +152,8 @@ def build_legal_review_pdf(
     clause_results: list[dict[str, Any]],
     original_clauses: list[dict[str, Any]] | None = None,
     detailed_contract_profile: dict[str, Any] | None = None,
+    # canonical_state: 계약유형·당사자 지위의 유일한 출처(3차 지시 1항).
+    canonical_state: dict[str, Any] | None = None,
     include_low: bool = False,
     contract_type_code: str = "general",
     is_counterparty_form: bool = True,
@@ -163,6 +165,12 @@ def build_legal_review_pdf(
     user_review_coverage: list[dict[str, Any]] | None = None,
     user_review_parse_degraded_notice: str = "",
     legal_applicability_review: list[dict[str, Any]] | None = None,
+    # [2026-09-10 지시 항목 2] 자동 검증이 다운로드를 막는 대신 제거·중화한
+    # 항목들. DOCX 와 동일한 섹션으로 문서 말미에 노출한다.
+    delivery_remediations: list[dict[str, Any]] | None = None,
+    # [2026-09-10 지시] 법률 적용요건 선판단 결론. 조항별 검토보다
+    # 앞에 표시해, 어떤 법률이 왜 적용/비적용인지부터 읽히게 한다.
+    statute_gate_decisions: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review PDF.
 
@@ -274,6 +282,7 @@ def build_legal_review_pdf(
         medium_issues=medium_issues,
         is_counterparty_form=is_counterparty_form,
         format_val=_format_val,
+        canonical_state=canonical_state,
     ):
         if _hr.kind == "heading":
             # 콜론을 떼지 않는다 — DOCX 는 "핵심 결론:" 그대로 찍으므로
@@ -286,6 +295,20 @@ def build_legal_review_pdf(
             pdf.set_text_color(*COLOR_MEDIUM)
         _body(pdf, ("    " + _hr.text) if _hr.kind == "bullet" else _hr.text)
         pdf.set_text_color(0, 0, 0)
+
+    # ── 적용 법률 판단 (2026-09-10 지시, DOCX와 동일) ────────────────────────
+    # 조항별 검토를 읽기 전에 어떤 법률이 왜 적용/비적용인지부터 보이게 한다.
+    if statute_gate_decisions:
+        _heading(pdf, "적용 법률 판단 (조항별 검토의 전제)")
+        for _d in statute_gate_decisions:
+            if not isinstance(_d, dict):
+                continue
+            _body(pdf, f"- {_d.get('statute')}: {_d.get('conclusion')}")
+            _reason = str(_d.get("reason") or "").strip()
+            if _reason:
+                _body(pdf, f"    {_reason}")
+            for _f in (_d.get("facts_needed") or [])[:4]:
+                _body(pdf, f"    확인 필요: {_f}")
 
     _next_sec = 2
     if legal_applicability_review:
@@ -354,5 +377,27 @@ def build_legal_review_pdf(
         )
     else:
         _body(pdf, "제외된 항목: 없음")
+
+    # ── 자동 검증에서 보류·제외된 항목 (2026-09-10 지시 항목 2) ──────────────
+    # DOCX 와 동일한 섹션 — 게이트가 다운로드를 막는 대신 제거·중화한 결함을
+    # 문서에 그대로 남긴다.
+    if delivery_remediations:
+        _heading(pdf, f"{section_num + 1}. 자동 검증에서 보류·제외된 항목")
+        _body(
+            pdf,
+            "아래 항목은 자동 검증에서 신뢰할 수 없다고 판정되어 수정문안이 보류되었거나 "
+            "결과가 보정되었습니다. 문제 제기 자체는 유효할 수 있으므로 담당 변호사가 "
+            "직접 확인해 주십시오.",
+        )
+        for _rem in delivery_remediations:
+            if not isinstance(_rem, dict):
+                continue
+            _body(pdf, f"- {str(_rem.get('reason') or _rem.get('code') or '')}")
+            _detail = str(_rem.get("detail") or "").strip()
+            if _detail:
+                _body(pdf, f"    {_detail}")
+            _clauses = str(_rem.get("clauses") or "").strip()
+            if _clauses and _clauses != "-":
+                _body(pdf, f"    해당 항목: {_clauses}")
 
     return bytes(pdf.output())

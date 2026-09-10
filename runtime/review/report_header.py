@@ -97,26 +97,43 @@ def build_section1_rows(
     medium_issues: list[Any],
     is_counterparty_form: bool = True,
     format_val=str,
+    canonical_state: dict[str, Any] | None = None,
 ) -> list[HeaderRow]:
     """섹션 1 의 모든 행을 DOCX 기준 순서로 반환한다.
 
     `format_val` 은 렌더러가 쓰는 값 정규화 함수(`_format_val`)를 넘긴다 —
     "미확정"/None 표기를 두 포맷이 동일하게 처리하도록 하기 위함이다.
+
+    `canonical_state` 가 있으면 계약유형·당사자 지위는 **거기서만** 읽는다
+    (2026-09-09 3차 지시 1항). 전에는 detailed_contract_profile 에서 읽어서,
+    본문 법률분석이 쓰는 값과 달라질 수 있었다 — 실측에서 상단은 "장비 구매·설치
+    계약", 본문은 "공사도급계약"이었다.
     """
     dp = detailed_contract_profile or {}
+    cs = canonical_state or {}
     rows: list[HeaderRow] = []
 
     rows.append(HeaderRow(f"계약명: {filename or '미상'}"))
     rows.append(HeaderRow(f"우리 회사: {format_val(dp.get('our_party') or entity)}"))
-    rows.append(HeaderRow(f"우리 측 지위: {our_role_label(format_val(dp.get('our_legal_role')))}"))
-    rows.append(HeaderRow(f"상대방: {format_val(dp.get('counterparty'))}"))
-    rows.append(HeaderRow(
-        f"계약유형: {contract_type_label(format_val(dp.get('contract_type') or contract_type))}"
-    ))
+    _our_role = str(cs.get("party_label") or "").strip() or our_role_label(
+        format_val(dp.get("our_legal_role")))
+    rows.append(HeaderRow(f"우리 측 지위: {_our_role}"))
+    _counterparty = format_val(dp.get("counterparty"))
+    rows.append(HeaderRow(f"상대방: {_counterparty}"))
+    _type_label = str(cs.get("contract_type_label") or "").strip() or contract_type_label(
+        format_val(dp.get("contract_type") or contract_type))
+    rows.append(HeaderRow(f"계약유형: {_type_label}"))
+    _counterparty_role = str(cs.get("counterparty_label") or "").strip()
+    if _counterparty_role:
+        rows.append(HeaderRow(f"상대방 지위: {_counterparty_role}"))
 
     # 계약유형별 구조 요약 필드 — NDA 에 세금계산서 주체 같은 stale 필드가
     # 나오지 않도록 structure_summary_policy 가 골라 준다(항목 4).
-    struct_code = contract_type_code or str(dp.get("contract_type") or contract_type or "")
+    struct_code = (
+        str(cs.get("contract_type") or "").strip()
+        or contract_type_code
+        or str(dp.get("contract_type") or contract_type or "")
+    )
     for r in _structure_rows(struct_code, dp, include_missing=True):
         if r["key"] in ("our_party", "counterparty", "contract_type"):
             continue  # 위에서 이미 출력했다

@@ -57,6 +57,14 @@ class ReviewIssue:
     # 계약의 실제 문언을 contract_type_code 오분류 하나만으로 "wrong
     # context"로 오인해 finding 전체를 조용히 걸러내던 사고를 방지한다.
     is_common_legal_risk: bool = False
+    # 사내변호사형 AI 에이전트(counsel_agent.py)가 법률·세무·경제 축으로
+    # 판단해 올린 논점인지(2026-09-10 지시 항목 3). 같은 조항을 가리키더라도
+    # 룰/조항별 AI finding 과는 **다른 축의 다른 논점**이므로 조항 동일성
+    # 기준 병합의 대상이 아니다 — 실측: 제5조 제2항의 부가가치세 과세표준
+    # (세무) 논점이 같은 항의 정산문구 지적에 흡수돼 세무 논점이 최종
+    # 결과에서 통째로 사라졌다.
+    is_counsel_agent: bool = False
+    counsel_axis: str = ""
     # Senior In-house Counsel 판단 레이어(2026-09-04 지시) — "법적으로
     # 문제인가"(legal_risk/business_exposure)와 "지금 협상 테이블에 올릴
     # 가치가 있는가"(negotiation_priority)를 분리한 필드. legal_risk==HIGH여도
@@ -108,6 +116,8 @@ class ReviewIssue:
             "display_path": self.display_path,
             "finding_id": self.finding_id,
             "is_common_legal_risk": self.is_common_legal_risk,
+            "is_counsel_agent": self.is_counsel_agent,
+            "counsel_axis": self.counsel_axis,
             "legal_risk": self.legal_risk or self.severity,
             "business_exposure": self.business_exposure,
             "negotiation_priority": self.negotiation_priority,
@@ -194,7 +204,14 @@ def is_valid_issue(
     # finding이므로 이 계약유형별 금지문구 검사 대상이 아니다(2026-09-04
     # 지시 회귀조건 — "위탁판매"/"용역수수료"처럼 계약이 실제로 다루는
     # 어휘를 contract_type_code 오분류 하나만으로 걸러내는 사고 방지).
-    if contract_type_code and not issue.is_common_legal_risk:
+    # 사내변호사 에이전트 논점도 같은 이유로 예외다(2026-09-10). 이 finding 은
+    # 인용문이 계약 원문에 실재하는지 코드로 대조한 뒤에만 살아남으므로,
+    # 그 문안에 등장하는 어휘는 대개 **계약이 실제로 쓰는 말**이다. 실측:
+    # 초상권·개인정보 논점의 수정문안이 "계열사, 대리점, 광고대행사" 를
+    # 언급했다는 이유로 걸러졌는데, 그 표현은 제9조 제3항 마호가 그대로
+    # 쓰고 있는 이 계약 자신의 문언이었다 — 그 결과 담당자가 직접 요청한
+    # 초상권 쟁점이 최종 결과에서 사라졌다.
+    if contract_type_code and not issue.is_common_legal_risk and not issue.is_counsel_agent:
         guard = check_revision_text(
             issue.proposed_revision,
             contract_type_code=contract_type_code,
@@ -268,6 +285,16 @@ def _merge_same_clause_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
     groups: dict[tuple[str, str, str], list[ReviewIssue]] = {}
     standalone: list[ReviewIssue] = []
     for issue in issues:
+        # [사내변호사 에이전트 논점은 병합하지 않는다, 2026-09-10 항목 3]
+        # 이 병합은 "같은 조항에 대해 같은 이야기를 두 번 하는 것"을 합치기
+        # 위한 것이다. 에이전트 논점은 같은 조항을 가리키더라도 **다른
+        # 리스크 축**(세무/경제)의 다른 판단이므로 대상이 아니다. 실측: 제5조
+        # 제2항의 부가가치세 과세표준(세무) 논점이 같은 항의 정산문구 지적에
+        # 흡수돼, 이번 검토에서 유일한 세무 논점 2건이 최종 결과에서 통째로
+        # 사라졌다.
+        if issue.is_counsel_agent:
+            standalone.append(issue)
+            continue
         key = _clause_identity_key(issue)
         if key is None:
             standalone.append(issue)
@@ -569,6 +596,8 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             display_path=str(cr.get("display_path") or "").strip(),
             finding_id=str(cr.get("finding_id") or ""),
             is_common_legal_risk=bool(cr.get("is_common_legal_risk")),
+            is_counsel_agent=bool(cr.get("is_counsel_agent")),
+            counsel_axis=str(cr.get("counsel_axis") or "").strip(),
             legal_risk=str(cr.get("legal_risk") or "").strip(),
             business_exposure=str(cr.get("business_exposure") or cr.get("exposure_category") or "").strip(),
             negotiation_priority=str(cr.get("negotiation_priority") or "").strip(),

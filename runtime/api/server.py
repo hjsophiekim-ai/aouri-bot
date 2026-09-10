@@ -33,6 +33,18 @@ from runtime.questions.storage import (
     run_review_with_session_fast,
     save_answers,
 )
+from runtime.review.minimal_edit import apply_minimal_edit as _apply_minimal_edit
+from runtime.review.delivery_gate import (
+    DeliveryReport,
+    disclosure_rows as _delivery_disclosure_rows,
+    is_advisory_only as _is_advisory_only,
+    remediate_review_status as _remediate_review_status,
+    withdraw_proposal as _withdraw_proposal,
+)
+from runtime.questions.contract_question_agent import (
+    ContractQuestionPlan,
+    plan_questions as _plan_questions_with_ai,
+)
 from runtime.questions.generator import generate_questions
 from runtime.questions.model import question_to_dict
 from runtime.ep.intake import intake_to_dict, validate_ep_intake
@@ -47,6 +59,27 @@ from runtime.review.clause_level import build_clause_level_result
 from runtime.review.docx_writer import build_revision_docx
 from runtime.review.legal_review_docx import build_legal_review_docx as _build_legal_review_docx
 from runtime.review.legal_review_pdf import build_legal_review_pdf as _build_legal_review_pdf
+
+
+class _StoredProfile:
+    """검토 때 저장된 detailed_contract_profile 을 그대로 쓰기 위한 얇은 래퍼.
+
+    다운로드 경로는 `_detailed_profile.contract_type` 과 `.to_dict()` 만 쓴다.
+    분류기를 다시 돌리는 대신 저장된 dict 를 이 형태로 감싸면, 검토와 출력이
+    같은 값을 본다(2026-09-09 3차 지시 6항).
+    """
+
+    __slots__ = ("_data",)
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._data = dict(data or {})
+
+    @property
+    def contract_type(self) -> str:
+        return str(self._data.get("contract_type") or "")
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(self._data)
 from runtime.review.mandatory_issues import inject_mandatory_issues as _inject_mandatory_issues
 from runtime.review.output_filter import build_final_findings as _build_final_findings
 from runtime.review.severity_reclassifier import reclassify_for_consignment_dealer as _reclassify_consignment
@@ -83,6 +116,31 @@ def _html_response(handler: BaseHTTPRequestHandler, html: str) -> None:
     handler.wfile.write(data)
 
 
+def _content_disposition(filename: str) -> str:
+    """비ASCII 파일명을 안전하게 담은 Content-Disposition 값.
+
+    [2026-09-10 지시 항목 2] 한글 파일명을 그대로 헤더에 넣으면 http.server 가
+    헤더를 latin-1 로 인코딩하는 지점에서 UnicodeEncodeError 를 던지고, 응답을
+    한 바이트도 보내지 못한 채 커넥션이 끊긴다(브라우저에는 원인 없는 "다운로드
+    실패"로만 보인다). 실측: download_redline 이 500 도 아닌 RemoteDisconnected
+    로 죽었다 — 한글 파일명이 그대로 헤더에 들어간 경우다.
+
+    RFC 6266/5987 형식으로 ASCII fallback 과 UTF-8 파라미터를 함께 보낸다.
+    """
+    from urllib.parse import quote
+
+    name = str(filename or "").replace('"', "").replace("\\", "").strip() or "download"
+    ascii_name = name.encode("ascii", errors="ignore").decode("ascii").strip()
+    # 한글만으로 된 이름은 ASCII 변환 후 확장자 조각("_.docx")만 남는다 —
+    # 이름 부분에 영숫자가 하나도 없으면 쓸 수 있는 fallback 이 아니다.
+    _stem = ascii_name.rsplit(".", 1)[0] if "." in ascii_name else ascii_name
+    if not any(ch.isalnum() for ch in _stem):
+        ext = name.rsplit(".", 1)[-1] if "." in name else "bin"
+        ascii_name = f"download.{ext}"
+    quoted = quote(name, safe="")
+    return "attachment; filename=\"{0}\"; filename*=UTF-8''{1}".format(ascii_name, quoted)
+
+
 def _text_response(
     handler: BaseHTTPRequestHandler,
     status: int,
@@ -96,7 +154,7 @@ def _text_response(
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(data)))
     if filename:
-        handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        handler.send_header("Content-Disposition", _content_disposition(filename))
     handler.end_headers()
     handler.wfile.write(data)
 
@@ -113,7 +171,7 @@ def _binary_response(
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(data)))
     if filename:
-        handler.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        handler.send_header("Content-Disposition", _content_disposition(filename))
     handler.end_headers()
     handler.wfile.write(data)
 
@@ -136,6 +194,70 @@ def _contains_wordprocessingml_markers(text: str) -> bool:
     if not s:
         return False
     return any(m in s for m in _WORD_XML_MARKERS)
+
+
+def _transaction_type_for(clause_meta: dict | None, text: str) -> str:
+    """거래 원형을 하나만 확정해 돌려준다.
+
+    [2026-09-10 아키텍처 지시 항목 1] 검토가 이미 확정해 세션에 저장한
+    `legal_state.transaction_type` 이 있으면 **재계산하지 않고** 그것을 쓴다.
+    저장된 값이 없는 경로(업로드 직후 등)에서만 효과 프로파일로 계산한다.
+    """
+    if isinstance(clause_meta, dict):
+        stored = clause_meta.get("legal_state")
+        if isinstance(stored, dict) and str(stored.get("transaction_type") or "").strip():
+            return str(stored["transaction_type"])
+    try:
+        from runtime.review.clause_effect import build_effect_profile
+        from runtime.review.clause_extraction import extract_clauses
+
+        body = str(text or "")
+        if not body.strip():
+            return ""
+        return build_effect_profile(text=body, clauses=extract_clauses(body)[0] or []).archetype
+    except Exception:
+        return ""
+
+
+def _build_question_plan(
+    *,
+    entity: str,
+    contract_type: str,
+    text: str,
+    review_focus: str | None,
+    max_questions: int,
+    ai_mode: str = "auto",
+) -> ContractQuestionPlan:
+    """계약 전문을 AI에게 읽히고 이 계약에 맞는 사전 질문 계획을 세운다.
+
+    [2026-09-10 지시 항목 1] 종전에는 키워드 트리거로 미리 써둔 질문 묶음을
+    꺼낸 뒤 AI가 문장만 다듬었다(`enhance.polish_questions`). 그래서 대물교환
+    계약에 위탁매매 질문이 통째로 나갔다. 이제 "무엇을 물을지"를 먼저 AI가
+    계약을 읽고 판단하고, 정적 질문은 그 판단을 통과한 것만 남는다.
+
+    AI가 꺼져 있거나 호출이 실패하면 빈 계획을 돌려주며, 그 경우 질문 생성은
+    종전의 결정론적 경로를 그대로 탄다.
+    """
+    if str(ai_mode or "auto").strip().lower() == "off":
+        return ContractQuestionPlan(status="skipped")
+    try:
+        cfg = load_ai_config()
+        if not is_ai_enabled(cfg):
+            return ContractQuestionPlan(status="skipped")
+        return _plan_questions_with_ai(
+            provider=create_ai_provider(cfg),
+            model=cfg.model,
+            entity=str(entity or ""),
+            contract_type=str(contract_type or ""),
+            contract_text=str(text or ""),
+            review_focus=review_focus if isinstance(review_focus, str) else None,
+            max_questions=int(max_questions),
+            timeout_sec=cfg.timeout_sec,
+            max_tokens=min(cfg.max_tokens, 2200),
+            temperature=min(cfg.temperature, 0.1),
+        )
+    except Exception as exc:  # noqa: BLE001 - 질문 계획 실패가 업로드를 막지 않는다
+        return ContractQuestionPlan(status="error", error=sanitize_error_message(str(exc)))
 
 
 def _static_response(handler: BaseHTTPRequestHandler, file_path: Path) -> None:
@@ -1484,16 +1606,19 @@ def create_handler(service: RuleQueryService):
                     )
                     return
 
-                # [Final Lawyer Self-Check 다운로드 차단, 2026-09-09 지시 항목 13]
-                # 검토 파이프라인이 meta["review_status"] 에 REVIEW_FAILED_* 를
-                # 세워도 이 경로는 그것을 읽지 않아, 자가점검이 blocking 실패로
-                # 판정한 결과가 그대로 "정상" 문서로 나갔다(실측). 아래 개별
-                # 게이트들과 같은 방식으로 409 로 막는다. 상태를 세운 게이트가
-                # 이미 구체적 사유를 넣어두므로 그것을 그대로 전달한다.
-                _meta_status = (
-                    str(clause_meta.get("review_status") or "")
-                    if isinstance(clause_meta, dict) else ""
-                )
+                # [검토 상태 → 차단이 아니라 제거·기록, 2026-09-10 지시 항목 2]
+                # 종전에는 meta["review_status"] 에 REVIEW_FAILED_* 가 서 있으면
+                # 곧바로 409 로 막았다(2026-09-09 지시 항목 13). 그런데 그 상태를
+                # 세우는 게이트 대부분은 결함을 **제거할 수단이 있는데도** 상태만
+                # 세우고 있었고(예: semantic gate 는 whitelist 밖 계약유형에서
+                # 수정문안을 회수하지 않은 채 status 만 세움), 그 결과 사용자가
+                # 몇 번을 다시 눌러도 같은 409 가 반복됐다.
+                #
+                # 이제 결함을 제거·중화할 수 있는 상태는 여기서 해소하고, 무엇이
+                # 왜 빠졌는지는 문서 말미의 "자동 검증에서 보류·제외된 항목" 표에
+                # 명시한다. 제거할 수 없는 상태만 종전처럼 409 로 막는다.
+                _delivery = DeliveryReport()
+                _meta_status = _remediate_review_status(clause_meta, _delivery)
                 if _meta_status.startswith("REVIEW_FAILED"):
                     _json_response(
                         self,
@@ -1643,26 +1768,76 @@ def create_handler(service: RuleQueryService):
                     max_questions=5,
                     review_focus=(review_focus if isinstance(review_focus, str) else None),
                     contract_type_code=_canonical_type_code_for_q,
+                    question_plan=_build_question_plan(
+                        entity=entity, contract_type=contract_type, text=text,
+                        review_focus=review_focus, max_questions=5,
+                    ),
+                    transaction_type=_transaction_type_for(clause_meta, text),
                 )
                 try:
                     # ── legal-team pipeline: mandatory issues → severity → guardrail → new writer ──
-                    _detailed_profile = _classify_detailed(
-                        entity=entity,
-                        contract_type=contract_type,
-                        text=text,
-                        filename=str(filename) if isinstance(filename, str) else None,
+                    # [분류기 재호출 금지] (2026-09-09 3차 지시 1·6항)
+                    # 이 경로가 _classify_detailed 를 다시 돌리면 검토 때와 다른
+                    # 계약유형이 나올 수 있고, 실제로 그렇게 됐다 — 리포트 상단은
+                    # "장비 구매·설치 계약", 본문 법률분석은 "공사도급계약"(실측).
+                    # 검토에서 확정한 canonical 값을 그대로 쓴다. 저장된 값이
+                    # 없는 옛 세션만 재분류로 되돌린다.
+                    _canonical_state_docx = (
+                        clause_meta.get("canonical_state")
+                        if isinstance(clause_meta, dict) else None
                     )
-                    _ct_code = _detailed_profile.contract_type
+                    if not isinstance(_canonical_state_docx, dict):
+                        _canonical_state_docx = None
+                    _stored_profile = (
+                        clause_meta.get("detailed_contract_profile")
+                        if isinstance(clause_meta, dict) else None
+                    )
+                    if isinstance(_stored_profile, dict) and _stored_profile:
+                        _detailed_profile = _StoredProfile(_stored_profile)
+                    else:
+                        _detailed_profile = _classify_detailed(
+                            entity=entity,
+                            contract_type=contract_type,
+                            text=text,
+                            filename=str(filename) if isinstance(filename, str) else None,
+                        )
+                    _ct_code = str(
+                        (_canonical_state_docx or {}).get("contract_type")
+                        or _detailed_profile.contract_type
+                    )
+
+                    # ── [UI/DOCX 단일 결과 객체, 2026-09-10 지시 항목 11] ──────────
+                    # "DOCX/PDF 생성 과정에서 findings 재계산·재분룬·재생성
+                    # 금지. UI 에서 확정된 finding id/severity/clause/issue/rewrite 를
+                    # 그대로 사용." 검토 파이프라인이 이밌 확정해 세션에 저장한
+                    # final_findings 가 있으면 그것이 정본이다. 이 경로가 필수이슈를
+                    # 다시 주입하면 UI 가 보지 못한 항목이 문서에만 들어가 둘이
+                    # 어긋난다 — 그것이 REVIEW_FAILED_OUTPUT_MISMATCH 의 원인이었다.
+                    _stored_final = (
+                        clause_meta.get("final_findings") if isinstance(clause_meta, dict) else None
+                    )
+                    _use_stored_findings = bool(
+                        isinstance(_stored_final, dict)
+                        and any(
+                            isinstance(i, dict) and str(i.get("finding_id") or "").strip()
+                            for i in (
+                                list(_stored_final.get("high_issues") or [])
+                                + list(_stored_final.get("medium_issues") or [])
+                            )
+                        )
+                    )
 
                     # Combine regular + checklist results, inject mandatory issues
                     _all_results = list(clause_results_for_docx) + list(checklist_items_for_docx or [])
-                    _all_results = _inject_mandatory_issues(
-                        full_text=text,
-                        clause_results=_all_results,
-                        contract_type_code=_ct_code,
-                        is_counterparty_form=True,
-                        clauses=original_clauses,
-                    )
+                    if not _use_stored_findings:
+                        # 구버전 세션(final_findings 미저장)만 이 경로를 한다.
+                        _all_results = _inject_mandatory_issues(
+                            full_text=text,
+                            clause_results=_all_results,
+                            contract_type_code=_ct_code,
+                            is_counterparty_form=True,
+                            clauses=original_clauses,
+                        )
 
                     # Severity reclassification for dealer contracts
                     _DEALER_CODES = {
@@ -1752,8 +1927,12 @@ def create_handler(service: RuleQueryService):
                                 clause_identity=_clause_id,
                             )
                             if not _guard.is_clean:
-                                _cr["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
-                                _cr["has_rewrite_change"] = False
+                                # [2026-09-10 지시 항목 7] 자리표시자를 남기지 않고
+                                # 원문의 법률효과를 유지한 최소수정안으로 교체한다.
+                                _apply_minimal_edit(
+                                    _cr,
+                                    reason="조항 주제와 자동 생성 문안의 주제가 달라 교체했습니다.",
+                                )
 
                     # [REVIEW_FAILED gate] Compute the SAME canonical final-
                     # findings the DOCX/PDF will actually contain
@@ -1866,17 +2045,22 @@ def create_handler(service: RuleQueryService):
                         if _resolved_mandatory_docx else []
                     )
                     if _resolved_mandatory_docx and _unresolved_placeholders_docx:
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "REVIEW_FAILED_USER_FACTS_NOT_APPLIED: user-answered transaction facts not reflected in final output",
-                                "review_status": "REVIEW_FAILED_USER_FACTS_NOT_APPLIED",
-                                "resolved_mandatory_fact_fields": _resolved_mandatory_docx,
-                                "unresolved_fact_placeholders": _unresolved_placeholders_docx,
-                            },
+                        # [제거·기록으로 전환, 2026-09-10 지시 항목 2] 담당자가
+                        # 이미 답한 사실관계가 반영되지 않은 자리표시자("[판매자]"
+                        # 등)가 남은 finding은, 그 **문안**을 믿을 수 없다는 뜻이지
+                        # 문서 전체를 못 내보낸다는 뜻이 아니다. 해당 finding의
+                        # 문안만 회수하고 문서에 그 사실을 밝힌다.
+                        _placeholder_ids = sorted({
+                            str(p.get("clause_id") or "") for p in _unresolved_placeholders_docx
+                        } - {""})
+                        for _cr_ph in _all_results:
+                            if isinstance(_cr_ph, dict) and str(_cr_ph.get("clause_id") or "") in _placeholder_ids:
+                                _withdraw_proposal(_cr_ph, status="REVIEW_FAILED_USER_FACTS_NOT_APPLIED")
+                        _delivery.add(
+                            "REVIEW_FAILED_USER_FACTS_NOT_APPLIED",
+                            clause_ids=_placeholder_ids,
+                            detail="담당자 확인 답변으로 확정된 사실관계가 문안에 반영되지 않았습니다.",
                         )
-                        return
 
                     # [finding_id, 2026-09-03 지시] — 세션에서 로드된 항목은 이미
                     # UI 저장 시점에 부여된 finding_id를 그대로 유지하고, 이
@@ -1973,26 +2157,103 @@ def create_handler(service: RuleQueryService):
                             _cr_norm["redline_instruction"] = _normalize_redline_docx(
                                 _cr_norm["redline_instruction"]
                             )
+                    # advisory_only(무결성 게이트가 문안을 의도적으로 회수한
+                    # finding)는 "수정문안 없음"이 정상이므로 검사 대상이 아니다.
                     _incomplete_redline_ids_docx = [
                         str(cr.get("clause_id") or "")
                         for cr in _all_results
                         if isinstance(cr, dict) and not bool(cr.get("dedup_suppressed"))
+                        and not _is_advisory_only(cr)
                         and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
                         and _is_incomplete_redline_docx(cr.get("redline_instruction"))
                     ]
                     if _incomplete_redline_ids_docx:
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "REVIEW_FAILED_INCOMPLETE_REDLINE: HIGH/MEDIUM finding missing complete edit location/wording",
-                                "review_status": "REVIEW_FAILED_INCOMPLETE_REDLINE",
-                                "incomplete_redline_clause_ids": _incomplete_redline_ids_docx,
-                            },
+                        # [제거·기록으로 전환, 2026-09-10 지시 항목 2] 수정 위치나
+                        # 문구가 확정되지 않은 것은 그 항목의 **문안** 문제다.
+                        # 불완전한 문안을 Word 에 넣지 않되, 문제 제기는 검토의견
+                        # 으로 남기고 무엇이 보류됐는지 문서에 밝힌다.
+                        for _cr_ir in _all_results:
+                            if isinstance(_cr_ir, dict) and str(_cr_ir.get("clause_id") or "") in _incomplete_redline_ids_docx:
+                                _withdraw_proposal(_cr_ir, status="REVIEW_FAILED_INCOMPLETE_REDLINE")
+                        _delivery.add(
+                            "REVIEW_FAILED_INCOMPLETE_REDLINE",
+                            clause_ids=_incomplete_redline_ids_docx,
+                            detail="수정 위치·방식·완성문구를 자동으로 확정하지 못했습니다.",
                         )
-                        return
 
-                    _docx_final = _build_final_findings(_all_results, contract_type_code=_ct_code, include_low=False)
+                    # [법률 적용요건 게이트 재적용, 2026-09-10 지시] 이 경로는
+                    # _all_results 를 독립적으로 재구성(mandatory_issues 재주입 등)
+                    # 하므로, 검토 단계에서 비적용으로 확정된 법률의 finding 이
+                    # 다운로드 파일에서 되살아날 수 있다. 같은 게이트를 다시 건다.
+                    from runtime.review.statute_applicability_gate import (
+                        assess_statutes as _assess_statutes_docx,
+                        deactivate_inapplicable_statute_findings as _deactivate_statute_docx,
+                    )
+                    _statute_decisions_docx = _assess_statutes_docx(
+                        entity=str(entity or ""), text=str(text or ""), contract_type_code=_ct_code,
+                    )
+                    _statute_removed_docx = _deactivate_statute_docx(_all_results, _statute_decisions_docx)
+                    if _statute_removed_docx:
+                        _delivery.add(
+                            "STATUTE_NOT_APPLICABLE",
+                            clause_ids=[str(r.get("clause_id") or "") for r in _statute_removed_docx],
+                            reason="법률 적용요건 미충족으로 해당 법률 관련 지적을 제외함",
+                            detail=str(_statute_removed_docx[0].get("reason") or ""),
+                        )
+
+                    # [우리에게 유리한 조항 보호, 2026-09-10 지시] 이 경로도
+                    # 문안을 재구성하므로 같은 보호를 다시 건다.
+                    from runtime.review.our_side_protection import (
+                        enforce_our_side_protection as _enforce_our_side_docx,
+                    )
+                    _our_side_withdrawn_docx = _enforce_our_side_docx(
+                        _all_results,
+                        statute_decisions=[d.to_dict() for d in _statute_decisions_docx],
+                    )
+                    if _our_side_withdrawn_docx:
+                        _delivery.add(
+                            "OUR_SIDE_RIGHT_WEAKENED",
+                            clause_ids=[str(w.get("clause_id") or "") for w in _our_side_withdrawn_docx],
+                            reason="우리 회사에 유리한 현행 조항을 약화시키는 수정안을 보류함",
+                            detail="원문이 상대방의 청구를 차단하고 있는데 수정안이 예외를 신설했습니다.",
+                        )
+
+                    # [거래실질 정합성, 2026-09-10 지시] 현금 대가가 없는 교환
+                    # 구조에 대금 지급 전제의 템플릿 문안이 들어가지 않게 한다.
+                    from runtime.review.transaction_consistency import (
+                        check_transaction_consistency as _check_txn_docx,
+                    )
+                    _txn_report_docx = _check_txn_docx(_all_results, contract_text=str(text or ""))
+                    if _txn_report_docx.get("withdrawn"):
+                        _delivery.add(
+                            "TRANSACTION_STRUCTURE_MISMATCH",
+                            clause_ids=[str(w.get("clause_id") or "") for w in _txn_report_docx["withdrawn"]],
+                            reason="거래 구조(무현금 교환)와 모순되는 수정문안을 보류함",
+                        )
+
+                    # [에이전트 등급 복원, 2026-09-10 항목 3 — clause_level.py와
+                    # 동일 원칙] 이 경로도 _all_results 를 독립적으로 재구성하며
+                    # 그 과정에서 강등 로직을 다시 태우므로, 여기서도 인용 검증을
+                    # 마친 사내변호사 논점의 등급을 에이전트 판단으로 되돌린다.
+                    for _cr_cs in _all_results:
+                        if not isinstance(_cr_cs, dict) or not _cr_cs.get("is_counsel_agent"):
+                            continue
+                        if bool(_cr_cs.get("dedup_suppressed")) or bool(_cr_cs.get("keep_as_is")):
+                            continue
+                        _want_cs = str(_cr_cs.get("counsel_severity") or "").upper()
+                        if _want_cs in ("HIGH", "MEDIUM"):
+                            _cr_cs["risk_tier"] = _want_cs
+                            _cr_cs["severity"] = _want_cs
+
+                    # [항목 11] UI 가 확정한 결과가 있으면 그것이 정본이다.
+                    # 재계산본은 아래 검증에서 문서와 화면이 같은지 비교하는 데만 쓰고,
+                    # 생성되는 문서에는 화면과 **같은** 객체를 넣는다.
+                    _docx_final_recomputed = _build_final_findings(
+                        _all_results, contract_type_code=_ct_code, include_low=False,
+                    )
+                    _docx_final = (
+                        dict(_stored_final) if _use_stored_findings else _docx_final_recomputed
+                    )
                     _docx_high = int(_docx_final.get("high_count") or 0)
                     _docx_medium = int(_docx_final.get("medium_count") or 0)
                     _raw_high = sum(
@@ -2007,18 +2268,99 @@ def create_handler(service: RuleQueryService):
                     )
                     _raw_total = _raw_high + _raw_medium
                     _docx_total = _docx_high + _docx_medium
+
+                    # ── [전달 정합성 검증, 2026-09-10 아키텍처 지시 항목 11] ──────
+                    # UI 확정본을 정본으로 삼는 대신, 그 항목들이 실제 조항
+                    # 데이터에 대응하는지는 전달 직전에 확인해야 한다. 대응하는
+                    # clause_result 의 원문·문제점이 비어 있으면 문서에는 빈
+                    # 껍데기가 실린다 — 그런 항목은 내보내지 않고 그 사실을 밝힌다.
+                    if _use_stored_findings:
+                        _live_by_fid = {
+                            str(cr.get("finding_id") or ""): cr
+                            for cr in _all_results
+                            if isinstance(cr, dict) and str(cr.get("finding_id") or "")
+                        }
+
+                        def _resolves(item: Any) -> bool:
+                            if not isinstance(item, dict):
+                                return False
+                            src = _live_by_fid.get(str(item.get("finding_id") or ""))
+                            if src is None:
+                                # 대응 항목을 못 찾으면 UI 가 담고 있는 내용으로 판단한다.
+                                return bool(
+                                    str(item.get("original_text") or "").strip()
+                                    and str(item.get("problem") or "").strip()
+                                )
+                            return bool(
+                                str(src.get("original_text") or "").strip()
+                                and str(
+                                    src.get("problem") or src.get("rewrite_reason") or ""
+                                ).strip()
+                            )
+
+                        _hollow: list[str] = []
+                        for _sev_key in ("high_issues", "medium_issues"):
+                            _kept_items = []
+                            for _it in (_docx_final.get(_sev_key) or []):
+                                if _resolves(_it):
+                                    _kept_items.append(_it)
+                                else:
+                                    _hollow.append(
+                                        str(
+                                            (_it or {}).get("clause_id")
+                                            or (_it or {}).get("finding_id")
+                                            or ""
+                                        )
+                                    )
+                            _docx_final[_sev_key] = _kept_items
+                        if _hollow:
+                            _docx_final["high_count"] = len(_docx_final.get("high_issues") or [])
+                            _docx_final["medium_count"] = len(_docx_final.get("medium_issues") or [])
+                            _docx_final["top_risks"] = [
+                                t for t in (_docx_final.get("top_risks") or []) if _resolves(t)
+                            ]
+                            _docx_high = int(_docx_final.get("high_count") or 0)
+                            _docx_medium = int(_docx_final.get("medium_count") or 0)
+                            _docx_total = _docx_high + _docx_medium
+                            _delivery.add(
+                                "REVIEW_FAILED_OUTPUT_MISMATCH",
+                                clause_ids=[c for c in _hollow if c][:10],
+                                reason="원문·문제점이 비어 있어 문서에 실을 수 없는 항목을 제외함",
+                                detail=(
+                                    f"화면 확정본의 {len(_hollow)}건이 대응 조항 데이터를 갖고 있지 "
+                                    "않아 문서에서 제외했습니다. 검토를 다시 실행해 주십시오."
+                                ),
+                            )
+
                     if _raw_total >= 5 and _docx_total <= max(1, _raw_total // 5):
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "REVIEW_FAILED: final_findings_count(docx) collapsed relative to raw clause_results",
-                                "review_status": "REVIEW_FAILED",
-                                "raw_high_medium_count": _raw_total,
-                                "final_findings_count_docx": {"high": _docx_high, "medium": _docx_medium},
-                            },
+                        # [collapse 는 차단이 아니라 복구로 처리, 2026-09-10 지시 항목 2]
+                        # collapse 는 "출력 필터가 정상 finding 을 대량으로 떨어뜨렸다"는
+                        # **탐지 누락**의 증상이다. 여기서 409 를 내면 사용자는 아무것도
+                        # 못 받고, 떨어뜨린 원인도 그대로 남는다. 그래서 계약유형 기반
+                        # 금지문구 필터(is_valid_issue Gate 4)를 끄고 한 번 더 만들어,
+                        # 유형 오분류 때문에 걸러진 항목을 되살린다. 그래도 회복되지
+                        # 않으면 최소한 되살린 쪽을 내보내고 그 사실을 문서에 밝힌다.
+                        _docx_final_recovered = _build_final_findings(
+                            _all_results, contract_type_code="", include_low=False,
                         )
-                        return
+                        _rec_total = (
+                            int(_docx_final_recovered.get("high_count") or 0)
+                            + int(_docx_final_recovered.get("medium_count") or 0)
+                        )
+                        if _rec_total > _docx_total:
+                            _docx_final = _docx_final_recovered
+                            _docx_high = int(_docx_final.get("high_count") or 0)
+                            _docx_medium = int(_docx_final.get("medium_count") or 0)
+                            _docx_total = _docx_high + _docx_medium
+                        _delivery.add(
+                            "REVIEW_FAILED",
+                            detail=(
+                                f"출력 필터가 검토항목 대부분을 제외했습니다"
+                                f"(원본 HIGH/MEDIUM {_raw_total}건 → 문서 {_docx_total}건). "
+                                "계약유형 기반 문구 필터를 해제하고 복구했습니다."
+                            ),
+                            reason="검토항목 다수가 자동 필터에서 제외되어 복구 후 문서를 생성함",
+                        )
 
                     # [REVIEW_FAILED_OUTPUT_MISMATCH gate, 2026-09-03 지시] — UI가
                     # 저장한 clause_meta.final_findings(Phase 1에서 이제 UI 자신의
@@ -2051,20 +2393,25 @@ def create_handler(service: RuleQueryService):
                                 if fid in _docx_map and _docx_map[fid] != sev
                             }
                             if set(_ui_map) != set(_docx_map) or _ui_count != _docx_count or _severity_mismatches:
-                                _json_response(
-                                    self,
-                                    HTTPStatus.CONFLICT,
-                                    {
-                                        "error": "REVIEW_FAILED_OUTPUT_MISMATCH: UI and DOCX final_findings diverge",
-                                        "review_status": "REVIEW_FAILED_OUTPUT_MISMATCH",
-                                        "ui_only_finding_ids": sorted(set(_ui_map) - set(_docx_map)),
-                                        "docx_only_finding_ids": sorted(set(_docx_map) - set(_ui_map)),
-                                        "severity_mismatches": _severity_mismatches,
-                                        "ui_count": _ui_count,
-                                        "docx_count": _docx_count,
-                                    },
+                                # [항목 11 — UI 가 정본, 2026-09-10 아키텍처 지시]
+                                # "UI 에서 확정된 finding id/severity/clause/issue/
+                                # rewrite 를 그대로 사용." 다운로드 경로의 재계산이
+                                # 다르더라도 담당자가 검토하고 확정한 것은 화면이므로
+                                # 화면을 정본으로 삼는다. 종전에는 반대로 문서 쪽
+                                # 재계산을 정본으로 삼았는데, 그러면 담당자가 보지
+                                # 못한 항목이 문서에만 들어가거나 확인한 항목이
+                                # 문서에서 빠지는 일이 생긴다.
+                                #
+                                # 재계산본이 달라졌다는 사실 자체가 파이프라인
+                                # 불안정 지표이므로 그것도 문서에 남긴다.
+                                _docx_final = dict(_ui_final)
+                                _delivery.add(
+                                    "REVIEW_FAILED_OUTPUT_MISMATCH",
+                                    detail=(
+                                        f"화면 {_ui_count}건 / 문서 재계산 {_docx_count}건으로 달라 "
+                                        "화면에서 확정된 결과를 기준으로 통일했습니다."
+                                    ),
                                 )
-                                return
 
                     # [REVIEW_FAILED_OUTPUT_FACT_MISMATCH gate, 2026-09-04
                     # 지시, 요청 9] — UI가 저장한 canonical_transaction_facts
@@ -2080,16 +2427,22 @@ def create_handler(service: RuleQueryService):
                             if _ui_facts.get(k) and _canonical_facts_docx.get(k) and _ui_facts.get(k) != _canonical_facts_docx.get(k)
                         }
                         if _fact_mismatches:
-                            _json_response(
-                                self,
-                                HTTPStatus.CONFLICT,
-                                {
-                                    "error": "REVIEW_FAILED_OUTPUT_FACT_MISMATCH: UI-confirmed transaction facts diverge from DOCX reconstruction",
-                                    "review_status": "REVIEW_FAILED_OUTPUT_FACT_MISMATCH",
-                                    "fact_mismatches": _fact_mismatches,
-                                },
+                            # [제거·기록으로 전환, 2026-09-10 지시 항목 2]
+                            # 담당자가 UI에서 확인한 사실관계가 정본이다. 문서를
+                            # 그 값으로 맞추고(재구성본이 아니라), 차이가 있었다는
+                            # 사실을 문서에 남긴다.
+                            _canonical_facts_docx = {**_canonical_facts_docx, **{
+                                k: v for k, v in _ui_facts.items() if v
+                            }}
+                            _substitute_placeholders(_all_results, _canonical_facts_docx)
+                            _delivery.add(
+                                "REVIEW_FAILED_OUTPUT_FACT_MISMATCH",
+                                detail=(
+                                    "화면에서 확인된 거래 사실관계와 문서 재구성 값이 달라 "
+                                    "화면 확인값을 기준으로 통일했습니다: "
+                                    + ", ".join(sorted(_fact_mismatches)[:5])
+                                ),
                             )
-                            return
 
                     _final_findings_clause_ids = {
                         str(i.get("clause_id") or "")
@@ -2100,16 +2453,19 @@ def create_handler(service: RuleQueryService):
                         _mandatory_target_status, final_findings_clause_ids=_final_findings_clause_ids,
                     )
                     if not _targets_ok:
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "REVIEW_FAILED_USER_REQUEST_MISSING: user-cited clause(s) from review_focus missing from final output",
-                                "review_status": "REVIEW_FAILED_USER_REQUEST_MISSING",
-                                "missing_clause_citations": _missing_targets,
-                            },
+                        # [제거·기록으로 전환, 2026-09-10 지시 항목 2] 담당자가
+                        # 인용한 조항이 최종 결과에 없다는 것은 문서를 못 만든다는
+                        # 뜻이 아니라, 그 조항에 대해 "검토했지만 별도 지적사항
+                        # 없음"인지 "놓쳤는지"를 담당자가 알아야 한다는 뜻이다.
+                        # 문서 말미에 그 조항들을 명시한다.
+                        _delivery.add(
+                            "REVIEW_FAILED_USER_REQUEST_MISSING",
+                            clause_ids=[str(x) for x in (_missing_targets or [])][:10],
+                            detail=(
+                                "담당자가 인용한 조항이 최종 검토항목에 포함되지 않았습니다 — "
+                                "지적사항이 없어 제외된 것인지 직접 확인이 필요합니다."
+                            ),
                         )
-                        return
 
                     # [REVIEW_FAILED_USER_SCOPE_NOT_COVERED gate, 2026-09-08 지시 항목 2]
                     # 사용자가 제시한 검토 쟁점(및 계약유형별 기본 이슈맵)은 각각
@@ -2153,6 +2509,9 @@ def create_handler(service: RuleQueryService):
                         clause_results=_all_results,
                         clauses=original_clauses,
                         catalog_answers=_issue_answers_docx,
+                        # 이 경로도 적용요건 게이트를 다시 돌리므로 그 결론을
+                        # 사용자 법률 질문의 답으로 그대로 쓴다(2026-09-10).
+                        statute_decisions=[d.to_dict() for d in _statute_decisions_docx],
                     )
                     _user_parse_notice_docx = str(
                         (_user_parse_meta_docx or {}).get("degraded_notice") or ""
@@ -2162,16 +2521,20 @@ def create_handler(service: RuleQueryService):
                         + _check_user_coverage_docx(_user_coverage_docx)
                     )
                     if _unanswered_issues_docx:
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": f"{_USER_SCOPE_FAIL}: user review focus issue(s) not answered in final output",
-                                "review_status": _USER_SCOPE_FAIL,
-                                "unanswered_review_issues": _unanswered_issues_docx,
-                            },
+                        # [제거·기록으로 전환, 2026-09-10 지시 항목 2] 담당자가
+                        # 요청한 쟁점에 답이 없다면, 문서를 막을 것이 아니라
+                        # "이 쟁점은 아직 답하지 못했습니다"를 문서에 그대로
+                        # 적어 내보내는 것이 실무적으로 맞다 — 담당자는 나머지
+                        # 검토 결과를 즉시 쓸 수 있고, 빠진 쟁점도 놓치지 않는다.
+                        _delivery.add(
+                            _USER_SCOPE_FAIL,
+                            detail="미답변 검토요청: " + "; ".join(
+                                str(
+                                    x.get("normalized_issue") or x.get("issue") or x.get("code") or x
+                                )[:120]
+                                for x in _unanswered_issues_docx[:6]
+                            ),
                         )
-                        return
 
                     # [REVIEW_FAILED_GLOBAL_REASONING gate] (2026-09-03 지시, 요구 11)
                     # — 이 다운로드 경로는 _all_results를 독립적으로 재구성하므로
@@ -2203,17 +2566,30 @@ def create_handler(service: RuleQueryService):
                         and str(cr.get("risk_tier") or "").upper() != "HIGH"
                     ]
                     if _monetary_risk_unconfirmed_docx or _third_party_fault_not_high_docx:
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "REVIEW_FAILED_GLOBAL_REASONING: monetary risk or third-party fault exposure not properly reflected",
-                                "review_status": "REVIEW_FAILED_GLOBAL_REASONING",
-                                "monetary_risk_unconfirmed": _monetary_risk_unconfirmed_docx,
-                                "third_party_fault_borne_by_us_not_high": _third_party_fault_not_high_docx,
-                            },
+                        # [제거·기록 대신 **상향 보정**, 2026-09-10 지시 항목 2]
+                        # 이 게이트가 잡는 것은 "위험이 과소평가됐다"는 신호다.
+                        # 차단하면 담당자는 아무것도 못 받고 과소평가도 그대로
+                        # 남는다. 제3자 귀책을 우리가 떠안는 조항은 여기서 HIGH로
+                        # 올려 문서에 반영하고, 금전리스크 미탐지는 문서에 명시한다.
+                        for _cr_tp in _all_results:
+                            if isinstance(_cr_tp, dict) and str(_cr_tp.get("clause_id") or "") in _third_party_fault_not_high_docx:
+                                _cr_tp["risk_tier"] = "HIGH"
+                                _cr_tp["severity"] = "HIGH"
+                        _delivery.add(
+                            "REVIEW_FAILED_GLOBAL_REASONING",
+                            clause_ids=_third_party_fault_not_high_docx,
+                            reason="위험도 과소평가가 확인되어 자동 상향 보정함",
+                            detail=(
+                                ("원문에 금전 제재(지연손해금·위약벌 등) 문언이 있으나 대응 검토항목이 없습니다. "
+                                 if _monetary_risk_unconfirmed_docx else "")
+                                + ("제3자 귀책을 우리가 부담하는 조항을 HIGH로 상향했습니다."
+                                   if _third_party_fault_not_high_docx else "")
+                            ).strip(),
                         )
-                        return
+                        if _third_party_fault_not_high_docx:
+                            _docx_final = _build_final_findings(
+                                _all_results, contract_type_code=_ct_code, include_low=False,
+                            )
 
                     # [REVIEW_FAILED_GLOBAL_CROSS_CLAUSE gate, 2026-09-04 지시] —
                     # 다른 조항에 이미 있는 답(예: Article 9의 준거법·중재)을
@@ -2235,16 +2611,19 @@ def create_handler(service: RuleQueryService):
                         and str(cr.get("clause_id") or id(cr)) not in _pre_suppressed_ids_docx
                     ]
                     if _newly_suppressed_docx:
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "REVIEW_FAILED_GLOBAL_CROSS_CLAUSE: finding re-flags a topic already resolved elsewhere in the contract",
-                                "review_status": "REVIEW_FAILED_GLOBAL_CROSS_CLAUSE",
-                                "cross_clause_duplicates_caught": _newly_suppressed_docx,
-                            },
+                        # [제거·기록으로 전환, 2026-09-10 지시 항목 2] 이 게이트는
+                        # 이미 `_apply_gccv_docx()` 가 해당 finding 을 억제(suppress)
+                        # 한 **뒤에** 돈다 — 즉 결함은 이미 제거된 상태다. 그런데도
+                        # 409 를 내던 것은 "고쳐놓고 실패로 처리"하는 셈이었다.
+                        # 제거 사실만 문서에 남기고 진행한다.
+                        _delivery.add(
+                            "REVIEW_FAILED_GLOBAL_CROSS_CLAUSE",
+                            clause_ids=_newly_suppressed_docx,
+                            reason="다른 조항에 이미 규정된 사항을 중복 지적해 제외함",
                         )
-                        return
+                        _docx_final = _build_final_findings(
+                            _all_results, contract_type_code=_ct_code, include_low=False,
+                        )
 
                     # [REVIEW_FAILED_LIKELY_FALSE_NEGATIVE 다운로드 차단, 2026-09-04
                     # 지시] — self_check.py는 HIGH=0/MEDIUM=0인데 위험 언어가
@@ -2258,16 +2637,18 @@ def create_handler(service: RuleQueryService):
                     if _docx_high_for_fn == 0 and _docx_medium_for_fn == 0:
                         _fn_triggered_docx = [g for g, kws in _fn_groups_docx.items() if any(kw in str(text or "") for kw in kws)]
                         if _fn_triggered_docx:
-                            _json_response(
-                                self,
-                                HTTPStatus.CONFLICT,
-                                {
-                                    "error": "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE: zero HIGH/MEDIUM findings but risk language present in contract text",
-                                    "review_status": "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE",
-                                    "triggered_risk_groups": _fn_triggered_docx,
-                                },
+                            # [제거·기록으로 전환, 2026-09-10 지시 항목 2]
+                            # HIGH/MEDIUM 이 0건인데 위험 언어가 있는 것은 "검토가
+                            # 놓쳤을 수 있다"는 경고이지 문서를 못 만든다는 뜻이
+                            # 아니다. 어느 축이 비어 있는지를 문서 첫머리에 명시해
+                            # 담당자가 그 부분만 직접 보게 한다.
+                            _delivery.add(
+                                "REVIEW_FAILED_LIKELY_FALSE_NEGATIVE",
+                                detail=(
+                                    "원문에 위험 문언이 있으나 HIGH/MEDIUM 검토항목이 0건입니다 — "
+                                    "직접 확인이 필요한 영역: " + ", ".join(_fn_triggered_docx[:8])
+                                ),
                             )
-                            return
 
                     # [REVIEW_FAILED_LANGUAGE_QUALITY gate, 2026-09-03 지시] —
                     # 문장이 중간에서 잘리거나 원문 일부가 앞에서 잘린("ayment",
@@ -2275,16 +2656,21 @@ def create_handler(service: RuleQueryService):
                     from runtime.review.language_quality_gate import detect_language_quality_issues as _detect_lang_quality
                     _lang_violations = _detect_lang_quality(_all_results)
                     if _lang_violations:
-                        _json_response(
-                            self,
-                            HTTPStatus.CONFLICT,
-                            {
-                                "error": "REVIEW_FAILED_LANGUAGE_QUALITY: incomplete sentence or extraction corruption detected",
-                                "review_status": "REVIEW_FAILED_LANGUAGE_QUALITY",
-                                "violations": _lang_violations[:20],
-                            },
+                        # [제거·기록으로 전환, 2026-09-10 지시 항목 2] 잘린 문장이
+                        # 문서에 들어가지 않게 하는 것이 목적이므로, 해당 항목의
+                        # 문안만 회수하고 무엇이 빠졌는지 문서에 밝힌다.
+                        _lang_ids = sorted({str(v.get("clause_id") or "") for v in _lang_violations} - {""})
+                        for _cr_lq in _all_results:
+                            if isinstance(_cr_lq, dict) and str(_cr_lq.get("clause_id") or "") in _lang_ids:
+                                _withdraw_proposal(_cr_lq, status="REVIEW_FAILED_LANGUAGE_QUALITY")
+                        _delivery.add(
+                            "REVIEW_FAILED_LANGUAGE_QUALITY",
+                            clause_ids=_lang_ids,
+                            detail="문장이 중간에서 잘렸거나 원문 추출이 손상된 항목입니다.",
                         )
-                        return
+                        _docx_final = _build_final_findings(
+                            _all_results, contract_type_code=_ct_code, include_low=False,
+                        )
 
                     doc_bytes = _builder(
                         entity=entity,
@@ -2293,6 +2679,7 @@ def create_handler(service: RuleQueryService):
                         clause_results=_all_results,
                         original_clauses=original_clauses,
                         detailed_contract_profile=_detailed_profile.to_dict(),
+                        canonical_state=_canonical_state_docx,
                         include_low=False,
                         contract_type_code=_ct_code,
                         is_counterparty_form=True,
@@ -2304,6 +2691,11 @@ def create_handler(service: RuleQueryService):
                         user_review_coverage=_user_coverage_docx,
                         user_review_parse_degraded_notice=_user_parse_notice_docx,
                         legal_applicability_review=(clause_meta.get("legal_applicability_review") if isinstance(clause_meta, dict) else None),
+                        delivery_remediations=_delivery_disclosure_rows(_delivery),
+                        statute_gate_decisions=(
+                            (clause_meta.get("statute_applicability_gate") or {}).get("decisions")
+                            if isinstance(clause_meta, dict) else None
+                        ),
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})
@@ -2339,7 +2731,15 @@ def create_handler(service: RuleQueryService):
             filename = meta.get("filename")
             contract_text = "\n".join(str(c.get("text") or "") for c in original_clauses if isinstance(c, dict))
             try:
-                _dp2 = _classify_detailed(entity=entity, contract_type=contract_type, text=contract_text)
+                # 여기서도 분류기를 다시 돌리지 않는다 — 저장된 값이 먼저다.
+                _stored_dp2 = (
+                    clause_meta.get("detailed_contract_profile")
+                    if isinstance(clause_meta, dict) else None
+                )
+                if isinstance(_stored_dp2, dict) and _stored_dp2:
+                    _dp2 = _StoredProfile(_stored_dp2)
+                else:
+                    _dp2 = _classify_detailed(entity=entity, contract_type=contract_type, text=contract_text)
             except Exception:
                 _dp2 = None
             _ct_code_for_this_block = _dp2.contract_type if _dp2 is not None else ""
@@ -2386,6 +2786,13 @@ def create_handler(service: RuleQueryService):
                 clause_results=clause_results,
                 max_questions=7,
                 contract_type_code=_ct_code_for_this_block,
+                question_plan=_build_question_plan(
+                    entity=entity, contract_type=contract_type, text=contract_text,
+                    review_focus=None, max_questions=7,
+                ),
+                transaction_type=_transaction_type_for(
+                    clause_meta if isinstance(clause_meta, dict) else None, contract_text,
+                ),
             )
             try:
                 _ct2 = _ct_code_for_this_block
@@ -2445,29 +2852,31 @@ def create_handler(service: RuleQueryService):
                                 _cid2 = str(_cr2.get("clause_id") or "")
                         _g2 = _hg_check_revision(_sr2, contract_type_code=_ct2, clause_identity=_cid2)
                         if not _g2.is_clean:
-                            _cr2["suggested_rewrite"] = "자동수정 보류: 조항 주제와 수정문안 불일치"
-                            _cr2["has_rewrite_change"] = False
+                            _apply_minimal_edit(
+                                _cr2,
+                                reason="조항 주제와 자동 생성 문안의 주제가 달라 교체했습니다.",
+                            )
 
                 # [REVIEW_FAILED_LANGUAGE_QUALITY gate, 2026-09-03 지시]
                 from runtime.review.language_quality_gate import detect_language_quality_issues as _detect_lang_quality2
                 _lang_violations2 = _detect_lang_quality2(_cr_list2)
                 if _lang_violations2:
-                    _json_response(
-                        self,
-                        HTTPStatus.CONFLICT,
-                        {
-                            "error": "REVIEW_FAILED_LANGUAGE_QUALITY: incomplete sentence or extraction corruption detected",
-                            "review_status": "REVIEW_FAILED_LANGUAGE_QUALITY",
-                            "violations": _lang_violations2[:20],
-                        },
-                    )
-                    return
+                    # [제거·기록으로 전환, 2026-09-10 지시 항목 2 — 위 다운로드
+                    # 경로와 동일 원칙] 잘린 문안만 회수하고 문서는 생성한다.
+                    _lang_ids2 = sorted({str(v.get("clause_id") or "") for v in _lang_violations2} - {""})
+                    for _cr_lq2 in _cr_list2:
+                        if isinstance(_cr_lq2, dict) and str(_cr_lq2.get("clause_id") or "") in _lang_ids2:
+                            _withdraw_proposal(_cr_lq2, status="REVIEW_FAILED_LANGUAGE_QUALITY")
 
                 doc_bytes = _builder(
                     entity=entity, contract_type=contract_type,
                     filename=str(filename) if isinstance(filename, str) else None,
                     clause_results=_cr_list2, original_clauses=original_clauses,
                     detailed_contract_profile=_dp2.to_dict(),
+                    canonical_state=(
+                        clause_meta.get("canonical_state")
+                        if isinstance(clause_meta, dict) else None
+                    ),
                     include_low=False, contract_type_code=_ct2, is_counterparty_form=True,
                 )
             except Exception as exc:
@@ -2667,6 +3076,14 @@ def create_handler(service: RuleQueryService):
                     max_questions=5,
                     review_focus=(review_focus if isinstance(review_focus, str) else None),
                     contract_type_code=_canonical_type_code,
+                    question_plan=_build_question_plan(
+                        entity=entity, contract_type=contract_type, text=text,
+                        review_focus=review_focus, max_questions=5,
+                    ),
+                    transaction_type=_transaction_type_for(
+                        clause_bundle.meta if isinstance(clause_bundle.meta, dict) else None,
+                        str(text),
+                    ),
                 )
             except Exception as exc:
                 _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})

@@ -176,27 +176,55 @@ def _has_any(text: str, *patterns: str) -> bool:
     return any(p.lower() in t for p in patterns)
 
 
-def _find_clause_text(text: str, clause_nums: list[str]) -> str:
-    """Extract original text snippet from specific clauses."""
+def _collect_clause_lines(text: str, clause_nums: list[str]) -> list[str]:
+    """대상 조(제N조) 아래의 모든 줄."""
     if not text:
-        return ""
-    lines = text.split("\n")
+        return []
     result_lines: list[str] = []
     in_target = False
-    targets = {f"제{n}조" for n in clause_nums}
+    targets = {str(n).strip() for n in clause_nums}
 
-    for line in lines:
+    for line in text.split("\n"):
         stripped = line.strip()
-        is_new_clause = re.match(r"^제\d+조", stripped)
-        if any(t in stripped for t in targets):
-            in_target = True
-        elif is_new_clause and in_target:
-            break
+        # 조의 **시작 줄**만 경계로 인정한다. 종전에는 줄 안에 "제9조"라는
+        # 글자가 있기만 하면 그 조가 시작된 것으로 봤는데, 계약서에는 다른
+        # 조를 가리키는 상호참조가 흔하다 — 실측: 제2조 ③ "제9조(저작권 및
+        # 2차 활용), 제10조(초상권 등) … 는 계약 종료 후에도 존속한다" 한 줄에
+        # 걸려 제9조 본문 대신 그 참조 줄만 수집됐고, 그래서 제9조에 이미 있는
+        # 이용범위 규정을 "없다"고 오판했다(2026-09-10).
+        m = re.match(r"^제\s*(\d+)\s*조", stripped)
+        if m:
+            if m.group(1) in targets:
+                in_target = True
+            elif in_target:
+                break
+            else:
+                continue
         if in_target:
             result_lines.append(stripped)
+    return result_lines
 
-    excerpt = " ".join(result_lines[:10])
+
+def _find_clause_text(text: str, clause_nums: list[str]) -> str:
+    """인용용 발췌 — 문서에 그대로 보여줄 짧은 조각."""
+    excerpt = " ".join(_collect_clause_lines(text, clause_nums)[:10])
     return excerpt[:300] if excerpt else ""
+
+
+def _find_clause_full_text(text: str, clause_nums: list[str]) -> str:
+    """**판정용** 조문 전문 — 자르지 않는다.
+
+    [2026-09-10 지시 — "원문 전체 확인 후 '없다/불명확' 판단"]
+    종전에는 판정도 `_find_clause_text()` 의 300자 발췌로 했다. 제9조처럼 긴
+    조항은 앞 300자만 검사되어, 뒤쪽 항에 **이미 규정된 보호장치를 "없다"고
+    오판**했다. 실측: 제9조 제3항이 "기간·지역·횟수·매체의 제한 없이 자유롭게
+    이용" 과 "편집, 재편집, 분할, 발췌 … 2차적저작물의 작성" 을 명시하는데도
+    CP-004 가 "사용 매체·기간·지역 명시 없음, 2차 저작물 허용 불명확" 을 HIGH 로
+    올렸다.
+
+    발췌는 인용에만 쓰고, 있는지 없는지의 판정은 이 전문으로 한다.
+    """
+    return " ".join(_collect_clause_lines(text, clause_nums))
 
 
 # ─── Individual checklist items ────────────────────────────────────────────────
@@ -354,8 +382,11 @@ def _check_cp004_ip_transfer(text: str) -> ContentCheckResult | None:
     not in the entire contract (which may have "SNS" in the 별첨).
     """
     clause_text = _find_clause_text(text, ["9", "10"])
-    # Search media scope only in Article 9/10 area (not in 별첨 etc.)
-    ip_area = clause_text + " " + _find_clause_text(text, ["10"])
+    # 판정은 조문 **전문**으로 한다 — 발췌(300자)로 판정하면 뒤쪽 항에 이미
+    # 규정된 이용범위를 놓친다(2026-09-10 지시). 다만 검사 범위는 여전히
+    # IP/이용권 조항으로 한정한다: 별첨에 "SNS" 라는 단어가 있다는 사실이
+    # 이용권 부여를 뜻하지는 않기 때문이다.
+    ip_area = _find_clause_full_text(text, ["9", "10"])
 
     has_ip_transfer = _has_any(text, "저작권", "소유권", "저작재산권", "권리 이전")
     # Media scope must appear in the IP clause area, not just anywhere in the contract

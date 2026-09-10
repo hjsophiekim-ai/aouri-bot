@@ -3,6 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from runtime.questions.contract_question_agent import (
+    ContractQuestionPlan,
+    filter_static_questions_by_plan,
+)
 from runtime.questions.model import Question, QuestionOption
 from runtime.questions.transaction_structure_questions import build_transaction_structure_questions
 from runtime.review.jurisdiction import classify_jurisdiction_profile
@@ -235,6 +239,8 @@ def generate_questions(
     max_questions: int = 7,
     review_focus: str | None = None,
     contract_type_code: str = "",
+    question_plan: ContractQuestionPlan | None = None,
+    transaction_type: str = "",
 ) -> list[Question]:
     """Public entry point. Always leads with the classification-confirmation
     questions (Q-TYPE-001/Q-ROLE-001) when auto-classification confidence is
@@ -251,7 +257,23 @@ def generate_questions(
     (2026-09-01 — a stale/wrong raw label was found producing 대리점 질문
     for an NDA). When omitted, behaves as before (text/label-based only).
     """
+    # [계약을 읽고 질문한다, 2026-09-10 지시 항목 1] ─────────────────────────
+    # AI가 계약 전문을 읽고 세운 질문 계획이 있으면 그것이 최우선이다. 아래의
+    # 정적 질문 묶음은 전부 "키워드가 보이면 미리 써둔 질문을 꺼낸다" 방식이라,
+    # 계약의 거래구조와 무관한 질문이 나올 수 있다(대물교환 계약에 위탁매매
+    # 질문 5개가 통째로 주입된 실사례). 계획이 있으면 그 계획이 배제한 주제의
+    # 정적 질문은 아예 만들지 않는다.
+    plan = question_plan if isinstance(question_plan, ContractQuestionPlan) else None
+    ai_lead: list[Question] = list(plan.questions) if (plan and plan.usable) else []
+
     lead = _build_type_confirmation_questions(entity=entity, contract_type=contract_type, text=contract_text or "")
+    if plan is not None:
+        # AI가 계약의 성격과 우리 지위를 이미 확정했다면 "자동 분류 신뢰도가
+        # 낮으니 직접 골라 달라"는 확인 질문은 사용자에게 되묻는 의미가 없다.
+        if plan.status == "ai" and plan.contract_nature and plan.our_side:
+            lead = []
+        else:
+            lead = filter_static_questions_by_plan(lead, plan)
 
     # [거래구조 확인 질문, 2026-09-04 지시] — 판매/위탁판매/대리판매/중개/
     # 판매지원 계약에서 판매자·소유권 등 핵심 사실관계가 계약 문언만으로
@@ -259,18 +281,29 @@ def generate_questions(
     # review_focus에 어떤 키워드를 먼저 썼는지와 무관하게 항상 최우선으로
     # 노출한다 — 계약유형 오분류(예: 판매지원 용역계약이 advisory로
     # 오분류)가 있어도 이 신호는 독립적으로 작동해 안전망 역할을 한다.
+    #
+    # 다만 이 신호는 텍스트 휴리스틱이므로, 계약을 읽은 AI가 "이 계약에 매매
+    # 거래구조는 없다"고 판단했으면 그 판단이 우선한다(2026-09-10).
     txn_lead: list[Question] = []
     if detect_sales_transaction_ambiguity(contract_text or ""):
         txn_lead = build_transaction_structure_questions()
+    if plan is not None:
+        txn_lead = filter_static_questions_by_plan(txn_lead, plan)
 
-    lead_ids = {q.question_id for q in lead}
+    lead_ids = {q.question_id for q in lead} | {q.question_id for q in ai_lead}
     txn_lead = [q for q in txn_lead if q.question_id not in lead_ids]
-    combined_lead = lead + txn_lead
+    combined_lead = ai_lead + lead + txn_lead
     if len(combined_lead) > max_questions:
         # required 질문이 우선순위 순서 안에서 뒤로 밀려 잘려나가지 않도록,
         # 자르기 전에만 required-first로 안정 정렬한다(원래의 우선순위
         # 순서는 required/두 그룹 내부에서 그대로 유지됨).
-        combined_lead = sorted(combined_lead, key=lambda q: not q.required)[:max_questions]
+        # AI가 계약을 읽고 만든 질문은 정적 질문보다 항상 앞이다 — 잘려나가는
+        # 쪽은 키워드로 꺼내온 정적 질문이어야 한다(2026-09-10).
+        _ai_ids = {q.question_id for q in ai_lead}
+        combined_lead = sorted(
+            combined_lead,
+            key=lambda q: (q.question_id not in _ai_ids, not q.required),
+        )[:max_questions]
     remaining = max(0, max_questions - len(combined_lead))
     rest = _generate_questions_inner(
         entity, contract_type, detected_rule_ids,
@@ -279,8 +312,48 @@ def generate_questions(
         review_focus=review_focus,
         contract_type_code=contract_type_code,
     ) if remaining > 0 else []
+    if plan is not None:
+        rest = filter_static_questions_by_plan(rest, plan)
     combined_lead_ids = {q.question_id for q in combined_lead}
-    return combined_lead + [q for q in rest if q.question_id not in combined_lead_ids]
+    out = combined_lead + [q for q in rest if q.question_id not in combined_lead_ids]
+
+    # [Canned question 범위 게이트, 2026-09-10 아키텍처 지시 항목 4]
+    # 질문 세트는 키워드로 선택되므로 그 선택이 틀리면 엉뚱한 질문이 나간다.
+    # 실측: 라이선스 계약에 "판촉비/반품비 부담" 질문, 대물교환 계약에
+    # "운영 인력 배치/KPI" 질문, 공사도급 계약에 "운영대행 양식" 질문.
+    # 거래 원형(clause_effect)에 맞지 않는 질문군은 여기서 버린다.
+    if transaction_type:
+        from runtime.questions.question_scope import filter_questions_by_transaction_type
+        out = filter_questions_by_transaction_type(out, transaction_type)
+
+    # 범위 게이트를 통과하는 유형별 질문세트가 없는 계약(라이선스·대물교환·
+    # 공사도급 등)은 질문이 0건이 된다. 잘못된 질문보다는 낫지만 물어야 할
+    # 것을 못 묻는 것도 같은 실패이므로, 조항의 **법률효과**에서 직접 기본
+    # 질문을 만들어 채운다(2026-09-10 아키텍처 지시 항목 2·4).
+    if len(out) < max_questions and contract_text:
+        try:
+            from runtime.questions.effect_questions import build_effect_questions
+            from runtime.review.clause_effect import build_effect_profile
+            from runtime.review.clause_extraction import extract_clauses
+
+            _profile = build_effect_profile(
+                text=str(contract_text), clauses=extract_clauses(str(contract_text))[0] or [],
+            )
+            _existing = {q.question_id for q in out}
+            for q in build_effect_questions(
+                profile=_profile,
+                contract_text=str(contract_text),
+                answered_topics=str(review_focus or ""),
+                max_questions=max_questions,
+            ):
+                if q.question_id in _existing:
+                    continue
+                out.append(q)
+                if len(out) >= max_questions:
+                    break
+        except Exception:
+            pass
+    return out
 
 
 def _build_type_confirmation_questions(*, entity: str, contract_type: str, text: str) -> list[Question]:

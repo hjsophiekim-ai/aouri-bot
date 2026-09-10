@@ -33,6 +33,7 @@ from runtime.review.strategic_inquiry import generate_strategic_inquiry
 from runtime.review.clause_conflicts import detect_clause_conflicts
 from runtime.review.executive_summary import generate_executive_summary
 from runtime.review.legal_effect_taxonomy import LEGAL_EFFECT_TAGS, effects_overlap
+from runtime.review.delivery_gate import is_advisory_only as _is_advisory_only
 
 # ─── [Phase 2] 지능형 법무검토 시스템 프롬프트 ──────────────────────────────────
 CLAUSE_REVIEW_SYSTEM = (
@@ -588,6 +589,12 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
             sr_existing = cr.get("suggested_rewrite")
             if isinstance(sr_existing, str) and sr_existing.strip():
                 seen_rewrites.append(_norm_for_sim(sr_existing))
+            continue
+        # [사내변호사 에이전트 논점 제외, 2026-09-10 항목 3] 조 단위 통합은
+        # "같은 조에서 같은 리스크를 반복해 지적하는 것"을 묶기 위한 것이다.
+        # 에이전트 논점은 같은 조를 가리켜도 세무/경제 등 다른 축의 다른
+        # 판단이라, 대표 항으로 흡수되면 그 축의 유일한 논점이 사라진다.
+        if bool(cr.get("is_counsel_agent")):
             continue
         an = str(cr.get("article_number") or "").strip()
         if not an:
@@ -1202,6 +1209,23 @@ def _apply_original_text_integrity_guard(clause_results: list[dict[str, Any]]) -
             cr["guardrail_block"] = {"filter": "original_text_integrity", "reason": "cross_article_contamination"}
 
 
+#: 사용자 중점 이슈 매칭에서 **그 주제를 특정하지 못하는** 일반어.
+#:
+#: [2026-09-10 지시 — keyword-only matching 금지] 이 단어들은 거의 모든
+#: 계약서의 거의 모든 조항에 등장하므로, 이것만 걸렸다는 사실은 그 조항이
+#: 사용자의 관심 주제에 해당한다는 근거가 되지 못한다. 실측 사고: 제품 인도·
+#: 하자 "통지" 조항에 "개인정보/처리위탁/재위탁/침해사고" 라벨이 붙었고,
+#: 제품 반환·"해지" 조항에 같은 라벨이 붙었다.
+#:
+#: 반대로 "면책"·"구상권"·"개인정보"·"초상권"처럼 주제를 특정하는 단어가
+#: 걸리면 종전대로 사용자 관심 영역으로 노출한다 — 관심 영역이 통째로
+#: 보이지 않게 되는 것도 똑같이 잘못이기 때문이다.
+_NON_DISTINCTIVE_FOCUS_KEYWORDS: frozenset[str] = frozenset({
+    "통지", "협의", "합의", "서면", "동의", "승인", "요청", "제공", "반환",
+    "해지", "종료", "변경", "기한", "기간", "비용", "책임", "손해", "광고",
+    "홍보", "자료", "정보", "관리", "확인", "보관", "사용", "이용",
+})
+
 _SIDIZ_NAMES = frozenset({"시디즈", "SIDIZ", "Sidiz", "sidiz"})
 
 
@@ -1302,27 +1326,46 @@ _RX_SENT_SPLIT = re.compile(r"(?<=[다않겠다니다습니다])[.。]\s*|\n")
 
 
 def _apply_global_sentence_dedup(clause_results: list[dict[str, Any]]) -> None:
-    """[Global Deduplication] 동일 문장이 2회 이상 등장하면 '상기 제N조 참조'로 대체한다."""
-    seen: dict[str, tuple[int, str]] = {}
-    for idx, cr in enumerate(clause_results):
+    """[Global Deduplication] 여러 조항에 똑같은 수정문안이 반복되는 것을 정리한다.
+
+    [2026-09-10 지시 — "상기 제10조 참조 반복 삽입" 금지]
+    종전 구현은 중복된 **문장을 수정문안 본문 안에서** "상기 제N조 참조"로
+    치환했다. 그 결과 Word 의 "수정 문구" 칸이 이렇게 나갔다:
+
+        "을"은 … 확보하여야 하며, 이를 확보하지 못한 소재는 사용할 수 없다.
+        상기 제10조 참조
+        상기 제10조 참조.
+        상기 제10조 참조.
+
+    수정문안은 상대방에게 그대로 건네는 **조문 텍스트**다. 그 안에 편집자
+    주석("상기 …참조")을 끼워 넣으면 협상에 쓸 수 없는 문서가 된다. 실측
+    문서에서 이 문구가 16회 등장했다.
+
+    그래서 본문은 절대 건드리지 않는다. 대신 수정문안 **전체**가 앞선 항목과
+    사실상 동일하면 그 항목을 중복으로 표시(`dedup_suppressed`)해 목록에서
+    한 번만 보이게 한다 — 중복 제거의 목적은 그것이었다.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for cr in clause_results:
         if not isinstance(cr, dict):
             continue
-        sr = cr.get("suggested_rewrite")
-        if not isinstance(sr, str) or not sr.strip():
+        if bool(cr.get("dedup_suppressed")) or bool(cr.get("is_counsel_agent")):
             continue
-        sentences = [s.strip() for s in _RX_SENT_SPLIT.split(sr) if len(s.strip()) >= 20]
-        new_sr = sr
-        for sent in sentences:
-            norm = re.sub(r"\s+", " ", sent.lower())
-            if norm in seen:
-                first_idx, first_art = seen[norm]
-                ref = f"상기 제{first_art}조 참조" if first_art else "상기 조항 참조"
-                new_sr = new_sr.replace(sent, ref, 1)
-            else:
-                art = str(clause_results[idx].get("article_number") or "")
-                seen[norm] = (idx, art)
-        if new_sr != sr:
-            cr["suggested_rewrite"] = new_sr.strip()
+        sr = cr.get("suggested_rewrite")
+        if not isinstance(sr, str) or len(sr.strip()) < 20:
+            continue
+        norm = re.sub(r"\s+", " ", sr.strip().lower())
+        first = seen.get(norm)
+        if first is None:
+            seen[norm] = cr
+            continue
+        cr["dedup_suppressed"] = True
+        cr["dedup_duplicate_of"] = str(first.get("clause_id") or "")
+        _first_path = str(first.get("display_path") or first.get("clause_id") or "")
+        cr["dedup_reason"] = (
+            f"{_first_path}의 수정안과 동일한 문안 — 해당 항목에서 함께 처리"
+            if _first_path else "앞선 항목과 동일한 수정문안"
+        )
 
 
 # =============================================================================
@@ -1396,6 +1439,10 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
             and not bool(cr.get("user_focus_hit"))
             and not bool(cr.get("approval_required"))
             and not bool(cr.get("is_common_legal_risk"))
+            # 효과 기반 기본 검토(2026-09-10)도 같은 근거로 예외다 —
+            # 조항 자신의 문언을 직접 확인해 만든 finding 이므로
+            # clause_topic 이 비었다는 이유로 LOW 로 내리면 탐지 누락이 된다.
+            and not bool(cr.get("is_effect_baseline"))
         ):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
@@ -1417,6 +1464,13 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
         and not bool(cr.get("keep_as_is"))
         and not bool(cr.get("is_checklist_item"))
         and not bool(cr.get("is_common_legal_risk"))
+        # [사내변호사 에이전트 논점, 2026-09-10 항목 3] 이 논점들은 계약 전체를
+        # 읽고 "회사가 실제로 무엇을 잃는가"로 추린 결과이고, 인용문이 원문에
+        # 실재하는지 코드로 대조까지 마친 항목이다. 임의의 개수 상한으로 조용히
+        # MEDIUM 강등하면 이 검토의 결론 자체가 흐려진다 —
+        # is_common_legal_risk 를 캡에서 빼는 것과 같은 근거다.
+        and not bool(cr.get("is_counsel_agent"))
+        and not bool(cr.get("is_effect_baseline"))
     ]
     if len(high_items) > max_high:
         high_items.sort(key=lambda x: (int(x.get("_priority_level") or 3), -int(bool(x.get("must_fix"))), -int(bool(x.get("approval_required")))))
@@ -3452,6 +3506,42 @@ def build_clause_level_result(
         entity=str(entity), contract_type=str(contract_type), text=str(text or ""),
         filename=filename, answers=answers,
     )
+    # ── [Canonical Contract Type 확정] (2026-09-09 3차 지시 1항) ────────────
+    # 구조 판정(급부·대금·완료조건·위험이전 채점)을 **여기서** 돌려 세부 분류와
+    # 맞춘다. 전에는 이 판정이 파이프라인 끝(조항 검토가 다 끝난 뒤)에서야
+    # 실행돼서, 그 사이 모든 단계가 세부 분류만 보고 움직였다. 그 결과 리포트
+    # 상단은 "장비 구매·설치 계약", 본문 법률분석은 "공사도급계약"이 됐다
+    # (2026-09-09 실측). 유형은 검토 시작 전에 한 번만 정해야 한다.
+    from runtime.review.canonical_state import (
+        canonical_type_label as _canonical_type_label,
+        reconcile_contract_type as _reconcile_contract_type,
+    )
+    from runtime.review.contract_type_resolution import (
+        resolve_contract_type as _resolve_contract_type,
+    )
+    _type_resolution = _resolve_contract_type(
+        str(text or ""), declared_type=str(contract_type or ""),
+    )
+    _ranked = list(_type_resolution.ranked or [])
+    _type_reconciled = _reconcile_contract_type(
+        detailed_code=str(_canonical_profile.contract_type or ""),
+        resolved_family=str(_type_resolution.contract_type_code or ""),
+        resolved_confidence=_type_resolution.confidence,
+        resolved_uncertain=bool(_type_resolution.uncertain),
+        resolved_top_score=int(_ranked[0][1]) if _ranked else 0,
+        resolved_runner_up_score=int(_ranked[1][1]) if len(_ranked) > 1 else 0,
+    )
+    if _type_reconciled.get("corrected"):
+        logger.info(
+            "canonical contract_type corrected: %s -> %s (%s)",
+            _type_reconciled.get("detailed_before"),
+            _type_reconciled.get("contract_type"),
+            _type_reconciled.get("reason"),
+        )
+        _canonical_profile.contract_type = str(_type_reconciled["contract_type"])
+    _canonical_type_code = str(_type_reconciled["contract_type"])
+    _canonical_type_family = str(_type_reconciled["contract_type_family"])
+
     if _canonical_profile.contract_type == "testing_inspection_service":
         _contract_class = "testing_service"
     else:
@@ -3645,6 +3735,103 @@ def build_clause_level_result(
         legal_map_dict=_legal_map.to_dict(),
         legal_map_source=_legal_map.source,
     )
+    # ── [Canonical State 확정 — 이후 재추론 금지] (3차 지시 1항) ───────────
+    # 여기까지 오면 계약유형(구조 판정으로 화해 완료)과 당사자 지위(Legal Map
+    # override 반영 완료)가 정해졌다. 이 시점에 문서계층과 거래구조까지 함께
+    # 얼려서 하나의 값으로 만들고, 이후 모든 단계 — UI / 적용법령 / 조항검토 /
+    # 리스크 엔진 / rewrite / DOCX·PDF — 는 이 값을 **전달받아** 쓴다.
+    from runtime.review.canonical_state import build_canonical_state as _build_canonical_state
+    from runtime.review.document_hierarchy import (
+        find_priority_overrides as _find_priority_overrides,
+    )
+    from runtime.review.canonical_identity import normalize_role as _normalize_role
+
+    _our_role_direction = (
+        _normalize_role(str((_legal_map.fields or {}).get("our_role_direction") or ""))
+        or _normalize_role(str(getattr(party, "our_role", "") or ""))
+        or "provider"
+    )
+    _doc_hierarchy = _find_priority_overrides(
+        str(text or ""),
+        our_role_direction=_our_role_direction,
+        contract_type_code=_canonical_type_code,
+    )
+    _canonical_state = _build_canonical_state(
+        contract_type=_canonical_type_code,
+        contract_type_family=_canonical_type_family,
+        contract_type_label=_canonical_type_label(
+            _canonical_type_code, _canonical_type_family),
+        party_role=str(getattr(party, "our_role", "") or ""),
+        party_label=str(getattr(party, "our_label", "") or ""),
+        counterparty_role=str(getattr(party, "counterparty_role", "") or ""),
+        counterparty_label=str(getattr(party, "counterparty_label", "") or ""),
+        document_hierarchy=_doc_hierarchy,
+        governing_transaction={
+            k: (_legal_map.fields or {}).get(k)
+            for k in ("contract_purpose", "primary_obligations", "payment_flow",
+                      "acceptance_and_completion", "risk_transfer_point",
+                      "our_role_direction")
+        },
+        audit={
+            "contract_type": _type_reconciled,
+            "party_role_override": _role_override_audit,
+            "legal_map_source": _legal_map.source,
+        },
+    )
+    # ── [Canonical Legal State] (2026-09-10 아키텍처 지시 항목 1·2) ──────────
+    # 거래 실질(조항별 법률효과 프로파일) → 거래 원형 → 계약유형 라벨 순으로
+    # 확정한다. 이 순서를 뒤집으면 enum 에 없는 계약유형(라이선스·바터 등)이
+    # 다시 키워드 캐스케이드의 아무 가지에나 떨어진다(실측: 34,000자 영문
+    # LICENSE AGREEMENT → purchase_supply).
+    #
+    # 여기서 확정된 값이 이후 질문생성·법률적용·finding·rewrite·UI·DOCX 의
+    # 유일한 출처다. downstream 에서 다시 분류하지 않는다.
+    from runtime.review.legal_state import build_legal_state as _build_legal_state
+    _legal_state = _build_legal_state(
+        text=str(text or ""),
+        clauses=clauses,
+        detailed_code=_canonical_type_code,
+        detailed_family=_canonical_type_family,
+        detailed_label=_canonical_state.contract_type_label,
+        our_role=str(getattr(party, "our_role", "") or ""),
+        our_role_direction=_canonical_state.party_role_direction,
+        our_label=str(getattr(party, "our_label", "") or ""),
+        counterparty_role=str(getattr(party, "counterparty_role", "") or ""),
+        counterparty_label=str(getattr(party, "counterparty_label", "") or ""),
+        legal_map=_legal_map.fields,
+        document_hierarchy=_doc_hierarchy,
+    )
+    if _legal_state.contract_type_reconciled:
+        # 거래 실질이 enum 분류를 뒤집었으면 그 결과를 canonical_state 에도
+        # 반영한다 — 두 객체가 서로 다른 유형을 말하면 그 자체가 원래의 사고다.
+        logger.info(
+            "legal_state reconciled contract_type: %s -> %s (%s)",
+            _legal_state.contract_type_before, _legal_state.contract_type,
+            _legal_state.transaction_type,
+        )
+        from dataclasses import replace as _dc_replace
+        _canonical_type_code = _legal_state.contract_type
+        _canonical_type_family = _legal_state.contract_type_family
+        _canonical_state = _dc_replace(
+            _canonical_state,
+            contract_type=_legal_state.contract_type,
+            contract_type_family=_legal_state.contract_type_family,
+            contract_type_label=_legal_state.contract_type_label,
+            audit={**_canonical_state.audit, "legal_state_reconcile": _legal_state.contract_type_reason},
+        )
+    if _legal_state.our_role_direction and not _canonical_state.party_role_direction:
+        from dataclasses import replace as _dc_replace2
+        _canonical_state = _dc_replace2(
+            _canonical_state, party_role_direction=_legal_state.our_role_direction,
+        )
+
+    logger.info(
+        "canonical state: type=%s family=%s our=%s(%s) counterparty=%s txn=%s",
+        _canonical_state.contract_type, _canonical_state.contract_type_family,
+        _canonical_state.party_role, _canonical_state.party_role_direction,
+        _canonical_state.counterparty_role, _legal_state.transaction_type,
+    )
+
     review_posture = infer_review_posture(
         party=party, contract_type=str(contract_type), text=str(text),
         contract_type_code=str(_canonical_profile.contract_type or ""),
@@ -4508,6 +4695,7 @@ def build_clause_level_result(
         if bool(cr.get("keep_as_is")):
             continue
         parts: list[str] = []
+        _snippets: list[str] = []
         if bool(cr.get("user_focus_hit")):
             titles = cr.get("user_focus_match_titles") if isinstance(cr.get("user_focus_match_titles"), list) else []
             titles = [str(x) for x in titles if isinstance(x, str) and x.strip()]
@@ -4520,7 +4708,6 @@ def build_clause_level_result(
                 # and the quoted 원문 refer to the same, verifiable issue.
                 _ot_for_match = str(cr.get("original_text") or "")
                 _matched_codes = cr.get("user_focus_matches") if isinstance(cr.get("user_focus_matches"), list) else []
-                _snippets: list[str] = []
                 for _code in _matched_codes[:2]:
                     for _kw in get_objective_keywords(str(_code)):
                         if _kw and _kw in _ot_for_match:
@@ -4556,6 +4743,28 @@ def build_clause_level_result(
                             laws.append(it["title"].strip())
             if laws:
                 parts.append("관련 법령/판례: " + ", ".join(laws[:2]))
+        # [Keyword-only matching 금지, 2026-09-10 지시] ────────────────────────
+        # "통지"라는 단어가 있다는 이유만으로 "개인정보/처리위탁/재위탁/침해사고"를
+        # 연결하면, 제품 인도·하자 통지 조항에 개인정보 finding 이 붙는다(실측:
+        # 제6조 제2항·제4항). 다만 사용자가 지목한 관심 영역이 통째로 안 보이게
+        # 되어서도 안 되므로, 금지 대상은 **주제 신호가 없는 일반어 매칭**으로
+        # 한정한다. "면책"·"구상권"·"개인정보"처럼 그 주제를 특정하는 단어가
+        # 걸린 경우는 종전대로 살린다.
+        _has_substantive_basis = bool(issues) or bool(rules) or bool(cr.get("factual_hit"))
+        _only_generic_focus_match = bool(
+            cr.get("user_focus_hit")
+            and _snippets
+            and all(s in _NON_DISTINCTIVE_FOCUS_KEYWORDS for s in _snippets)
+        )
+        if not _has_substantive_basis and _only_generic_focus_match:
+            cr["user_focus_label_only"] = True
+            cr["user_focus_generic_match"] = list(_snippets)
+            cr["rewrite_reason"] = None
+            cr["risk_tier"] = "LOW"
+            cr["severity"] = "LOW"
+            cr["must_fix"] = False
+            cr["review_tier"] = "NOTE"
+            continue
         parts = [p for p in parts if p][:2]
         cr["rewrite_reason"] = " / ".join(parts) if parts else None
 
@@ -5118,6 +5327,105 @@ def build_clause_level_result(
                 cr.get("clause_id"), clause_topic, sorted(list(rt))[:8],
             )
 
+    # ── [법률효과 태깅 + 효과 기반 기본 검토] (2026-09-10 아키텍처 지시 항목 2) ──
+    # finding 의 출발점을 계약유형에서 **조항의 법률효과**로 옮긴다. 유형별
+    # 룰팩이 없거나 얇아도 이 검토는 항상 돈다 — 실측: 물품공급 fixture 에서
+    # "60일 지급·무과실 전부배상·무통지 즉시해지" 가 모두 있는데 대금·지연·
+    # 하자 축 finding 이 0건이었고, 34,000자 라이선스 계약에서 라이선스·로열티
+    # 축 finding 이 0건이었다.
+    from runtime.review.clause_effect import classify_clause_effects as _classify_effects
+    from runtime.review.effect_baseline_review import (
+        run_effect_baseline_review as _run_effect_baseline,
+    )
+
+    _chunk_text_by_id = {
+        str(getattr(c, "clause_id", "") or ""): (
+            str(getattr(c, "title", "") or ""), str(getattr(c, "text", "") or "")
+        )
+        for c in (clauses or [])
+    }
+    for _cr_eff in clause_results:
+        if not isinstance(_cr_eff, dict) or _cr_eff.get("clause_effects"):
+            continue
+        _t_eff, _b_eff = _chunk_text_by_id.get(
+            str(_cr_eff.get("clause_id") or ""),
+            (str(_cr_eff.get("clause_title") or ""), str(_cr_eff.get("original_text") or "")),
+        )
+        _cr_eff["clause_effects"] = _classify_effects(title=_t_eff, text=_b_eff)
+
+    _baseline_findings = _run_effect_baseline(
+        clauses, full_text=str(text or ""), existing_results=clause_results,
+    )
+    if _baseline_findings:
+        logger.info("effect baseline review produced %d findings", len(_baseline_findings))
+        clause_results.extend(_baseline_findings)
+
+    # ── [법률 적용요건 선판단 게이트] (2026-09-10 지시) ──────────────────────
+    # "법률명이 떠오른다고 바로 finding 을 만들지 않는다." 각 법률의 법정
+    # 요건을 먼저 통과시키고, 요건 불충족이면 그 법률 전용 rule 을 전부
+    # 비활성화한다. 이 판단은 조항 검토보다 **먼저** 나와야 하므로 에이전트
+    # 패스에도 전제로 넘긴다.
+    from runtime.review.statute_applicability_gate import (
+        assess_statutes as _assess_statutes,
+        deactivate_inapplicable_statute_findings as _deactivate_statute_findings,
+    )
+    _statute_decisions = _assess_statutes(
+        entity=str(entity or ""),
+        text=str(text or ""),
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+        # 거래 원형은 legal_state 가 이미 확정했다 — 같은 판단을 두 번 하지 않는다.
+        transaction_type=_legal_state.transaction_type,
+    )
+
+    # ── [사내변호사형 AI 에이전트 패스] (2026-09-10 지시 항목 3) ──────────────
+    # 여기까지의 결과는 "조항을 빠짐없이 본 목록"이다. 그 위에 "이 계약에서
+    # 회사가 실제로 무엇을 잃을 수 있는가"를 법률·세무·경제 세 축으로 판단한
+    # 논점을 얹는다. 3단계(이해 → 쟁점 → 인용 검증·중요도 컷)로 동작하며,
+    # 인용문이 계약 원문에 실재하는지는 AI 가 아니라 코드가 대조한다.
+    _counsel_report = None
+    if ai_provider is not None:
+        try:
+            from runtime.review.counsel_agent import (
+                counsel_issues_to_clause_results as _counsel_to_crs,
+                run_counsel_agent as _run_counsel_agent,
+            )
+            _counsel_report = _run_counsel_agent(
+                provider=ai_provider,
+                model=str(ai_model or ""),
+                entity=str(entity or ""),
+                contract_type=str(contract_type or ""),
+                text=str(text or ""),
+                review_focus=review_focus if isinstance(review_focus, str) else None,
+                statute_decisions=[d.to_dict() for d in _statute_decisions],
+                timeout_sec=float(ai_timeout_sec or 120.0),
+                max_tokens=int(ai_max_tokens or 4000),
+                temperature=float(ai_temperature if ai_temperature is not None else 0.1),
+            )
+            if _counsel_report.issues:
+                _last_article_no = 0
+                for _c_last in (clauses or []):
+                    _raw_no = str(getattr(_c_last, "article_number", "") or "").strip()
+                    if _raw_no.isdigit():
+                        _last_article_no = max(_last_article_no, int(_raw_no))
+                _existing_ids = {
+                    str(cr.get("clause_id") or "") for cr in clause_results if isinstance(cr, dict)
+                }
+                for _new_cr in _counsel_to_crs(
+                    _counsel_report, clauses, last_article_number=_last_article_no,
+                ):
+                    # 같은 조항에 이미 finding 이 있으면 그 위에 에이전트 판단을
+                    # 덮어쓰지 않는다 — 뒤의 조 단위 병합이 두 판단을 합친다.
+                    # 이때 id 는 반드시 `counsel_` 로 **시작**해야 한다.
+                    # "KR-5-p2__counsel" 처럼 세그먼트 접두어를 남겨두면
+                    # server.py 의 original_clauses 정합성 검사가 "추출 단계에서
+                    # 사라진 조항"으로 오판해 다운로드가 400 으로 막힌다.
+                    if str(_new_cr.get("clause_id") or "") in _existing_ids:
+                        _new_cr["clause_id"] = f"counsel_{_new_cr['clause_id']}"
+                    clause_results.append(_new_cr)
+        except Exception as exc:  # noqa: BLE001 - 에이전트 실패가 검토를 막지 않는다
+            logger.warning("counsel_agent pass failed: %s", exc)
+            _counsel_report = None
+
     # ── [STEP 4] Industry-Specific Legal Reasoning (가구·설비·제조물 12개 항목) ──
     _apply_industry_specific_review(
         clause_results, str(text or ""), _contract_class, _contract_nature,
@@ -5296,7 +5604,10 @@ def build_clause_level_result(
             continue
         cid0 = str(cr.get("clause_id") or "")
         ch0 = chunk_by_id.get(cid0)
-        a0s = str(ch0.article_number or "").strip() if isinstance(ch0, object) else ""
+        # `isinstance(ch0, object)` 는 None 에도 True 라 가드가 되지 못했다 —
+        # chunk_by_id 에 없는 finding id(룰 생성 finding, 사내변호사 에이전트
+        # 논점 등)가 들어오는 순간 AttributeError 로 검토 전체가 죽는다.
+        a0s = str(getattr(ch0, "article_number", "") or "").strip() if ch0 is not None else ""
         a0i = int(a0s) if a0s.isdigit() else None
         title0 = str(cr.get("clause_title") or "")
         ct0 = str(cr.get("clause_topic") or "").strip()
@@ -5473,6 +5784,7 @@ def build_clause_level_result(
             or bool(cr.get("is_common_legal_risk"))
             or bool(cr.get("is_checklist_item"))
             or bool(cr.get("is_mandatory"))
+            or bool(cr.get("is_effect_baseline"))
         ):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
@@ -6137,29 +6449,12 @@ def build_clause_level_result(
         build_risk_allocation_matrix as _build_risk_matrix,
         concentrated_risk_axes as _concentrated_risk_axes,
     )
-    _our_role_direction = str(
-        (_legal_map.fields or {}).get("our_role_direction") or ""
-    ) or str(getattr(party, "our_role", "") or "")
+    # 위험배분 판정은 canonical 지위를 쓴다 — 여기서 다시 추론하면 매트릭스가
+    # 좌우로 뒤집힐 수 있다(3차 지시 1항).
     _risk_matrix = _build_risk_matrix(
         str(text or ""),
-        our_role_direction=_our_role_direction,
-        contract_type_code=_scope_type_code,
-    )
-
-    # ── [Document Hierarchy] (2026-09-09 2차 지시 2·6항) ────────────────────
-    # 조항을 보기 전에 문서 우선순위를 복원한다. 실무 계약은 본계약서 + 일반조건
-    # + 특수조건 + 별첨이 한 파일에 들어오고, "상이한 사항이 있을 경우 A > B > C
-    # 순위에 의해서 해석된다"는 조항을 둔다. 이 순위를 모르면 일반조건에서 찾은
-    # 보호조항이 특수조건에서 이미 뒤집혀 있는데도 "보호장치가 있다"고 결론
-    # 내린다. 실측(공사도급계약): 특수조건이 일반조건의 공기연장·설계변경 보호를
-    # 실제로 무력화했고, 두 문서의 조문번호가 각각 제1조부터 다시 시작한다.
-    from runtime.review.document_hierarchy import (
-        find_priority_overrides as _find_priority_overrides,
-    )
-    _doc_hierarchy = _find_priority_overrides(
-        str(text or ""),
-        our_role_direction=_our_role_direction,
-        contract_type_code=_scope_type_code,
+        our_role_direction=_canonical_state.party_role_direction,
+        contract_type_code=_canonical_state.contract_type,
     )
 
     # ── [Risk Package] (2026-09-09 2차 지시 4항) ────────────────────────────
@@ -6171,22 +6466,18 @@ def build_clause_level_result(
     )
     _risk_packages = _build_risk_packages(
         str(text or ""), _risk_matrix,
-        our_role_direction=_our_role_direction,
-        contract_type_code=_scope_type_code,
+        our_role_direction=_canonical_state.party_role_direction,
+        contract_type_code=_canonical_state.contract_type,
     )
 
-    # ── [계약유형 법률효과 재판정] (2026-09-09 지시 항목 2) ─────────────────
-    # 제목·파일명·세션값이 아니라 본문의 법률효과로 유형을 다시 확인한다.
-    # 실측: 호텔 신축 공사도급계약이 "앱개발/소프트웨어개발/SI/유지보수/SaaS"로
-    # 분류되어 계약유형별 체크리스트가 통째로 잘못 주입됐다. 불일치는 조용히
-    # 덮지 않고 meta 에 남긴다.
+    # ── [계약유형 법률효과 판정 결과 재사용] (3차 지시 1항) ────────────────
+    # **다시 추론하지 않는다.** 이 판정은 STEP 1 에서 이미 실행해 세부 분류와
+    # 화해까지 마쳤다(_type_resolution / _canonical_type_code). 여기서 한 번 더
+    # 돌리면 같은 계약에 대해 두 개의 판정 객체가 생기고, 그게 바로 "모듈마다
+    # 다른 계약유형"의 원인이었다.
     from runtime.review.contract_type_resolution import (
         REVIEW_FAILED_CONTRACT_TYPE_UNCERTAIN as _RF_TYPE_UNCERTAIN,
         declared_type_conflicts as _declared_type_conflicts,
-        resolve_contract_type as _resolve_contract_type,
-    )
-    _type_resolution = _resolve_contract_type(
-        str(text or ""), declared_type=str(contract_type or ""),
     )
     _type_conflict_note = _declared_type_conflicts(
         _type_resolution, str(contract_type or ""),
@@ -6254,6 +6545,53 @@ def build_clause_level_result(
     # endpoint — so "what the reviewer sees here" and "what ends up in the
     # downloaded file" are computed by the same rule, not two independently
     # maintained filters that can silently diverge in count and content.
+    # ── [우리에게 유리한 조항 보호] (2026-09-10 지시) ────────────────────────
+    # 원문이 상대방의 청구를 차단하고 있는데 수정안이 "다만 …은 청구할 수
+    # 있다"로 예외를 신설하면, 협상 테이블에 우리 쪽에서 먼저 양보안을
+    # 들고 가는 셈이 된다. 그런 수정문안은 적용하지 않는다.
+    from runtime.review.our_side_protection import (
+        enforce_our_side_protection as _enforce_our_side,
+    )
+    # 다만 강행법규(하도급법·대리점법·대규모유통업법·공정거래법 등) 위반을
+    # 시정하는 수정안은 우리에게 불리해지더라도 유지한다 — 우리 계약서가
+    # 법을 어기며 갑질하는 내용이면 고치는 것이 맞다(2026-09-10 추가 지시).
+    _our_side_withdrawn = _enforce_our_side(
+        clause_results, statute_decisions=[d.to_dict() for d in _statute_decisions],
+    )
+
+    # ── [거래실질 정합성 검사] (2026-09-10 지시) ──────────────────────────────
+    # 현금 대가가 없는 교환(바터) 계약에 "대금 완납 시 사용권 이전" 같은
+    # 표준 현금거래 템플릿을 넣으면, 영원히 오지 않는 조건을 권리 이전 요건으로
+    # 박아 넣는 셈이 된다. 거래 구조와 모순되는 수정문안은 적용하지 않는다.
+    from runtime.review.transaction_consistency import (
+        check_transaction_consistency as _check_txn_consistency,
+    )
+    _txn_consistency = _check_txn_consistency(clause_results, contract_text=str(text or ""))
+
+    # ── [비적용 법률 전용 finding 비활성화] (2026-09-10 지시) ────────────────
+    # 적용요건 게이트가 "비적용"으로 확정한 법률의 의무·금지·제재를 다루는
+    # finding 은 근거가 없다. 룰이 만들었든 AI 가 만들었든 여기서 전부 제거하고,
+    # 무엇이 왜 빠졌는지는 meta 에 남겨 문서·UI 가 설명할 수 있게 한다.
+    _statute_removed = _deactivate_statute_findings(clause_results, _statute_decisions)
+
+    # ── [사내변호사 에이전트 등급 복원] (2026-09-10 지시 항목 3) ─────────────
+    # 이 파일의 후단에는 "suggested_rewrite 가 없으면 실질 리스크가 아니다"를
+    # 전제로 한 강등 루프가 여러 개 있다(조 단위 통합, 템플릿 미매칭 MEDIUM→LOW,
+    # 하드블록 조항 등). 에이전트 논점은 조문 문안이 아니라 **판단**을 담고 있어
+    # 그 전제가 성립하지 않는데도 전부 걸려, 실측에서 세무 논점 2건이 LOW 로
+    # 떨어져 최종 결과에서 통째로 사라졌다. 인용 검증까지 마친 논점의 등급은
+    # 에이전트의 판단을 정본으로 삼는다.
+    for _cr_restore in clause_results:
+        if not isinstance(_cr_restore, dict) or not _cr_restore.get("is_counsel_agent"):
+            continue
+        if bool(_cr_restore.get("dedup_suppressed")) or bool(_cr_restore.get("keep_as_is")):
+            continue
+        _want = str(_cr_restore.get("counsel_severity") or "").upper()
+        if _want in ("HIGH", "MEDIUM") and str(_cr_restore.get("risk_tier") or "").upper() != _want:
+            _cr_restore["risk_tier"] = _want
+            _cr_restore["severity"] = _want
+            _cr_restore["review_tier"] = "MUST" if _want == "HIGH" else "SUGGEST"
+
     _filtered_output: dict = {}
     try:
         from runtime.review.output_filter import (
@@ -6292,6 +6630,13 @@ def build_clause_level_result(
             if not isinstance(cr, dict):
                 continue
             if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+                continue
+            # 사내변호사 에이전트 논점은 이 정렬의 대상이 아니다(2026-09-10).
+            # 이 블록은 "DOCX가 채택한 집합"을 정본으로 삼아 UI를 맞추는데,
+            # 표시용 필터가 어떤 이유로든 에이전트 논점 하나를 빼면 이 검토의
+            # 결론이 화면에서도 함께 사라진다 — 실측: 초상권·개인정보 논점이
+            # 그렇게 없어졌다. 이 항목들은 아래 복원 패스가 다시 세운다.
+            if bool(cr.get("is_counsel_agent")):
                 continue
             _ui_tier = str(cr.get("risk_tier") or "").upper()
             if _ui_tier in ("HIGH", "MEDIUM") and str(cr.get("clause_id") or "") not in _docx_visible_ids:
@@ -6381,7 +6726,8 @@ def build_clause_level_result(
         "law_errors": law_errors[:5],
         "ai": ai_state,
         "deep_review_shortlist_clause_ids": deep_review_shortlist_ids[:60] if isinstance(deep_review_shortlist_ids, list) else [],
-        "clause_extraction_report": clause_report.to_dict() if isinstance(clause_report, object) else None,
+        # (위 5434 와 같은 이유 — isinstance(x, object) 는 None 도 통과시킨다.)
+        "clause_extraction_report": clause_report.to_dict() if clause_report is not None else None,
         "contract_nature": _contract_nature,
         "contract_class": _contract_class,
         "top_risks_llm": _top_risks_llm,
@@ -6485,6 +6831,8 @@ def build_clause_level_result(
     meta["liability_nature"] = _liability_nature_report
     meta["negotiation_buckets"] = _negotiation_buckets
     meta["statute_linkage"] = _statute_linkage
+    # canonical state 는 리포트·UI·DOCX·PDF 가 모두 여기서 읽는다.
+    meta["canonical_state"] = _canonical_state.to_dict()
     meta["canonical_identity"] = _canonical_identity
     meta["document_hierarchy"] = _doc_hierarchy
     meta["risk_packages"] = _risk_packages
@@ -6559,6 +6907,22 @@ def build_clause_level_result(
             + ", ".join(_senior_pass_report["residual_duplicate_keys"])
         )
     meta["contract_scope_policy"] = _contract_scope_report
+    # 사내변호사형 에이전트 패스의 판단 근거(계약 실질 이해, 채택·기각한
+    # 논점)를 그대로 남긴다 — 결론만 보여주지 않기 위함(2026-09-10 항목 3).
+    if _counsel_report is not None:
+        meta["counsel_agent"] = _counsel_report.to_dict()
+    # 적용법률 선판단 결론과 그로 인해 제거된 finding — UI/DOCX 는 조항 검토
+    # 앞에 이 결론부터 보여준다(2026-09-10 지시).
+    meta["statute_applicability_gate"] = {
+        "decisions": [d.to_dict() for d in _statute_decisions],
+        "removed_findings": _statute_removed,
+    }
+    # 적용법률 후보와 사용자 검토범위는 검토 도중에 확정되므로 여기서 채운다 —
+    # legal_state 는 그 둘까지 담은 뒤에야 완성된다(지시 항목 1의 10·11번 축).
+    _legal_state.applicable_law_candidates = [d.to_dict() for d in _statute_decisions]
+    meta["legal_state"] = _legal_state.to_dict()
+    meta["transaction_consistency"] = _txn_consistency
+    meta["our_side_protection"] = {"withdrawn": _our_side_withdrawn}
     meta["finding_semantic_gate"] = _semantic_gate_report
     meta["clause_reference_gate"] = _clause_reference_report
     if _semantic_gate_report.get("status") and not meta.get("review_status"):
@@ -6621,6 +6985,9 @@ def build_clause_level_result(
         clause_results=clause_results,
         clauses=clauses,
         catalog_answers=_mandatory_issue_answers,
+        # 사용자가 특정 법률의 적용 여부를 물었으면 조항 검색이 아니라
+        # 적용요건 게이트의 결론이 답이다(2026-09-10 지시).
+        statute_decisions=[d.to_dict() for d in _statute_decisions],
     )
     # 사용자가 직접 요청한 쟁점은 계약유형 기본 이슈맵의 같은 항목보다
     # 우선한다 — 같은 쟁점을 아우리봇의 문구와 사용자의 문구로 두 번
@@ -6633,6 +7000,19 @@ def build_clause_level_result(
     meta["mandatory_review_issues"] = _mandatory_issue_answers
     meta["user_review_request_parse"] = _user_request_parse.to_dict()
     meta["user_review_coverage"] = _user_request_coverage
+    # legal_state 의 11번 축(user_review_scope) 완성 — 사용자가 **실제로**
+    # 요청한 쟁점만 담는다(지시 항목 4).
+    _legal_state.user_review_scope = [
+        {
+            "issue_id": str(r.get("issue_id") or ""),
+            "source": str(r.get("source") or ""),
+            "normalized_issue": str(r.get("normalized_issue") or ""),
+            "review_status": str(r.get("review_status") or ""),
+        }
+        for r in (_user_request_coverage or [])
+        if isinstance(r, dict) and str(r.get("source") or "") == "explicit_user_request"
+    ]
+    meta["legal_state"] = _legal_state.to_dict()
 
     _unanswered_issue_codes = (
         check_all_issues_answered(_mandatory_issue_answers)
@@ -6683,10 +7063,14 @@ def build_clause_level_result(
             _cr_norm["redline_instruction"] = _normalize_redline_final(
                 _cr_norm["redline_instruction"]
             )
+    # 무결성 게이트가 신뢰할 수 없는 문안을 의도적으로 회수한 finding
+    # (advisory_only)은 "수정문안 없음"이 정상 상태이므로 완성도 검사의
+    # 대상이 아니다(2026-09-10 지시 항목 2).
     _incomplete_redline_ids = [
         str(cr.get("clause_id") or "")
         for cr in clause_results
         if isinstance(cr, dict) and not bool(cr.get("dedup_suppressed"))
+        and not _is_advisory_only(cr)
         and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
         and _is_incomplete_redline_final(cr.get("redline_instruction"))
     ]
@@ -6694,6 +7078,68 @@ def build_clause_level_result(
         meta["review_status"] = "REVIEW_FAILED_INCOMPLETE_REDLINE"
         meta["review_status_detail"] = f"수정 위치/방식/완성문구가 불완전한 finding: {', '.join(_incomplete_redline_ids)}"
     meta["incomplete_redline_clause_ids"] = _incomplete_redline_ids
+
+    # ── [Final Senior Counsel Gate] (2026-09-10 아키텍처 지시 항목 12) ────────
+    # 출력 직전 10개 항목을 전부 점검한다. 하나라도 실패하면 "정상 완료"로
+    # 표시하지 않는다 — 다만 담당자가 나머지 결과를 쓸 수 있도록, 차단이 아니라
+    # 사유를 기록해 문서에 그대로 싣는다(항목 2의 "절대 에러나지 않게" 와의 조화).
+    try:
+        from runtime.review.final_counsel_gate import run_final_counsel_gate as _run_final_gate
+        _final_gate = _run_final_gate(
+            legal_state=_legal_state.to_dict(),
+            clause_results=clause_results,
+            final_findings=meta.get("final_findings"),
+            statute_decisions=[d.to_dict() for d in _statute_decisions],
+            user_review_coverage=_user_request_coverage,
+            user_review_focus=_user_review_focus_raw,
+            answers=answers,
+            contract_text=str(text or ""),
+            our_side_withdrawn=_our_side_withdrawn,
+            cross_clause_suppressed=[],
+        )
+        meta["final_counsel_gate"] = _final_gate.to_dict()
+        if not _final_gate.passed and not meta.get("review_status"):
+            # 정상 완료로 표시하지 않는다. 차단 상태가 아니라 "확인 필요" 이므로
+            # 다운로드 전달 게이트가 이것을 사유로 기록하고 통과시킨다.
+            meta["review_status"] = _final_gate.to_dict()["review_status"]
+            meta["review_status_detail"] = _final_gate.to_dict()["summary"]
+    except Exception as exc:  # noqa: BLE001 - 자가점검 실패가 검토를 막지 않는다
+        logger.warning("final_counsel_gate failed: %s", exc)
+
+    # ── [에이전트 논점 최종 복원] (2026-09-10 지시 항목 3) ────────────────────
+    # 이 파이프라인 후단에는 강등·억제 루프가 여럿 있고, 그 대부분이
+    # "suggested_rewrite 가 없으면 가치가 낮다" 또는 "표시용 필터가 뺐으면
+    # 화면에서도 빼자" 를 전제로 한다. 에이전트 논점은 조문 문안이 아니라
+    # **판단**이고 인용 검증까지 마친 항목이라 그 전제가 성립하지 않는다.
+    # 실측: 담당자가 직접 물은 저작권·초상권 논점이 이 단계들에서 LOW 로
+    # 떨어지거나 suppressed 되어 최종 결과에서 사라졌다. 마지막에 한 번 더
+    # 복원하고, 그 결과를 final_findings 에도 반영한다.
+    _counsel_restored: list[str] = []
+    for _cr_fin in clause_results:
+        if not isinstance(_cr_fin, dict) or not _cr_fin.get("is_counsel_agent"):
+            continue
+        if bool(_cr_fin.get("keep_as_is")):
+            continue
+        _want_fin = str(_cr_fin.get("counsel_severity") or "").upper()
+        if _want_fin not in ("HIGH", "MEDIUM"):
+            continue
+        if bool(_cr_fin.get("dedup_suppressed")) or str(_cr_fin.get("risk_tier") or "").upper() != _want_fin:
+            _cr_fin["dedup_suppressed"] = False
+            _cr_fin["risk_tier"] = _want_fin
+            _cr_fin["severity"] = _want_fin
+            _cr_fin["review_tier"] = "MUST" if _want_fin == "HIGH" else "SUGGEST"
+            _counsel_restored.append(str(_cr_fin.get("clause_id") or ""))
+    if _counsel_restored:
+        try:
+            from runtime.review.output_filter import build_final_findings as _bff_fin
+            meta["final_findings"] = _bff_fin(
+                clause_results,
+                contract_type_code=str(_canonical_profile.contract_type or ""),
+                include_low=False,
+            )
+            meta["counsel_agent_restored_clause_ids"] = _counsel_restored
+        except Exception:
+            pass
 
     return ClauseLevelResult(
         review={

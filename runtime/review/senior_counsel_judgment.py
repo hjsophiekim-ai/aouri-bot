@@ -66,16 +66,59 @@ _RX_COST_ALLOCATION = re.compile(
     re.IGNORECASE,
 )
 
-_STATUTORY_EXPLANATION = (
-    "법률상 책임과 계약상 비용배분을 구분해야 합니다. "
-    "형사책임과 산업안전보건법·중대재해처벌법상 사업주·경영책임자의 의무는 "
-    "강행규정이므로 계약 문구로 상대방에게 이전하거나 면제할 수 없습니다 — "
-    "그런 조항은 그 범위에서 효력이 없고, 사고가 나면 우리 회사는 여전히 "
-    "행정·형사 책임의 주체가 됩니다. "
-    "다만 그로 인해 발생한 **비용의 최종 부담과 구상 범위**는 당사자 간 "
-    "약정으로 정할 수 있으므로, 협상은 '책임을 넘긴다'가 아니라 "
-    "'비용을 누가 부담하고 어떤 범위에서 구상하는가'로 설계해야 합니다."
+#: 어떤 강행규정이 걸렸는지에 따라 설명에 실제로 등장할 법률명.
+#:
+#: [2026-09-10 지시 — "실제 거래와 모순되는 템플릿 금지"]
+#: 종전에는 설명이 하나의 고정 문구였고, 그 문구가 항상 "산업안전보건법·
+#: 중대재해처벌법상 사업주·경영책임자의 의무" 를 이야기했다. 그래서 개인정보
+#: 과징금 때문에 걸린 finding 에 안전보건법 설명이 붙는 일이 생겼다(실측:
+#: 영상 콘텐츠 바터 계약의 초상권·개인정보 항목). 매칭된 법률군을 그대로
+#: 이름 붙여, 이 계약과 무관한 법률이 검토의견에 등장하지 않게 한다.
+_STATUTE_FAMILIES: tuple[tuple[str, "re.Pattern[str]", str], ...] = (
+    (
+        "safety",
+        re.compile(r"산업안전보건법|중대재해\s*처벌|중대재해처벌법|안전보건\s*(?:조치|관리)\s*의무", re.IGNORECASE),
+        "산업안전보건법·중대재해처벌법상 사업주·경영책임자의 의무",
+    ),
+    (
+        "labor",
+        re.compile(r"근로기준법|최저임금|퇴직금", re.IGNORECASE),
+        "근로기준법 등 노동관계법상 사용자의 의무",
+    ),
+    (
+        "privacy",
+        re.compile(r"개인정보\s*보호법", re.IGNORECASE),
+        "개인정보 보호법상 개인정보처리자의 의무",
+    ),
+    (
+        "criminal",
+        re.compile(r"형사\s*(?:책임|처벌)|벌금|징역|형\s*사\s*상", re.IGNORECASE),
+        "형사책임",
+    ),
+    (
+        "administrative",
+        re.compile(r"과태료|행정\s*처분|영업\s*정지|면허\s*취소|과징금", re.IGNORECASE),
+        "행정제재(과징금·과태료·영업정지 등)의 수범자 지위",
+    ),
 )
+
+
+def _statutory_explanation(text: str) -> str:
+    """실제로 걸린 강행규정을 이름으로 지목하는 설명문."""
+    names = [label for _key, pat, label in _STATUTE_FAMILIES if pat.search(text or "")]
+    if not names:
+        names = ["강행규정상 의무"]
+    # 조사(는/은) 일치 문제를 피하려고 "…에 관한 규율은" 형태로 받는다.
+    subject = " 및 ".join(names[:2])
+    return (
+        "법률상 책임과 계약상 비용배분을 구분해야 합니다. "
+        f"{subject}에 관한 규율은 강행규정이므로 계약 문구로 상대방에게 이전하거나 면제할 수 "
+        "없습니다 — 그런 조항은 그 범위에서 효력이 없고, 문제가 발생하면 우리 "
+        "회사는 여전히 행정·형사 책임의 주체가 됩니다. "
+        "다만 그로 인해 발생한 **비용의 최종 부담과 구상 범위**는 당사자 간 "
+        "약정으로 정할 수 있으므로, 협상은 '책임을 넘긴다'가 아니라 "
+        "'비용을 누가 부담하고 어떤 범위에서 구상하는가'로 설계해야 합니다."
+    )
 
 
 def classify_liability_nature(text: str) -> str:
@@ -105,13 +148,25 @@ def annotate_liability_nature(clause_results: list[dict[str, Any]] | None) -> di
             ("issue_title", "clause_title", "original_text", "problem",
              "rewrite_reason", "legal_business_reason", "suggested_rewrite")
         )
+        # 이미 붙여둔 설명문은 판정 입력에서 뺀다. 설명문 자체가 "형사책임",
+        # "행정처분" 같은 법률명을 담고 있어, 두 번째 호출에서 그것까지 매칭돼
+        # 지목 법률이 늘고 설명문이 달라지면 멱등성이 깨진다(같은 finding 에
+        # 문단이 두 번 붙는다).
+        _prev_note = str(cr.get("statutory_liability_note") or "")
+        if _prev_note:
+            blob = blob.replace(_prev_note, " ")
         nature = classify_liability_nature(blob)
         cr["liability_nature"] = nature
         if nature in (NATURE_STATUTORY, NATURE_MIXED):
-            note = _STATUTORY_EXPLANATION
+            note = _statutory_explanation(blob)
             base = str(cr.get("legal_business_reason") or "").strip()
+            if _prev_note and _prev_note != note and _prev_note in base:
+                # 지목 법률이 바뀌었으면 옛 문단을 남겨두지 않고 교체한다.
+                base = base.replace(_prev_note, "").strip()
             if note not in base:
                 cr["legal_business_reason"] = (base + "\n" + note).strip()
+            else:
+                cr["legal_business_reason"] = base
             cr["statutory_liability_note"] = note
             annotated.append({
                 "clause_id": str(cr.get("clause_id") or ""),

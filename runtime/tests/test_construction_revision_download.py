@@ -48,6 +48,22 @@ from runtime.services.query_service import RuleQueryService
 FIXTURE = Path(__file__).parent / "fixtures" / "construction_works_contract.txt"
 
 
+def _extract_document_text(fmt: str, body: bytes) -> str:
+    """생성된 DOCX/PDF 본문 텍스트 — 문서에 실제로 무엇이 적혔는지 확인용."""
+    import tempfile
+
+    from runtime.review.text_extract import extract_text_from_file
+
+    suffix = ".docx" if fmt == "docx" else ".pdf"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as fh:
+        fh.write(body)
+        path = Path(fh.name)
+    try:
+        return extract_text_from_file(path).text
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def _rate_pct(text: str) -> float | None:
     """룰 본문과 동일한 방식으로 요율(%)을 계산한다."""
     m = _RX_LATE_PENALTY_RATE.search(text)
@@ -208,13 +224,21 @@ class ConstructionRevisionDownloadTest(unittest.TestCase):
             self.fail(f"수정본(pdf) 생성 실패 status={resp.status}: {body[:600]!r}")
         self.assertTrue(body.startswith(b"%PDF"), "PDF 헤더가 아니다")
 
-    def test_meta_review_failed_blocks_the_download(self) -> None:
-        """검토 파이프라인이 세운 REVIEW_FAILED 상태가 실제로 다운로드를 막는가.
+    def test_meta_review_failed_is_disclosed_not_silently_dropped(self) -> None:
+        """검토 파이프라인이 세운 REVIEW_FAILED 상태가 문서에 드러나는가.
 
         항목 13(Final Lawyer Self-Check)과 항목 1(Legal Map 완결성 게이트)은
-        meta["review_status"] 에 사유를 세운다. 그런데 이 다운로드 경로는
-        개별 게이트만 확인하고 그 상태는 읽지 않아, blocking 실패로 판정된
-        검토가 그대로 "정상" 문서로 나갔다(2026-09-09 실측).
+        meta["review_status"] 에 사유를 세운다. 이 다운로드 경로가 그 상태를
+        아예 읽지 않아 blocking 실패로 판정된 검토가 "정상" 문서로 나가던
+        문제가 있었고(2026-09-09), 그래서 409 로 막게 했었다.
+
+        2026-09-10 지시로 처리 방식이 다시 바뀐다 — 막으면 담당자는 아무것도
+        받지 못한 채 원인도 알 수 없다("최종 수정본 생성이 또 실패했다").
+        이제는 제거·중화할 수 있는 상태를 해소하고, 그 사실을 문서 말미의
+        "자동 검증에서 보류·제외된 항목" 에 명시한 뒤 파일을 내보낸다.
+
+        따라서 이 테스트가 고정하는 계약은 "차단"이 아니라 "**조용히 정상인
+        척하지 않는 것**" 이다.
         """
         # 먼저 정상 결과를 만들어 세션에 저장시킨다.
         resp, body = self._post(
@@ -236,13 +260,19 @@ class ConstructionRevisionDownloadTest(unittest.TestCase):
                         f"/api/revision/download_{fmt}",
                         {"session_id": self.session_id},
                     )
-                    self.assertEqual(resp.status, 409, f"{fmt}: 차단되지 않았다")
-                    payload = json.loads(body.decode("utf-8"))
                     self.assertEqual(
-                        payload.get("review_status"),
-                        "REVIEW_FAILED_LAWYER_SELF_CHECK",
+                        resp.status, 200,
+                        f"{fmt}: 다운로드가 실패했다 — 제거·기록 후 전달되어야 한다: {body[:300]!r}",
                     )
-                    self.assertIn("테스트 주입", str(payload.get("detail") or ""))
+                    text = _extract_document_text(fmt, body)
+                    self.assertIn(
+                        "자동 검증에서 보류·제외된 항목", text,
+                        f"{fmt}: 검토 실패 상태가 문서에 드러나지 않았다",
+                    )
+                    self.assertIn(
+                        "최종 자가점검에서 확인이 필요한 항목이 있음", text,
+                        f"{fmt}: 어떤 사유로 보정됐는지가 문서에 없다",
+                    )
         finally:
             doc = load_session(self.session_id)
             meta = (doc.get("review_result") or {}).get("clause_meta") or {}

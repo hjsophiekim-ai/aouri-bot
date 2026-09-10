@@ -29,6 +29,7 @@ import re
 from typing import Any
 
 from runtime.review.contract_scope_policy import CONTRACT_TYPE_DOMAIN_WHITELIST
+from runtime.review.delivery_gate import withdraw_proposal
 from runtime.review.legal_effect_taxonomy import (
     LEGAL_EFFECT_TAGS,
     effects_overlap,
@@ -137,15 +138,24 @@ def enforce_clause_semantic_gate(
         report["mismatches"].append(entry)
         if hard_delete:
             continue
+        # [2026-09-10 지시 항목 2] whitelist에 없는 계약유형이라고 해서 결함을
+        # 그대로 둔 채 검토 전체를 실패로 세우면, 그 상태가 다운로드 핸들러의
+        # 409로 이어져 사용자가 몇 번을 눌러도 수정본을 받지 못한다(대물교환
+        # 계약 실측). whitelist는 "finding을 통째로 지워도 되는가"의 기준일
+        # 뿐이므로, 그 밖의 유형에서는 **신뢰할 수 없는 수정문안만** 걷어내고
+        # 문제 제기는 검토의견으로 남긴다. 그러면 잘못된 문안은 Word 파일에
+        # 들어가지 않으면서 mismatch는 실제로 해소된다.
+        withdraw_proposal(cr, status=STATUS_SEMANTIC_MISMATCH)
+        entry["remediation"] = "proposal_withdrawn"
         cr["semantic_mismatch"] = entry
         kept.append(cr)
 
-    # 삭제로 실제 제거된 mismatch는 "해결된" 것이다 — 그 자체로 검토 전체를
-    # 실패 처리하면 항상 REVIEW_FAILED가 되어 정상 결과까지 내려받을 수 없다.
-    # 제거하지 못한 채 결과에 남은 mismatch만 검토 실패 사유로 승격한다.
-    if report["mismatches"] and not hard_delete:
-        report["status"] = STATUS_SEMANTIC_MISMATCH
+    # 삭제 또는 문안 회수로 실제 해소된 mismatch는 "해결된" 것이다 — 그 자체로
+    # 검토 전체를 실패 처리하면 항상 REVIEW_FAILED가 되어 정상 결과까지
+    # 내려받을 수 없다. 두 경로 모두 결함을 제거하므로 상태를 세우지 않고,
+    # 무엇이 왜 빠졌는지는 리포트(→ 문서 말미 표)로 전달한다.
     report["removed_count"] = len(report["mismatches"]) if hard_delete else 0
+    report["withdrawn_count"] = 0 if hard_delete else len(report["mismatches"])
     clause_results[:] = kept
     return report
 
@@ -236,13 +246,17 @@ def enforce_valid_clause_references(
         report["invalid_references"].append(entry)
         if hard_delete:
             continue
+        # semantic gate와 동일한 처리(2026-09-10 지시 항목 2) — 존재하지 않는
+        # 조항을 가리키는 것은 **문안**이므로 그 문안만 회수하고 문제 제기는
+        # 검토의견으로 남긴다.
+        withdraw_proposal(cr, status=STATUS_INVALID_CLAUSE_REFERENCE)
+        entry["remediation"] = "proposal_withdrawn"
         cr["invalid_clause_reference"] = entry
         kept.append(cr)
 
-    # semantic gate와 같은 이유 — 삭제로 제거된 잘못된 참조는 해결된 것이고,
-    # 제거하지 못하고 결과에 남은 것만 검토 실패 사유가 된다.
-    if report["invalid_references"] and not hard_delete:
-        report["status"] = STATUS_INVALID_CLAUSE_REFERENCE
+    # semantic gate와 같은 이유 — 삭제 또는 문안 회수로 제거된 잘못된 참조는
+    # 해결된 것이므로 검토 실패 상태를 세우지 않는다.
     report["removed_count"] = len(report["invalid_references"]) if hard_delete else 0
+    report["withdrawn_count"] = 0 if hard_delete else len(report["invalid_references"])
     clause_results[:] = kept
     return report

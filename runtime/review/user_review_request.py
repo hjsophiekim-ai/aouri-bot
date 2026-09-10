@@ -57,8 +57,18 @@ logger = logging.getLogger(__name__)
 # 판단할 수 없어 사실관계 확인이 선행되어야 하는 쟁점을 "적정"으로 위장하지
 # 않기 위한 값이다.
 VERDICT_NEEDS_FACTS = "사실관계 추가확인"
+
+# [2026-09-10 지시] 사용자가 "이 법이 적용되는지"를 물으면, 그 답은
+# "수정 필요/적정" 이 아니라 **적용 여부** 그 자체다. 종전에는 하도급법
+# 적용 여부 질문에 "관련 조항 없음 → 사실관계 추가확인" 이 나갔다 —
+# 적용요건 게이트가 이미 법정 요건으로 비적용을 확정했는데도 그 결론이
+# 사용자 질문의 답으로 연결되지 않았기 때문이다.
+VERDICT_STATUTE_APPLICABLE = "적용"
+VERDICT_STATUTE_NOT_APPLICABLE = "비적용"
+
 USER_REQUEST_VERDICTS: tuple[str, ...] = (
     VERDICT_OK, VERDICT_NEEDS_FIX, VERDICT_SEPARATE_AGREEMENT, VERDICT_NEEDS_FACTS,
+    VERDICT_STATUTE_APPLICABLE, VERDICT_STATUTE_NOT_APPLICABLE,
 )
 
 SOURCE_EXPLICIT = "explicit_user_request"
@@ -599,12 +609,42 @@ def _direct_answer(
     return lead
 
 
+def _match_statute_decision(
+    issue: "UserReviewIssue",
+    statute_decisions: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """이 사용자 쟁점이 적용요건 게이트가 판단한 법률을 묻고 있는가.
+
+    법률명이 쟁점 서술(원문·정규화 문장·검색 키워드) 어디에든 등장하면
+    그 법률에 대한 질문으로 본다. 법률명은 고유명사라 오탐이 사실상 없다.
+    """
+    if not statute_decisions:
+        return None
+    hay = " ".join(
+        [
+            issue.original_user_text or "",
+            issue.normalized_issue or "",
+            " ".join(issue.search_keywords or []),
+        ]
+    )
+    if not hay.strip():
+        return None
+    for d in statute_decisions:
+        if not isinstance(d, dict):
+            continue
+        name = str(d.get("statute") or "").strip()
+        if name and name in hay:
+            return d
+    return None
+
+
 def build_user_request_coverage(
     issues: list[UserReviewIssue],
     *,
     clause_results: list[dict[str, Any]],
     clauses: list[Any] | None = None,
     catalog_answers: list[dict[str, Any]] | None = None,
+    statute_decisions: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """각 사용자 요청 쟁점에 대해 최종 판단을 만든다.
 
@@ -708,6 +748,43 @@ def build_user_request_coverage(
             ranked.append((hit[0], -hit[1], -len(str(cr.get("display_path") or "")), cr))
         ranked.sort(key=lambda x: (x[0], x[1], x[2]))
         matched = [cr for _, _, _, cr in ranked]
+
+        # ── 적용요건 게이트가 이미 답한 법률 질문 (2026-09-10 지시) ─────────
+        # "이 계약에 하도급법이 적용되는지" 같은 질문의 답은 조항 검색 결과가
+        # 아니라 **법정 요건 판단**이다. 게이트가 판단한 법률이 이 질문에서
+        # 거론되고 있으면 그 결론을 그대로 답으로 쓴다 — 그러지 않으면 게이트가
+        # "비적용"을 확정해 놓고도 사용자에게는 "관련 조항 없음, 사실관계
+        # 추가확인"이 나간다(실측).
+        _statute_hit = _match_statute_decision(issue, statute_decisions)
+        if _statute_hit is not None:
+            _concl = str(_statute_hit.get("conclusion") or "")
+            _verdict = (
+                VERDICT_STATUTE_NOT_APPLICABLE if _concl == "비적용"
+                else VERDICT_STATUTE_APPLICABLE if _concl in ("적용", "일부 적용")
+                else VERDICT_NEEDS_FACTS
+            )
+            out.append({
+                "issue_id": issue.issue_id,
+                "source": issue.source,
+                "original_user_text": issue.original_user_text,
+                "relevant_clause": "법률 적용요건 판단(조항 무관)",
+                "direct_answer": (
+                    f"{_statute_hit.get('statute')}: {_concl} — {_statute_hit.get('reason')}"
+                ),
+                "issue_topic": issue_topic,
+                "normalized_issue": issue.normalized_issue,
+                "catalog_code": issue.catalog_code,
+                "custom_user_issue": issue.is_custom,
+                "relevant_clause_ids": list(issue.relevant_clause_ids),
+                "relevant_clause_paths": sorted(p for p in linked_paths if p),
+                "answer_clause_paths": [],
+                "review_status": _verdict,
+                "needs_revision": False,
+                "conclusion": str(_statute_hit.get("reason") or ""),
+                "matched_finding_ids": [],
+                "answered_by": "statute_applicability_gate",
+            })
+            continue
 
         conclusion = ""
         if matched:

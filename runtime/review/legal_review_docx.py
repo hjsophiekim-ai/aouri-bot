@@ -598,6 +598,8 @@ def build_legal_review_docx(
     clause_results: list[dict[str, Any]],
     original_clauses: list[dict[str, Any]] | None = None,
     detailed_contract_profile: dict[str, Any] | None = None,
+    # canonical_state: 계약유형·당사자 지위의 유일한 출처(3차 지시 1항).
+    canonical_state: dict[str, Any] | None = None,
     # Pre-filtered issues (if None, will be built from clause_results)
     top_risks_filtered: list[dict[str, Any]] | None = None,
     high_issues_filtered: list[dict[str, Any]] | None = None,
@@ -610,6 +612,12 @@ def build_legal_review_docx(
     user_review_coverage: list[dict[str, Any]] | None = None,
     user_review_parse_degraded_notice: str = "",
     legal_applicability_review: list[dict[str, Any]] | None = None,
+    # [2026-09-10 지시 항목 2] 자동 검증이 다운로드를 막는 대신 제거·중화한
+    # 항목들. 각 원소: {"reason", "clauses", "detail", "code"}.
+    delivery_remediations: list[dict[str, Any]] | None = None,
+    # [2026-09-10 지시] 법률 적용요건 선판단 결론. 조항별 검토보다
+    # 앞에 표시해, 어떤 법률이 왜 적용/비적용인지부터 읽히게 한다.
+    statute_gate_decisions: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review DOCX.
 
@@ -759,6 +767,7 @@ def build_legal_review_docx(
         medium_issues=medium_issues,
         is_counterparty_form=is_counterparty_form,
         format_val=_format_val,
+        canonical_state=canonical_state,
     ):
         _color = COLOR_HIGH if _hr.is_high_risk else (COLOR_MEDIUM if _hr.is_medium_risk else None)
         _para(
@@ -778,6 +787,30 @@ def build_legal_review_docx(
     # 다만 사용자가 특정 법률의 적용 여부를 물어 [관련 법률 적용성] 섹션이
     # 생기는 경우(2026-09-02 지시)에는 그 섹션이 TOP 5가 있던 자리를 대신
     # 차지하므로 원래 번호 체계(HIGH=3, MEDIUM=4)를 유지한다.
+    # ── 적용 법률 판단 (2026-09-10 지시) ─────────────────────────────────────
+    # "법률 적용 결론을 먼저 표시" — 조항별 검토를 읽기 전에, 어떤 법률이
+    # 적용되고 어떤 법률이 왜 적용되지 않는지부터 보이게 한다. 번호 체계를
+    # 흔들지 않도록 별도 번호 없는 선행 블록으로 넣는다.
+    if statute_gate_decisions:
+        _separator(body)
+        p_sg = _p(body)
+        r_sg = _r(p_sg, bold=True)
+        _t(r_sg, "적용 법률 판단 (조항별 검토의 전제)")
+        for _d in statute_gate_decisions:
+            if not isinstance(_d, dict):
+                continue
+            _concl = str(_d.get("conclusion") or "")
+            _c_color = COLOR_HIGH if _concl == "적용" else (COLOR_MEDIUM if _concl == "사실확인 필요" else COLOR_LOW)
+            p_d = _p(body)
+            r_d = _r(p_d, bold=True, color=_c_color)
+            _t(r_d, f"■ {_d.get('statute')}: {_concl}")
+            _reason = str(_d.get("reason") or "").strip()
+            if _reason:
+                _para(body, _reason, indent=1)
+            for _f in (_d.get("facts_needed") or [])[:4]:
+                _para(body, f"확인 필요: {_f}", indent=1, italic=True)
+        _blank(body)
+
     _has_legal_applicability = bool(legal_applicability_review) and not _is_dealer_rental_docx
     _sec_offset = 0 if _has_legal_applicability else -1
 
@@ -1002,6 +1035,32 @@ def build_legal_review_docx(
         ))
     else:
         _para(body, "제외된 항목: 없음")
+
+    # ── 자동 검증에서 보류·제외된 항목 (2026-09-10 지시 항목 2) ──────────────
+    # 무결성 게이트가 다운로드를 막는 대신 결함을 제거·중화한 경우, 무엇이 왜
+    # 빠졌는지를 문서에 그대로 남긴다 — 조용히 사라지는 항목이 없어야 한다.
+    if delivery_remediations:
+        _separator(body)
+        _heading1(body, f"{_sec_excl_base + _sec_offset + 1}. 자동 검증에서 보류·제외된 항목")
+        _para(body, (
+            "아래 항목은 자동 검증에서 신뢰할 수 없다고 판정되어 수정문안이 보류되었거나 "
+            "결과가 보정되었습니다. 문제 제기 자체는 유효할 수 있으므로 담당 변호사가 "
+            "직접 확인해 주십시오."
+        ), color=COLOR_MEDIUM)
+        _blank(body)
+        for _rem in delivery_remediations:
+            if not isinstance(_rem, dict):
+                continue
+            p_rm = _p(body)
+            r_rm = _r(p_rm, bold=True, color=COLOR_MEDIUM)
+            _t(r_rm, f"· {str(_rem.get('reason') or _rem.get('code') or '')}")
+            _detail = str(_rem.get("detail") or "").strip()
+            if _detail:
+                _para(body, safe_truncate(_detail, 400), indent=1)
+            _clauses = str(_rem.get("clauses") or "").strip()
+            if _clauses and _clauses != "-":
+                _para(body, f"해당 항목: {_clauses}", indent=1, italic=True)
+            _blank(body)
 
     _blank(body)
     ET.SubElement(body, _w("sectPr"))

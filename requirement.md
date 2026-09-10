@@ -315,10 +315,124 @@ build_clause_level_result()
 
 ---
 
+## [Legal Reasoning Engine] 판단 순서 — 이 순서를 뒤집지 말 것
+> 최종 업데이트: 2026-09-10
+> 전체 요구사항: 상위 저장소 `requirement.md` > "v8.0 — 공통 Legal Reasoning Engine"
+
+    거래 실질(조항별 법률효과)  →  거래 원형(archetype)  →  계약유형 라벨
+        ↑ 판단의 출발점                                      ↑ 보조자료
+
+계약유형 enum 을 출발점으로 되돌리면 enum 에 없는 유형(라이선스·바터)이 다시 키워드
+캐스케이드의 아무 가지에나 떨어진다. 실측: 34,000자 LICENSE AGREEMENT → `purchase_supply`.
+
+| 모듈 | 역할 |
+|---|---|
+| `review/clause_effect.py` | 14개 법률효과 범주 + 거래 원형 판정. 계약유형을 묻지 않는다 |
+| `review/legal_state.py` | Canonical Legal State 11축. **검토 시작 시 한 번만** 만들고 이후 재분류 금지. `from_dict()` 로 재계산 없이 복원 |
+| `review/effect_baseline_review.py` | 효과 기반 기본검토 19종. 시그니처에 `contract_type` 인자가 **없다** |
+| `review/minimal_edit.py` | 효과 범주별 최소수정안. 자리표시자 금지, 불가 시 `FACT_CONFIRMATION_REQUIRED` + 확인 사실 명시 |
+| `review/final_counsel_gate.py` | 출력 직전 10개 항목 자가점검. 실패 시 `REVIEW_NEEDS_ATTENTION`(차단 아님) |
+| `questions/question_scope.py` | 질문군별 성립 원형 선언 → canned question 차단 |
+| `questions/effect_questions.py` | 효과에서 직접 만드는 기본 질문. 계약서에 답이 있으면 묻지 않는다 |
+
+### 새 유형을 추가할 때
+
+1. `clause_effect._RX_SELF_DECLARED` 에 자기 규정 패턴을 넣거나, 효과 조합 규칙을 추가한다.
+2. `legal_state.ARCHETYPE_OF_TYPE_CODE` / `TYPE_CODE_OF_ARCHETYPE` 에 매핑을 넣는다.
+3. `question_scope.QUESTION_SCOPE` 에 그 원형에서 성립하는 질문군을 선언한다.
+4. **유형별 finding 룰팩을 새로 만들지 않는다** — 효과 기반 기본검토가 이미 돈다.
+   유형 전용 정밀 룰은 그 위에 얹는 보조자료다.
+
+### 검증은 반드시 교차로
+
+- `runtime/tests/test_cross_contract_holdout.py` — 8종 × 11개 불변식(AI-off, 결정론적)
+- `runtime/tests/test_legal_reasoning_architecture.py` — 아키텍처 불변식
+- `scripts/run_ai_holdout.py` — **AI 를 켠** 상태로 5종 교차 확인(conftest 가 pytest 의 AI 를 끄므로 별도 실행)
+
+한 계약의 골든 테스트만 통과하고 다른 유형이 깨지는 것은 완료가 아니다.
+
+---
+
+## [Statute Applicability Gate] 법률 적용요건 선판단
+> 최종 업데이트: 2026-09-10
+> 적용 파일: `runtime/review/statute_applicability_gate.py`
+> 전체 요구사항: 상위 저장소 `requirement.md` > "v7.0 — 법률 적용요건 선판단 + 사내변호사형 에이전트 검토"
+
+**법률명이 떠오른다고 finding 을 만들지 않는다. 법정 요건을 먼저 통과해야 한다.**
+
+- `assess_statutes()` 가 법률별 `StatuteDecision`(적용/비적용/일부 적용/사실확인 필요 + 이유)을 만든다.
+- `비적용`이면 `deactivate_inapplicable_statute_findings()` 가 그 법률 전용 finding 을 제거한다.
+- 결론은 `meta["statute_applicability_gate"]` 에 실리고, DOCX/PDF 에서 조항별 검토보다 **먼저** 표시된다.
+- 사용자가 그 법률의 적용 여부를 물었으면 `user_review_request` 가 이 결론을 그대로 답으로 쓴다.
+- 요건을 특정할 수 없으면 `사실확인 필요`로 두고 rule 을 끄지 않는다(모르는 상태의 비활성화 = 탐지 누락).
+
+### 하도급법
+
+용역위탁은 법 제2조 제11항이 "**용역업을 영위하는 사업자**가 그 업에 따른 용역수행행위의 전부 또는
+일부를 위탁" 하거나 "위탁받은 용역을 재위탁" 하는 경우로 한정한다. 외부업체에 용역을 맡겼다는
+사실만으로는 성립하지 않는다.
+
+판단은 `OUR_BUSINESS_DOMAINS`(우리가 업으로 하는 일) vs `infer_entrusted_domain()`(이번에 위탁한 일)의
+관계로만 한다 — 회사명·계약명 하드코딩 없음.
+
+퍼시스그룹 계열사의 업 = 가구 제조·판매 / 설치용역 / 물류(바로스).
+→ **콘텐츠 제작·마케팅 광고·프로그램 개발 계약은 하도급법 비적용.**
+→ 가구 OEM(제조위탁), 수주 용역의 재위탁은 **적용**.
+→ 영상제작사·광고대행사가 자기 제작업무를 외주 주면 **적용**(반대 방향도 동작).
+
+비적용 시 꺼지는 rule: 하도급대금 / 지급기한 / 부당 단가 인하 / 대물변제 금지 / 부당 해지 / 원사업자·수급사업자.
+
+---
+
+## [Delivery Gate] 최종 수정본 다운로드는 실패하지 않는다
+> 최종 업데이트: 2026-09-10
+> 적용 파일: `runtime/review/delivery_gate.py`, `runtime/api/server.py`
+
+게이트를 약화시키지 않되, **탐지 → 제거·중화 → 문서에 명시 → 전달** 순서로 바꾼다.
+
+- `remediate_review_status()` — `REVIEW_FAILED_*` 는 기본적으로 제거·기록 대상이다.
+  실제로 막는 것은 `NON_REMEDIABLE_STATUSES`(내보낼 내용 자체가 없는 경우)뿐.
+- `withdraw_proposal()` — 신뢰할 수 없는 **수정문안만** 회수하고(`advisory_only`) 문제 제기는 남긴다.
+  문안 자리에는 보류 사유를 적는다(비우면 `output_filter.is_valid_issue()` 가 finding 을 통째로 버린다).
+- 제거·중화 내역은 DOCX/PDF 말미 **"자동 검증에서 보류·제외된 항목"** 에 전부 노출된다.
+- `_content_disposition()` — 한글 파일명 RFC 6266/5987 인코딩(미적용 시 `UnicodeEncodeError` 로 무응답 절단).
+
+---
+
+## [Our Side Protection] 유리조항 보호 — 강행법규 준수 우선
+> 최종 업데이트: 2026-09-10
+> 적용 파일: `runtime/review/our_side_protection.py`
+
+- `detect_weakening()` — 원문이 상대방의 청구를 차단(`청구할 수 없다` 등)하는데 수정안이
+  단서로 예외를 신설(`다만/단 … 청구가 가능`)하면 약화로 본다. 계약·조항 하드코딩 없이 문형만 본다.
+- `is_legal_compliance_fix()` — 다만 **적용되는** 강행법규(`MANDATORY_FAIRNESS_STATUTES`)의
+  **위반 시정**(법률명 + 위법성 판단 어휘)이면 회수하지 않고 `legal_compliance_override` 로 유지한다.
+  우리 계약서가 법을 어기며 갑질하는 내용이면 고치는 것이 맞기 때문이다.
+- 적용 여부는 `statute_applicability_gate` 결과를 그대로 쓴다. **비적용으로 명시된** 법률만
+  근거에서 제외하고, 게이트가 판단하지 않은 법률은 후보로 남긴다.
+
+---
+
+## [Counsel Agent] 사내변호사형 3-Pass 검토
+> 최종 업데이트: 2026-09-10
+> 적용 파일: `runtime/review/counsel_agent.py`
+
+이해(거래구조 확정) → 쟁점(법률·세무·경제 3축) → 검증(인용 실재 여부를 **코드가** 대조 + 중요도 컷).
+
+- 인용문 검증은 AI 에게 되묻지 않는다. 축약 인용이면 앵커(연속 30자)로 찾아 **계약서의 실제 문장으로 교체**한다.
+- 에이전트 논점은 조항 동일성 병합(`output_filter._merge_same_clause_issues`), 조 단위 통합
+  (`_apply_article_dedup_and_consolidation`), HIGH 개수 상한(`_apply_review_priority_engine`)의 대상이 아니다.
+- `counsel_severity` 를 보관했다가 출력 직전에 등급을 복원한다 — 후단 강등 루프 대부분이
+  "suggested_rewrite 가 없으면 가치가 낮다"를 전제로 하는데, 에이전트 논점은 조문 문안이 아니라 판단이다.
+
+---
+
 ## [Changelog]
 
 | 날짜 | 변경 내용 |
 |---|---|
+| 2026-09-10 | v8.0 공통 Legal Reasoning Engine — 판단 순서 역전(법률효과 → 거래 원형 → 계약유형), Canonical Legal State 11축, 효과 기반 기본검토, 자리표시자 금지·최소수정안, canned question 범위 게이트, 적용요건 게이트 6법률, UI/DOCX 단일 객체, Final Counsel Gate 10항목. 8종 교차 hold-out + AI-on 5종 통과 |
+| 2026-09-10 | 법률 적용요건 선판단 게이트, 사내변호사형 3-Pass 에이전트, 전달 게이트(409 → 제거·기록 후 전달), 거래실질 정합성 검사, 계약을 읽고 만드는 사전질문, keyword-only matching 금지, 조문 존재 판정을 발췌가 아닌 전문으로 |
 | 2026-05-07 | Advanced Review Logic (필터 1~4) 추가, clause_level.py 적용 |
 | 2026-05-07 | Zero-Hallucination Guardrail 추가 (제1·2·3조 보호, Advisory 금지키워드, 무관법령 차단) |
 | 2026-05-07 | Expert Advisory Review Logic 추가 (계약 유형 분류, IP CRITICAL 점검, 키워드 템플릿 루프 격리) |
