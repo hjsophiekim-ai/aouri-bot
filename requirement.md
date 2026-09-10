@@ -1367,10 +1367,709 @@ c. 공급자에게 과도하지 않도록 한정 문구 포함
 
 ---
 
+---
+
+## v3.0 — 위탁판매 대리점 계약 정밀 검토 엔진 (2026-06-02)
+
+### 실패 사례 기반 개선 (OPC_퍼시스_판매대리점_계약서_260430)
+
+#### 7가지 핵심 문제 및 수정 방향
+
+1. **우리 측 지위 오인식 수정**
+   - 퍼시스 = 공급업자, 대리점법상 공급업자, 위탁판매 구조의 운영 주체로 명확히 인식
+   - `contract_classifier.py`: 그룹사(퍼시스·일룸·시디즈·데스커·바로스) 전체 인식 엔진 통합
+
+2. **거래구조 구조적 수정 체계**
+   - 제5조 제1항 + 제6조(제2, 6, 12, 13항) + 제5조의2를 연결해서 구조 불일치 탐지 및 수정
+   - 법적 주체(계약 당사자, 세금계산서 발행, 대금 수금) vs. 지원업무(용역 수행자) 명확히 구분
+   - `dealer_direct_findings.py`: DD-001 ~ DD-010 detection rules
+
+3. **제6조 제13항 '모든 책임' 조항**
+   - HIGH + 대리점 귀책 범위 한정 + 공급업자 지시/승인/오류 제외 수정문안 제시 (필수)
+   - `severity_reclassifier.py`: `overbroad_all_liability` → 자동 HIGH 업그레이드
+
+4. **제16조 상계 조항 심각도 재분류**
+   - LOW → MEDIUM 이상 강제 (setoff 키워드 감지 시 자동 업그레이드)
+   - 사전통지 + 산정근거 + 증빙 + 이의제기기간 + 다툼 없는 금액 우선 정산 수정문안 포함
+   - `severity_reclassifier.py`: `reclassify_setoff_clause()` 
+
+5. **제19조 제4항 개발계약 IP 문구 오진 방지**
+   - 위탁판매/대리점 계약에서 수탁자·결과물·오픈소스·소스코드·라이선스 문구 절대 금지
+   - `hallucination_guard.py`: `DEV_CONTRACT_PHRASES` 목록 + `check_revision_text()` 검증
+   - 계약 유형별 금지 문구 목록은 `output_filter.py`의 `is_valid_issue()` 최종 관문에서도 차단
+
+6. **출력 노이즈 억제 (LOW 기본 숨김)**
+   - HIGH/MEDIUM만 본문 표시, LOW는 사용자 요청 시만 부록으로
+   - MEDIUM 최대 10개, Top risk 최대 5개
+   - `output_filter.py`: `filter_issues()` 함수
+
+7. **플레이스홀더 텍스트 금지**
+   - "제안 문안 없음", "사유 없음", "원문 핵심: -" 포함 이슈 자동 제외
+   - HIGH인데 proposed_revision 없으면 출력 제외
+   - `output_filter.py`: `is_valid_issue()` 품질 관문
+
+### 새 모듈 목록
+
+| 파일 | 역할 |
+|------|------|
+| `runtime/review/contract_classifier.py` | 상세 ContractProfile (법적 역할 포함), 그룹사 인식 엔진 |
+| `runtime/review/hallucination_guard.py` | 계약유형별 금지 문구 가드레일 |
+| `runtime/review/output_filter.py` | ReviewIssue 데이터클래스, 품질 필터, 노이즈 억제 |
+| `runtime/review/severity_reclassifier.py` | 심각도 자동 업그레이드 규칙 |
+
+### 수정된 기존 모듈
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `runtime/review/party_role.py` | 그룹사 전체 인식 (일룸·시디즈·데스커·바로스·퍼시스홀딩스) |
+| `runtime/review/classify.py` | "위탁판매 대리점" 계약 유형 추가, 우선순위 재조정 |
+| `runtime/review/final_review_context.py` | DetailedContractProfile 통합 |
+
+### ContractProfile 필드 (contract_classifier.py)
+
+```python
+ContractProfile(
+    contract_type,            # consignment_sales_agency | dealer_agency | ...
+    our_party,                # 퍼시스 | 일룸 | 시디즈 | 데스커 | 바로스
+    counterparty,             # 대리점 이름
+    our_legal_role,           # supplier | buyer | contractor ...
+    counterparty_legal_role,  # consignment_dealer | dealer | ...
+    customer_contracting_party,  # 퍼시스 | needs_clarification_with_high_risk
+    payment_collection_party,    # 퍼시스 | needs_clarification_with_high_risk
+    tax_invoice_issuer,          # 퍼시스 | needs_clarification_with_high_risk
+    agency_authority,            # bool | None
+    confidence,                  # 0.0–1.0
+    reasons,                     # 분류 근거 목록
+    unresolved_questions,        # 미결 이슈 목록 (HIGH 리스크 신호 포함)
+)
+```
+
+### Severity 자동 업그레이드 규칙 (severity_reclassifier.py)
+
+HIGH 자동 업그레이드:
+- 세금계산서 발행 주체가 대리점으로 기재
+- 대리점이 고객과 직접 계약하는 것처럼 기술
+- 대금 수금 업무를 성실히 수행 (책임 이전)
+- 모든 책임/일체 책임을 대리점에게 부과
+- 공급 중단/물량 축소 임의 결정 가능
+- 권리행사(신고·분쟁조정)에 대한 불이익 가능성
+
+MEDIUM 자동 업그레이드 (현재 LOW인 경우):
+- 비용부담 기준은 있으나 상한/이의절차 미흡
+- 해지/갱신거절 사유가 "유통질서 훼손" 등 포괄적
+- 인센티브가 시혜적 혜택/재량으로만 기재
+- 상계 조항에 통지만 있고 이의절차/확정 전 상계 제한 없음
+
+### 테스트 (test_fursys_consignment_regression.py)
+
+36개 테스트, 17개 서브테스트 — 전체 PASS
+
+---
+
+---
+
+## v4.0 — 렌탈대리점 계약 전문 변호사급 검토 엔진 (2026-06-30)
+
+### 배경 — 기존 시스템의 구조적 한계
+
+`dealer_rental_service_contract` (퍼시스 렌탈 위탁 대리점 계약서) 검토에서 다음 문제가 반복됨:
+1. TOP 5 리스크에 isr_*/sppc_* (설치안전·특정계약 룰) 가 올라옴
+2. 해지 조항 수정문안에 "소유권 표식·채권추심" 텍스트 삽입
+3. 양도 조항에 "판촉비·광고비·반품비·원상회복비" 텍스트 삽입
+4. 비밀유지 조항에 "인력 채용·배치·평가" 텍스트 삽입
+5. UI 필수수정 건수 ≠ DOCX HIGH 건수 (카운트 분기)
+6. 전문 변호사 관점 핵심 이슈(고객 미수금, 수수료 차감, 보증금 상계, 해지·갱신거절, 비용전가, 개인정보)가 TOP에 선정되지 않음
+
+### 수정 원칙
+
+> **이번 수정은 룰 추가가 아니라 법률검토 엔진 구조 자체를 바꾸는 작업이다.**
+> 잘못된 결과 차단을 최우선으로 한다.
+
+---
+
+### 1. 당사자/역할 매트릭스 (dealer_rental_service_contract 전용)
+
+| 역할 | 값 |
+|------|----|
+| our_company | 퍼시스 |
+| supplier | 퍼시스 (법적 공급자, 렌탈 계약 당사자) |
+| dealer | 대리점 (판매지원 용역자, 계약 당사자 아님) |
+| customer_contract_party | 퍼시스/공급업자 |
+| invoice_issuer | 퍼시스/공급업자 |
+| billing_party | 퍼시스/공급업자 |
+| collection_role | 대리점은 수금지원자(법적 주체 아님) |
+| dealer_agency_authority | False |
+| ownership_party | 퍼시스 |
+
+**표현 충돌 탐지**: 본문에 "대리점은 고객과 직접 계약을 체결" / "대리점이 고객에게 세금계산서를 발행" 등의 문구가 있으면 `role_matrix.conflicts` 목록에 추가하고 DLR-001 HIGH 리스크로 연결.
+
+---
+
+### 2. DLR 룰팩 — dealer_rental_service_contract 전용 8개 규칙
+
+`runtime/review/dealer_rental_rules.py` 신규 생성. 이 8개 룰만 `dealer_rental_service_contract`에 적용된다.
+isr_*, sppc_*, pi_*, svc_* 등 기존 일반 룰은 **모두 차단**.
+
+| 룰 ID | 제목 | 등급 | 승인필요 | 핵심 법적 근거 |
+|-------|------|------|----------|---------------|
+| DLR-001 | 고객계약 구조/대리권 오인 | HIGH | O | 소비자보호법·부가가치세법 §32 |
+| DLR-002 | 세금계산서/렌탈료 청구 주체 혼선 | HIGH | O | 부가가치세법 §32 |
+| DLR-003 | 고객 미수금 책임 전가 | HIGH | O | 대리점거래법 §12, 공정거래법 §45 |
+| DLR-004 | 수수료 지급 제한/차감/상계/거래보증금 공제 | HIGH | O | 대리점거래법 §12, 공정거래법 §45 |
+| DLR-005 | 계약해지/갱신거절/물량축소/업무이관 | HIGH | O | 대리점거래법 §13·§14 |
+| DLR-006 | 비용분담/판촉비/광고비/반품비/원상회복비 전가 | MEDIUM | X | 대리점거래법 §12 |
+| DLR-007 | 대리점 경영활동 간섭/인력통제 | MEDIUM | X | 대리점거래법 §12 |
+| DLR-008 | 개인정보/고객정보 처리 및 계약종료 후 이관 | HIGH | O | 개인정보보호법 §26·§28의2 |
+
+**TOP 리스크 고정 우선순위**: DLR-001 → DLR-003 → DLR-004 → DLR-005 → DLR-008 → DLR-006 → DLR-007 → DLR-002
+
+각 DLR 룰은 다음 전문 변호사급 필드를 포함한다:
+
+```python
+@dataclass
+class DLRRule:
+    rule_id: str
+    rule_title: str
+    severity: str                    # "HIGH" | "MEDIUM"
+    approval_required: bool
+    trigger_keywords: list[str]      # 본문 substring 매칭
+    trigger_patterns: list[re.Pattern]
+    clause_topics_allowed: list[str]
+    issue_title: str
+    legal_risk: str                  # 법령·조문 근거 + 분쟁 결과
+    business_risk: str               # 회사 금전·운영 손실
+    why_this_matters: str            # 이 계약 구조에서 특히 중요한 이유
+    required_action: str
+    proposed_clause: str             # 협상 즉시 사용 가능한 한국어 조항
+    negotiation_position: str        # 협상 가이드
+```
+
+---
+
+### 3. review_orchestrator.py — 7단계 통합 파이프라인
+
+`runtime/review/review_orchestrator.py` 신규 생성. `dealer_rental_service_contract`에서는 반드시 이 순서로 실행한다.
+
+```
+A. 계약구조 판정     — contract_classifier.classify_contract_detailed()
+B. 당사자/역할 매트릭스 생성  — RoleMatrix 빌드, 표현 충돌 탐지
+C. 조항별 법률주제 분류  — 제N조 제목 → clause_topic 추출 (rule-based, LLM 불필요)
+D. 계약유형별 적용 가능 룰 선별  — DLR-001..008만, isr_*/sppc_* 완전 차단
+E. 조항-문안 적합성 검증  — 조항 topic vs. 수정문안 hard gate
+F. 전문변호사형 TOP 리스크 선정  — DLR 우선순위 순 정렬, MAX 5개
+G. UI/워드/다운로드용 final_findings.json 생성  — 단일 소스
+```
+
+#### ProfessionalFinding 데이터클래스
+
+```python
+@dataclass
+class ProfessionalFinding:
+    rule_id: str
+    issue_title: str
+    relevant_clause: str
+    original_excerpt: str
+    legal_risk: str
+    business_risk: str
+    why_this_matters: str
+    risk_level: str          # "HIGH" | "MEDIUM" | "LOW"
+    approval_required: bool
+    required_action: str
+    proposed_clause: str
+    negotiation_position: str
+    evidence_from_contract: str
+    confidence: float
+
+    @property
+    def display_bucket(self) -> str:
+        # HIGH → "필수수정", MEDIUM → "권장수정", LOW → "참고"
+```
+
+#### final_findings.json 구조 (단일 소스)
+
+```json
+{
+  "contract_type": "dealer_rental_service_contract",
+  "role_matrix": { ... RoleMatrix 필드 ... },
+  "final_findings": {
+    "high_count": 4,
+    "medium_count": 2,
+    "low_count": 0,
+    "must_fix_count": 4,
+    "display_buckets": { "필수수정": 4, "권장수정": 2, "참고": 0 },
+    "top_risks": [ ... ProfessionalFinding × 5 ],
+    "high_issues": [ ... ],
+    "medium_issues": [ ... ]
+  }
+}
+```
+
+**UI, DOCX, 다운로드 수정본 모두 이 단일 final_findings를 사용**. 카운트 분기 = 테스트 실패.
+
+---
+
+### 4. 조항-문안 적합성 Hard Gate (Step E)
+
+`hallucination_guard.py`의 `check_revision_text()` + `review_orchestrator.py` Step E 양쪽에서 이중 차단.
+
+| 조항 topic | 차단 키워드 (수정문안에 포함 시 차단) |
+|------------|--------------------------------------|
+| termination | 소유권, 채권추심, 소유권 표식 |
+| confidentiality | 인력 채용, 인력 배치, 인력 평가, 직원 채용, 스카우트 |
+| assignment / assignment_party_change | 판촉비, 광고비, 반품비, 원상회복비, 마케팅 비용 |
+| dispute_resolution | 수수료 산정, 용역수수료, 정책지원금 |
+
+차단 시 수정문안 → `"자동수정 보류: 해당 수정문안은 본 조항의 법률주제와 불일치합니다."`
+
+---
+
+### 5. isr_*/sppc_* 완전 차단 — 3중 게이트
+
+`dealer_rental_service_contract`에서 isr_*, sppc_*, pi_*, svc_* 룰은 절대 HIGH/필수수정/승인필요로 올라가지 않는다.
+
+| 차단 위치 | 구현 |
+|-----------|------|
+| server.py 재분류 루프 | 재분류 전 LOW 강제 다운그레이드 |
+| output_filter.filter_issues() | `_DEALER_TYPE_CODES` 체크 → LOW 강제 |
+| legal_review_docx._filter_and_sort_issues() | `contract_type_code` 파라미터 → LOW 강제 |
+
+---
+
+### 6. ContractProfile / 분류기 수정사항
+
+`runtime/review/contract_classifier.py`:
+
+1. **`_BRAND_PRIORITY` 순서**: 퍼시스홀딩스 → 시디즈 → 일룸 → 데스커 → **퍼시스** → 바로스 (퍼시스가 바로스보다 앞)
+   - 이유: 바로스는 퍼시스의 A/S 협력사. 본문에 "바로스"가 등장해도 our_party=퍼시스여야 함.
+
+2. **Step -1 body-text forced classification**: 아래 신호 중 2개 이상 포함 시 `dealer_rental_service_contract`로 강제 확정
+   ```
+   "공급업자는 고객과 직접 렌탈 계약"
+   "대리점은 위탁받은 범위 내에서"
+   "대리점은 계약 당사자가 아니며"
+   "대리점은 고객과의 렌탈계약의 당사자가 아니며"
+   "공급업자는 고객(임차인)과 직접"
+   ```
+
+3. **`_infer_customer_contract_details()` 수정**:
+   - `has_direct or has_dealer_support` → customer_contracting_party = 공급업자(퍼시스)
+   - 공급업자 세금계산서 패턴: "세금계산서는 퍼시스가", "법적 주체는 공급업자"
+   - 위 조건 충족 시 dealer 신호가 있어도 퍼시스가 CCP
+
+---
+
+### 7. 필수이슈 / MR 룰 (mandatory_issues.py)
+
+| 코드 | 제목 | 적용 계약 |
+|------|------|-----------|
+| MI-001~006 | 기존 위탁판매 필수이슈 | consignment_sales_agency |
+| MR-001~010 | 렌탈대리점 필수이슈 | dealer_rental_service_contract |
+
+**MI-001~006 트리거 패턴**: `\s*` 삽입으로 한국어 단어 사이 공백 허용 (예: `최종\s*소비자`).
+
+`inject_dlr_rules()` 함수: `inject_mandatory_issues()` 내에서 `dealer_rental_service_contract`인 경우 DLR 룰을 함께 주입.
+
+---
+
+### 8. 테스트
+
+#### test_dealer_rental_regression.py (38개)
+A~J 카테고리 회귀 테스트 (엔티티, 계약유형, 고객당사자, 필수이슈, 조항정체성 등)
+
+#### test_dealer_rental_professional_review.py (6개)
+
+| 테스트명 | 검증 내용 |
+|----------|-----------|
+| `test_role_matrix_for_fursys_rental_dealer` | our_company=퍼시스, ccp ≠ 대리점, billing_party ≠ 대리점, dealer_agency_authority=False |
+| `test_no_isr_sppc_in_top_risks` | isr_*/sppc_* 룰이 top_risks와 high_issues에 없음 |
+| `test_clause_template_hard_gate` | 해지+소유권, 비밀유지+인력, 양도+판촉비 조합 차단 확인 |
+| `test_professional_top_risk_order` | 첫 번째 TOP = DLR-001, 핵심 주제 3개 이상 포함 |
+| `test_ui_docx_counts_are_identical` | display_buckets["필수수정"] == high_count |
+| `test_final_findings_has_lawyer_fields` | 모든 finding에 9개 전문 변호사 필드 존재 |
+
+---
+
+### 9. 커밋 이력
+
+- `ee3104a` — fix dealer rental review precision (hallucination_guard clause_identity, MR 룰, 회귀 테스트 38개)
+- `88ec8e3` — fix MI trigger patterns with \s*, add _DEALER_RENTAL_MANDATORY_ISSUES
+- `0783c55` — fix brand priority, customer_contract_party, tier_counts, isr_ suppression
+- `(current)` — refactor dealer rental review into professional legal risk engine (DLR 룰팩, review_orchestrator, test_dealer_rental_professional_review)
+
+---
+
+## v7.0 — 법률 적용요건 선판단 + 사내변호사형 에이전트 검토 (2026-09-10)
+
+> 적용 파일: `runtime/review/statute_applicability_gate.py`, `runtime/review/counsel_agent.py`,
+> `runtime/review/delivery_gate.py`, `runtime/review/transaction_consistency.py`,
+> `runtime/questions/contract_question_agent.py`
+
+### 0. 배경 — 대물교환(바터) 콘텐츠 계약 실패 사례
+
+"콘텐츠 제작 대가로 가구를 공급하는 대물교환 계약"을 검토했을 때 세 가지가 동시에 실패했다.
+
+1. 사전 질문 5개가 전부 **위탁매매 질문**(최종 판매자·재고 소유권·매출 귀속·POS 결제 명의)이었다.
+   본문에 "판매"(제3자 처분 **금지** 문언)와 "소비자가"(가격 기준 표현)가 각각 한 번 나온 것만으로
+   거래구조 질문 묶음이 통째로 주입됐고, 정작 물어야 할 것이 한 개도 나오지 못했다.
+2. 최종 수정본 DOCX 다운로드가 `409 REVIEW_FAILED_SEMANTIC_MISMATCH`로 실패했다.
+3. 조항을 항 단위로 53건 지적했으나 **세무 논점이 0건**이었고, 담당자가 가장 먼저 물은
+   하도급법 대물변제 금지에는 "해당 조항 없음 — 사실관계 확인 필요"로 답했다.
+
+### 1. 법률 적용요건 선판단 게이트 (Statute Applicability Gate)
+
+**원칙: 법률명이 떠오른다고 finding을 만들지 않는다. 법정 요건을 먼저 통과해야 한다.**
+
+- 각 법률마다 applicability gate를 두고, 요건 불충족이면 그 법률 **전용 rule을 전부 비활성화**한다.
+- 판단 결과는 `적용` / `비적용` / `일부 적용` / `사실확인 필요` 중 하나로 확정하고, 이유를 1~2문장으로 남긴다.
+- 결론은 조항별 검토보다 **먼저** UI·DOCX·PDF에 표시한다.
+- 요건을 특정할 수 없으면 `사실확인 필요`로 두고 rule을 끄지 않는다 — 모르는 상태에서 끄면 탐지 누락이 된다.
+
+#### 하도급법 (하도급거래 공정화에 관한 법률)
+
+적용되려면 이번 위탁이 **제조위탁·수리위탁·건설위탁·용역위탁** 중 하나여야 한다.
+특히 용역위탁은 법 제2조 제11항이 다음으로 한정한다.
+
+- 우리 회사가 그 **지식·정보성과물 작성 또는 역무 공급을 업(業)으로 영위**하고,
+- 이번 위탁이 **그 업에 따른 용역수행행위의 전부 또는 일부를 외주화**한 것이거나,
+- **제3자로부터 위탁받은 용역을 다시 재위탁**하는 것
+
+단순히 외부업체에 용역을 맡겼다는 사실만으로는 성립하지 않는다.
+
+요건 불충족 시 `subcontract_act_applicable = false`로 확정하고 아래 rule을 모두 비활성화한다.
+
+- 하도급대금 / 하도급대금 지급기한
+- 부당한 단가 인하
+- 대물변제 금지
+- 부당 해지
+- 원사업자·수급사업자 지위 관련 지적
+
+#### 우리 회사의 업(業) 도메인
+
+판단은 회사명이 아니라 "**우리가 업으로 하는 일** vs **이번에 위탁한 일**"의 관계로만 한다.
+그 사실은 계약이 아니라 회사 정보이므로 `OUR_BUSINESS_DOMAINS` 표에 데이터로 둔다.
+
+2026-09-10 확인 — 퍼시스그룹 계열사는 모두 **가구를 제조·판매**하거나 **설치용역·물류업무(바로스)**를
+수행하는 회사다. 따라서 다음은 하도급법의 적용을 받지 않는다.
+
+| 계약 유형 | 하도급법 | 이유 |
+|---|---|---|
+| 콘텐츠 제작 용역계약 | 비적용 | 영상·콘텐츠 제작을 업으로 하지 않음 |
+| 마케팅·광고 대행계약 | 비적용 | 광고·마케팅 대행을 업으로 하지 않음 |
+| 프로그램(소프트웨어) 개발계약 | 비적용 | 소프트웨어 개발을 업으로 하지 않음 |
+| 가구 OEM·주문제작 위탁 | **적용** | 가구 제조·판매를 업으로 하며 제조위탁에 해당 |
+| 설치용역 재위탁(바로스 등) | **적용** | 수주한 용역의 재위탁 |
+
+반대 방향으로도 같은 로직이 동작한다 — **영상제작사·광고대행사·방송사업자**가 자신의
+콘텐츠 제작 업무 일부를 외주 주는 경우에는 용역위탁 적용 가능성을 검토한다.
+계열사가 새 사업을 시작하면 이 표만 고치면 판단이 따라 바뀐다.
+
+### 2. 거래 실질 선(先)구조화
+
+clause review를 시작하기 전에 Transaction Legal Map으로 다음을 확정한다.
+
+누가 무엇을 제공하는지 / 대가가 무엇인지 / 누가 선이행하는지 / 소유권·위험이 언제 이전되는지 /
+상대방 미이행 시 회수·정산·손해배상 구조 / 현금거래인지 바터인지 /
+제3자 권리·개인정보·광고 활용이 있는지.
+
+### 3. 사용자 요청사항 = mandatory scope
+
+사용자가 명시적으로 물어본 사항은 **각각 직접** 답변한다.
+결론은 `적용` / `비적용` / `수정 필요` / `현재 적정` / `사실관계 추가확인` 중 하나여야 한다.
+
+- 특정 법률의 적용 여부를 물었으면 조항 검색 결과가 아니라 **적용요건 게이트의 결론**이 답이다.
+- 답변 누락 시 `REVIEW_FAILED_USER_SCOPE_NOT_COVERED`로 기록하고, 문서에 미답변 쟁점을 명시한다.
+
+### 4. "없다/불명확" 판단은 원문 전체 확인 후에만
+
+상한 없음 · 2차 활용권 없음 · 편집권 없음 · 보호조항 없음 같은 finding은 **계약 전체(또는 해당 조 전문)**를
+검색한 뒤에만 생성한다. 다른 항·별첨·특약에 이미 규정되어 있으면 false positive로 삭제한다.
+
+- 조문 존재 판정에 **발췌(truncated excerpt)를 쓰지 않는다.** 발췌는 인용에만 쓴다.
+- 조 경계는 **줄 첫머리의 `제N조`**로만 인식한다 — 본문 안의 상호참조("제9조 제3항 참조")를
+  조 시작으로 오인하면 조문 대부분을 못 읽는다.
+
+### 5. Keyword-only matching 금지
+
+법률효과 + 거래맥락 + 계약유형이 **모두** 맞아야 finding을 만든다.
+
+- "통지"가 있다고 개인정보 finding을 연결하지 않는다.
+- "해지"가 있다고 하도급법 부당해지 rule을 연결하지 않는다.
+- "광고"가 있다고 대리점 비용전가 rule을 적용하지 않는다.
+
+사용자 중점 이슈 라벨은 **그 조항을 살펴본 이유**이지 문제의 근거가 아니다.
+매칭된 단어가 주제를 특정하지 못하는 일반어(통지·해지·비용·반환·광고 등)뿐이면 finding을 만들지 않는다.
+반대로 "면책"·"구상권"·"개인정보"·"초상권"처럼 주제를 특정하는 단어가 걸리면 종전대로 노출한다 —
+관심 영역이 통째로 보이지 않게 되는 것도 똑같이 잘못이다.
+
+### 5-1. 우리에게 유리한 조항 보호 — 단, 강행법규 준수가 우선
+
+**보호**: 원문이 상대방의 청구·권리를 원천 차단하고 있는데(전면 부정형) 수정안이 단서로 예외를
+신설하면(다만/단 + 청구 가능), 그 수정안은 적용하지 않는다. 협상 테이블에 우리 쪽 양보안을
+먼저 들고 가는 셈이기 때문이다. 문제 제기 자체는 검토의견으로 남긴다.
+
+**예외 — 법을 지키는 선이 우선**: "우리에게 유리하니 그대로 두자"가 **법을 어겨도 된다**는 뜻은
+아니다. 우리 계약서가 **하도급법·대리점법·대규모유통업법·공정거래법·약관규제법** 등 강행법규에
+어긋나게 거래상 지위를 남용하거나 상대방에게 부당한 불이익을 주고 있다면, 유리하더라도
+**법령을 준수하도록 수정한다.**
+
+| 수정 근거 | 처리 |
+|---|---|
+| **적용되는** 강행법규의 위반 시정 (위반·위법·무효·부당·시정명령·과징금 등 위법성 판단 어휘 동반) | 수정 유지 (`legal_compliance_override`) |
+| "형평성·균형·일방적" 같은 일반론 | 문안 회수 |
+| 법률명만 언급하고 위법성 판단이 없음 | 문안 회수 |
+| **비적용**으로 확정된 법률을 근거로 든 경우 | 문안 회수 |
+
+적용 여부는 `statute_applicability_gate` 의 판단을 그대로 쓴다 — 비적용으로 확정된 법률을 근거로
+우리 권리를 깎는 일이 없도록 한다. 게이트가 **판단하지 않은** 법률은 "적용되지 않는다"는 뜻이
+아니므로 후보로 남긴다.
+
+에이전트도 같은 규칙을 따른다: 우리 계약서가 강행법규를 어기며 갑질하는 내용이면 그 논점을
+반드시 올리고, 어느 법 어느 조문에 어떻게 저촉되는지를 `legal_basis` 에 명시한다.
+
+### 6. 거래 실질과 모순되는 템플릿 금지
+
+현금 대가가 오가지 않는 바터 거래에 "대금 완납 시 사용권 이전" 같은 현금거래 템플릿을 넣지 않는다.
+넣으면 영원히 오지 않는 조건을 권리 이전 요건으로 박아 넣는 셈이다.
+표준 템플릿 적용 전 `transaction_consistency_check`를 통과해야 한다.
+
+강행규정 설명문도 **실제로 매칭된 법률**을 이름으로 지목한다 — 개인정보 과징금 때문에 걸린 항목에
+산업안전보건법·중대재해처벌법 설명이 붙어서는 안 된다.
+
+### 7. 사내변호사형 AI 에이전트 (3-Pass)
+
+| Pass | 하는 일 |
+|---|---|
+| 1. 이해 | 계약 전문을 읽고 거래구조 확정 — 급부/반대급부, 우리 지위, 대가 형태와 가액 산정 근거, 경제적 실질, 적용 가능 법령 후보, **이 계약에 존재하지 않는 주제** |
+| 2. 쟁점 | 그 이해 + 적용법률 선판단을 전제로 **법률·세무·경제** 세 축에서 실질 리스크만 추출. 각 논점은 원문 인용 또는 "계약서에 없음" 명시 |
+| 3. 검증 | ① 인용문이 원문에 실재하는지 **코드가** 대조(AI에게 되묻지 않는다) ② 협상 테이블에서 실제로 꺼내지 않을 항목 컷 |
+
+- **세무 축은 반드시 검토한다** — 과세표준 산정 기준, 세금계산서 발행 시기·금액, 특수관계인 거래,
+  대가의 시가 적정성, 손금·비용 인정 여부, 원천징수 의무.
+- AI가 조항을 축약 인용하면 앵커(연속 30자)가 실재하는지 확인한 뒤 **표시되는 인용문을
+  계약서의 실제 문장으로 교체**한다. 계약서에 없는 문장은 결과에 절대 남지 않는다.
+- 에이전트 논점은 같은 조항을 가리켜도 **다른 리스크 축의 다른 판단**이므로 조항 동일성 병합·조 단위
+  통합·HIGH 개수 상한의 대상이 아니다. (실측: 세무 논점 2건이 정산문구 지적에 흡수돼 사라졌다.)
+
+### 8. 사전 질문 — 계약을 읽고 묻는다
+
+질문 생성은 "키워드가 보이면 미리 써둔 질문 묶음을 꺼낸다"에서 "AI가 계약을 읽고 무엇을 물을지
+판단한다"로 바뀐다(`contract_question_agent.py`).
+
+- 계약서 본문에 이미 답이 있는 것은 묻지 않는다.
+- 이 계약의 거래구조에 존재하지 않는 개념은 묻지 않는다.
+- 각 질문에는 그 답이 어떤 법률·세무·경제 리스크 판단을 바꾸는지 적는다.
+- 정적 질문 묶음은 AI가 "이 계약에 없다"고 배제한 주제를 제외하고만 남는다.
+- 거래구조 질문 트리거(`detect_sales_transaction_ambiguity`)는 **운영 신호**
+  (위탁판매·판매수수료·매출귀속·재고·반품·POS 등)가 최소 하나 있어야 발동한다.
+  처분행위 금지 열거 안의 "판매"와 가격 기준 표현 "소비자가"는 거래구조 신호가 아니다.
+  대물교환·바터처럼 금전 대가 자체가 없는 구조는 즉시 비대상이다.
+
+### 9. 최종 수정본 다운로드는 실패하지 않는다
+
+**원칙: 게이트를 약화시키지 않되, 결함을 제거·중화하고 그 사실을 문서에 밝힌 뒤 전달한다.**
+
+    탐지 → 제거·중화(remediation) → 문서에 명시 → 다운로드 진행
+
+- 신뢰할 수 없는 것이 **수정문안**이면 그 문안만 회수하고(`advisory_only`) 문제 제기는 검토의견으로 남긴다.
+  문안 자리는 비우지 않고 보류 사유를 적는다 — 비워두면 출력 필터가 finding을 통째로 버려
+  "문안이 못 미더워서 회수했더니 문제 제기까지 사라지는" 조용한 누락이 된다.
+- 제거·중화한 내역은 문서 말미 **"자동 검증에서 보류·제외된 항목"** 표에 전부 적는다.
+- 기본값은 "차단"이 아니라 "기록 후 전달"이다. 게이트가 하나 늘 때마다 다운로드가 다시 막히면 안 된다.
+  실제로 막는 것은 내보낼 내용 자체가 없는 경우(`NON_REMEDIABLE_STATUSES`)뿐이다.
+- 한글 파일명은 RFC 6266/5987로 인코딩한다 — 헤더에 그대로 넣으면 `UnicodeEncodeError`로
+  응답을 한 바이트도 보내지 못한 채 커넥션이 끊긴다(브라우저에는 원인 없는 "다운로드 실패"로만 보인다).
+
+### 10. Golden Regression — 콘텐츠 바터계약
+
+**반드시 나와야 함**
+
+- 거래유형 = 콘텐츠 제작 대가로 가구를 제공하는 바터거래
+- 하도급법 = 비적용 (일룸이 영상제작을 업으로 하지 않음) + 대물변제 금지 rule 비활성화
+- 제9조의 매체·기간·지역·편집·2차적저작물 이용범위가 **이미 존재함**을 인식
+- 선이행 구조와 미이행 시 회수/배상 구조를 risk package로 분석
+- 초상권/개인정보는 실제 출연자·제3자·연락처 제공 구조에 연결
+- 세무 논점(과세표준 시가 적정성, 세금계산서 공급시기 불일치, 손금 인정)
+
+**반드시 나오지 않아야 함**
+
+- 제품 하자조항에 개인정보 finding
+- 바터거래에 대금 완납 전 사용권
+- 대리점 비용전가 rule / 안전조항 rule
+- "상기 제10조 참조" 반복 삽입
+
+---
+
+## v8.0 — 공통 Legal Reasoning Engine (2026-09-10)
+
+> 적용 파일: `runtime/review/clause_effect.py`, `runtime/review/legal_state.py`,
+> `runtime/review/effect_baseline_review.py`, `runtime/review/minimal_edit.py`,
+> `runtime/review/final_counsel_gate.py`, `runtime/questions/question_scope.py`,
+> `runtime/questions/effect_questions.py`
+> 검증: `runtime/tests/test_cross_contract_holdout.py`,
+> `runtime/tests/test_legal_reasoning_architecture.py`, `scripts/run_ai_holdout.py`
+
+### 0. 왜 아키텍처를 바꿨나
+
+"NDA를 고치면 콘텐츠 계약이 깨지고, 콘텐츠를 고치면 건설계약이 깨진다."
+원인은 룰 부족이 아니라 **판단 주체가 여럿**이라는 구조였다. 계약유형 enum이 출발점이고,
+그 enum을 키워드 if-else 캐스케이드로 골랐기 때문이다. 8개 유형 hold-out에서 실측:
+
+| 계약 | 실제 결과 |
+|---|---|
+| 34,000자 영문 LICENSE AGREEMENT ("Licensor", "Royalty") | `purchase_supply` **물품 구매·공급 계약**으로 분류 → 물품매매 체크리스트가 통째로 실행 |
+| 한글 NDA | `contract_type=general` / `family=nda_confidentiality` — **같은 객체 안에서 불일치**, `our_role` 빈 값 |
+| 물품공급 (무과실 전부배상·무통지 즉시해지·60일 지급) | 대금·지연·하자 축 finding **0건** |
+| 라이선스 계약 | 사전질문이 "판촉비/반품비 부담" (대리점 질문) |
+| 대물교환 계약 | 사전질문이 "운영 인력 배치/KPI" (운영대행 질문) |
+| 공사도급 계약 | 사전질문이 "운영대행 양식인가요?" |
+
+**license 유형이 enum에 아예 없었다.** 그래서 갈 곳이 없는 계약은 먼저 걸린 키워드 가지로
+떨어졌고, 그 뒤 모든 검토가 잘못된 유형 기준으로 진행됐다.
+
+### 1. 판단 순서를 뒤집는다
+
+    거래 실질(조항별 법률효과 프로파일)  →  거래 원형(archetype)  →  계약유형 라벨
+        ↑ 판단의 출발점                                                ↑ 보조자료
+
+**이 순서를 다시 뒤집지 말 것.** enum을 출발점으로 되돌리면 enum에 없는 계약유형이
+또 아무 곳에나 떨어진다.
+
+### 2. 법률효과 taxonomy (14개 범주) — `clause_effect.py`
+
+계약유형을 묻지 않고 조항이 **무엇을 법적으로 하는지**만 본다.
+
+`scope_performance` / `payment_consideration` / `delivery_acceptance` / `ownership_risk` /
+`ip_license` / `confidentiality` / `data_privacy` / `liability_indemnity` / `warranty` /
+`termination` / `change_order` / `subcontracting` / `dispute` / `compliance`
+
+한글·영문 모두 인식한다. 조 제목에 걸린 범주를 본문보다 강한 신호로 본다.
+
+**거래 원형(archetype)** 은 이 프로파일에서 직접 읽는다 — enum에 없는 유형도 표현된다.
+
+| archetype | 판정 근거 |
+|---|---|
+`ip_license` / `confidentiality_only` / `goods_supply` / `service_engagement` / `construction_works` / `distribution_resale` / `non_monetary_exchange` / `lease_rental` | ① 계약 표제·정의의 **자기 규정**(1순위) ② 효과 프로파일 조합(2순위) |
+
+12개 fixture 전부 정확히 판정(라이선스·바터·NDA·대리점·건설·물품·용역·임대차 포함).
+
+### 3. Canonical Legal State — `legal_state.py`
+
+지시가 요구한 11개 축을 **한 객체**에 담고, 검토 시작 시 한 번만 만든다.
+
+`transaction_type` · `contract_type` · `our_role` · `counterparty_role` ·
+`each_party_performance` · `consideration_structure` · `ownership_risk_transfer` ·
+`deliverables` · `governing_contract_documents` · `applicable_law_candidates` ·
+`user_review_scope`
+
+- `reconcile_contract_type()` — enum 코드가 함의하는 원형과 실제 원형이 다르면 **원형이 이긴다.**
+  원형을 특정하지 못했거나 enum이 원형을 함의하지 않으면 손대지 않는다(모르는 것을 덮어쓰지 않는다).
+- 원형에 대응 코드가 없던 유형에는 새 코드를 준다: `license_ip`, `barter_exchange`.
+  없는 유형을 기존 코드에 억지로 끼우면 그 코드의 체크리스트가 통째로 잘못 실행된다.
+- `CanonicalLegalState.from_dict()` — 다운로드 경로가 **재계산 없이** 되살린다.
+- `check_state_consistency()` — 출력이 확정 상태와 다르면 `REVIEW_FAILED_LEGAL_STATE_MISMATCH`.
+
+### 4. 효과 기반 기본 검토 — `effect_baseline_review.py`
+
+**finding의 출발점을 계약유형에서 법률효과로 옮긴다.** 유형별 룰팩이 없거나 얇아도 항상 돈다.
+함수 시그니처에 `contract_type` 인자가 **없다** — 유형과 무관하게 성립해야 하기 때문이다.
+
+19개 점검. 예: 무과실 전부배상(HIGH) · 배상 한도 부재(HIGH) · 최고 없는 즉시해지(HIGH) ·
+2차적저작물작성권 미명시(HIGH) · 개인정보 동의·보유기간 부재(HIGH) · 60일 이상 지급기일 ·
+검수 기준 부재 · 비밀유지 예외 부재 · 관할 미특정 등.
+
+- **부재 판정은 계약 전체를 보고 한 번만** 한다(항목 5). 다른 조항·별첨에 이미 있으면 만들지 않는다.
+- 우리에게 유리한 조항도 **법적으로 위태로우면** 짚는다. 다만 수정 방향은 "권리를 내려놓아라"가
+  아니라 "법이 요구하는 절차를 갖춰 그 권리가 실제로 집행되게 하라"다.
+- 이 finding들은 조항 자신의 문언으로 만들어졌으므로 LEVEL3 강등·HIGH 상한·"rewrite 없으면 LOW"
+  루프에서 **면제**된다(`is_common_legal_risk`와 같은 근거).
+
+### 5. 자리표시자 금지 — `minimal_edit.py`
+
+`[수정문안 보류]` · `담당 변호사가 직접 확정` · `추후 협의` · placeholder만 있는 수정안 **전면 금지.**
+
+신뢰할 수 없는 문안을 회수할 때, 자리를 비우지 않고 **원문의 법률효과를 유지한 최소수정안**을
+직접 만들어 넣는다. 방어장치는 **효과 범주별**로 준비하므로(배상→한도·통지·방어권,
+해지→30일 최고, IP→2차적저작물작성권) 계약유형이 늘어도 깨지지 않는다.
+practical position도 함께 제공한다.
+
+문구를 만들 수 없는 경우에만 `FACT_CONFIRMATION_REQUIRED` + **확인할 사실 1개 이상 명시.**
+
+### 6. Canned question 금지 — `question_scope.py` + `effect_questions.py`
+
+- **범위 게이트**: 질문군마다 성립하는 거래 원형을 선언하고, 맞지 않는 질문을 버린다.
+  `Q-OPS-*`(운영대행) → `service_engagement`만, `Q-DL-*`(대리점) → `distribution_resale`만,
+  `Q-TXN-*`(매매 거래구조) → `distribution_resale`/`goods_supply`만.
+  원형을 모르면(`unknown`) 아무것도 버리지 않는다.
+- **효과 기반 기본 질문**: 게이트를 통과하는 질문세트가 없는 계약(라이선스·바터·건설)에서
+  질문이 0건이 되지 않도록, 조항의 법률효과에서 직접 만든다. 두 조건을 모두 만족할 때만:
+  ① 그 효과가 계약에 실재한다 ② 그 답을 계약 문언에서 찾을 수 없다.
+  바터 계약은 "교환 가액을 어떤 기준으로 동일하게 산정했나요?"(부가가치세법 제29조 시가)를 묻는다.
+
+### 7. 법률 적용요건 게이트 — 전 법률 확장
+
+하도급법 외에 **대리점법·개인정보보호법·건설산업기본법·대규모유통업법·표시광고법**을 추가.
+판단 순서는 `사실관계 → 법정 적용요건 → 적용/비적용 → 관련 조항` 으로 고정.
+
+두 가지 과차단을 실측으로 잡아 보정했다.
+
+- 개인정보보호법: 데이터가 오가는데 개인정보 여부를 확정할 수 없으면 **비적용이 아니라 `사실확인 필요`**.
+  성급히 비적용으로 확정하니 AI·수면 데이터 공동연구 NDA의 "개인정보 경계 미규정" 지적이 함께 지워졌다.
+- 비적용 법률은 그 법의 **의무·금지·제재를 주장하는** finding만 끈다. 사실확인·누락 지적은 남긴다.
+- "거래상 지위 남용"은 **공정거래법** 개념이므로 대리점법 토픽에서 제외했다(대리점법 비적용
+  판정 하나가 전략적 제휴계약의 직접거래제한+배액위약벌 finding을 통째로 지웠다).
+- 건설산업기본법은 신호 **2개 이상**을 요구한다("시공" 한 단어로 전략적 제휴계약이 적용 판정됐다).
+
+### 8. UI/DOCX 단일 결과 객체
+
+- 세션에 저장된 `final_findings`(finding_id 보유)가 있으면 그것이 **정본**이다.
+  다운로드 경로는 필수이슈를 다시 주입하지 않는다.
+- UI/DOCX 불일치 시 **UI를 정본으로** 통일한다(종전에는 문서 재계산본을 정본으로 삼았다).
+- 다만 전달 직전 정합성은 확인한다 — 확정본 항목이 대응 조항 데이터를 갖지 못하면(원문·문제점 공란)
+  문서에 빈 껍데기가 실리므로 그 항목을 제외하고 사유를 밝힌다.
+
+### 9. Final Senior Counsel Gate — `final_counsel_gate.py`
+
+지시가 명시한 10개 항목을 출력 직전에 전부 점검한다.
+
+계약유형/지위 · 사용자 요청 날조 없음 · 사용자 답변 반영 · 적용법률 선판단 ·
+타 유형 템플릿 미혼입 · 기존 보호조항 오판 없음 · 유리조항 미약화 · HIGH 근거 ·
+HIGH/MEDIUM 완성 문구 · UI/DOCX 동일성
+
+"하나라도 실패하면 정상완료 금지"는 **정상 완료로 표시하지 말라**는 뜻으로 구현했다 —
+실패 사유를 전부 기록하고 `REVIEW_NEEDS_ATTENTION`으로 표시해 문서 말미에 싣되,
+차단하지 않는다(항목 2의 "절대 에러나지 않게"와의 조화).
+
+### 10. Hold-out 검증 결과
+
+**AI-off (pytest, `test_cross_contract_holdout.py`)** — NDA·물품공급·용역·콘텐츠·바터·
+건설·대리점·라이선스 8종, 11개 불변식 전부 통과.
+
+| 성공 기준 | 결과 |
+|---|---|
+| contract type 오류 | 0 |
+| party role 오류 | 0 |
+| cross-contract contamination | 0 |
+| user request fabrication | 0 |
+| HIGH/MEDIUM incomplete rewrite | 0 |
+| UI/DOCX mismatch | 0 |
+| material risk miss | 0 |
+| Final Counsel Gate 10항목 | 8종 전부 통과 |
+
+**AI-on (`scripts/run_ai_holdout.py`)** — NDA·라이선스·건설·대리점·용역 5종 전부 PASS.
+유형별 논점이 정확히 분리된다: 라이선스→금형 투자비 세무·환율, 건설→지체상금 상한·추가공사비,
+대리점→판매장려금 대리점법, 용역→지급유보 남용. 교차오염 0건.
+
+---
+
 ## Changelog
 
 | 날짜 | 변경 내용 |
 |------|-----------|
+| 2026-09-10 | v8.0 공통 Legal Reasoning Engine: 법률효과 taxonomy 14범주(clause_effect) → 거래 원형 → 계약유형 라벨 순으로 판단 순서 역전, Canonical Legal State 11축 단일화(legal_state), 효과 기반 기본검토 신설(effect_baseline_review, 유형 인자 없음), 자리표시자 금지·최소수정안 생성(minimal_edit), canned question 범위 게이트+효과 기반 질문(question_scope/effect_questions), 적용요건 게이트 6개 법률로 확장, UI/DOCX 단일 결과 객체, Final Senior Counsel Gate 10항목(final_counsel_gate). license_ip·barter_exchange 유형 신설. 8종 교차 hold-out + AI-on 5종 전부 통과, 1,050개 테스트 통과 |
+| 2026-09-10 | v7.0 법률 적용요건 선판단 게이트(statute_applicability_gate — 하도급법 4개 위탁유형 법정 정의, 우리 업 도메인 표, 비적용 시 전용 rule 비활성화), 사내변호사형 3-Pass 에이전트(counsel_agent — 이해/쟁점/인용검증, 법률·세무·경제 3축), 전달 게이트(delivery_gate — 409 차단을 제거·기록 후 전달로 전환), 거래실질 정합성(transaction_consistency — 바터에 현금 템플릿 금지), 계약을 읽고 만드는 사전질문(contract_question_agent), keyword-only matching 금지, 조문 존재 판정을 발췌가 아닌 전문으로. 987개 테스트 통과 |
+| 2026-06-30 | v4.0 렌탈대리점 전문 변호사급 검토 엔진: dealer_rental_rules.py (DLR-001~008), review_orchestrator.py (7단계 파이프라인), ProfessionalFinding 데이터클래스, 조항-문안 hard gate 3중 차단, isr_*/sppc_* 3중 차단, 역할 매트릭스, test_dealer_rental_professional_review.py (6개 테스트). 커밋: "refactor dealer rental review into professional legal risk engine" |
+| 2026-06-02 | v3.2 mandatory_issues.py 재작성(MI-001~006 트리거 \s*, MR-001~010 신규), legal_review_docx.py RED/ORANGE/BLUE 색상, tier_counts를 filtered output 기준으로 수정, final_findings 단일 소스 key 추가. 192개 테스트 전체 통과. |
+| 2026-06-02 | v3.0 위탁판매 대리점 계약 정밀 검토 엔진: contract_classifier, hallucination_guard, output_filter, severity_reclassifier 추가. 퍼시스 위탁판매 대리점 계약 실패 사례 7가지 모두 수정. 새 회귀 테스트 36개 추가. |
 | 2026-05-12 | Contract Intelligence Engine 5-Step Reasoning Pipeline 추가 (Step 1: 경제적 실질 기반 계약 유형 추론, Step 2: 계약 유형별 쟁점 질문, Step 3: 리스크 우선순위 엔진, Step 4: 가구·설비·제조물 전문 검토 12개 항목, Step 5: 사내 변호사 사고 흐름 7단계) |
 | 2026-05-12 | Contextual Awareness (계약 페르소나·지배 법령 확정), Risk Scenario Modeling, Strategic Inquiry, Clause-Level Conflict Check, Executive Summary Optimization 5개 섹션 추가 |
 | 2026-05-12 | CRITICAL FIX — Party-Position Aware Review Engine: 계약 지위 인식 검토 엔진, Supplier-Side Drafting Guardrails(7원칙), Supplier-Side Product Contract 질문 엔진(8문항), Negotiation Mode 우선순위 3단계, Do Not Harm Our Side 최종 검증 게이트 추가 |
