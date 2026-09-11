@@ -74,6 +74,13 @@ REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     # 정상 완료로 표시하지는 않되, 담당자가 나머지 결과를 쓸 수 있도록
     # 차단하지 않고 사유를 문서에 싣는다.
     "REVIEW_NEEDS_ATTENTION",
+    # 적용법률 결론과 finding 이 충돌한 경우(2026-09-11). 충돌 finding 을
+    # 제거하는 것으로 결함이 실제로 해소되므로 전달은 계속 가능하다.
+    "REVIEW_FAILED_STATUTE_CONFLICT",
+    # 당사자 지위 판정이 모순된 경우(2026-09-11 지시 "상대방 역할 오분류 시
+    # 결과 생성 금지"). 결과를 확정본으로 쓰지 못하게 하되, 사유를 문서에
+    # 명시한 채 전달 자체는 막지 않는다.
+    "REVIEW_FAILED_COUNTERPARTY_ROLE_CONFLICT",
 })
 
 #: 제거·중화가 불가능해 다운로드를 실제로 막아야 하는 상태.
@@ -110,6 +117,8 @@ STATUS_LABELS: dict[str, str] = {
     "REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING": "담당자가 언급한 법률에 대한 판단이 누락됨",
     "REVIEW_FAILED": "자동 검증에서 확인이 필요한 항목이 있음",
     "REVIEW_NEEDS_ATTENTION": "최종 자가점검 10개 항목 중 확인이 필요한 항목이 있음",
+    "REVIEW_FAILED_COUNTERPARTY_ROLE_CONFLICT": "상대방 당사자 지위 판정이 일관되지 않아 확인이 필요함",
+    "REVIEW_FAILED_STATUTE_CONFLICT": "비적용으로 판단한 법률의 의무를 주장하는 검토의견이 있어 제거함",
 }
 
 #: 수정문안이 걷어내진 finding 에 남기는 표시. DOCX/PDF 작성기와

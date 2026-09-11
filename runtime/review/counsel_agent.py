@@ -135,6 +135,8 @@ class CounselIssue:
     #: 상대방에게 그대로 건넬 수 있는 완성 조문 문안(지시 항목 7).
     proposed_clause_text: str = ""
     practical_position: str = ""
+    #: 세무·회계 처리 자체의 판단 — 법무 결론과 분리한다(지시 항목 7).
+    finance_confirmation: str = ""
     grounded: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -151,6 +153,7 @@ class CounselIssue:
             "materiality_reason": self.materiality_reason,
             "proposed_clause_text": self.proposed_clause_text,
             "practical_position": self.practical_position,
+            "finance_confirmation": self.finance_confirmation,
             "grounded": self.grounded,
         }
 
@@ -217,6 +220,12 @@ _ISSUE_SYSTEM = """당신은 한국 대기업의 사내변호사다. 계약 검�
 1. 법률·세무·경제 세 축을 모두 검토한다. 특히 **세무는 빠뜨리기 쉬우니 반드시 본다** —
    과세표준 산정 기준, 세금계산서 발행 시기·금액, 특수관계인 거래, 대가의 시가 적정성,
    손금·비용 인정 여부, 원천징수 의무 등.
+   단, **세무·회계 리스크를 과장하지 않는다.** 계약서에 금액이 적혀 있지 않으면
+   "수천만원", "수억원", "10~25%" 같은 손실·추징 규모를 **추정하지 마라**.
+   금액을 쓸 수 있는 것은 계약서에 그 숫자가 적혀 있을 때뿐이다.
+   그리고 세무 논점은 "법무가 계약 문구로 할 수 있는 것"과 "재경·세무팀이
+   확인해야 하는 것"을 반드시 나누어 쓴다 — recommendation 에는 계약 문구만 쓰고,
+   세무처리 자체의 판단은 finance_confirmation 에 적는다.
 2. 각 논점은 반드시 계약 원문의 문장을 **그대로** 인용한다. 인용문을 지어내면 안 된다.
    조항 자체가 없어서 문제인 경우에만 quote를 빈 문자열로 두고 is_missing_clause를 true로 한다.
 3. "일반적으로 ~하는 것이 바람직합니다" 같은 일반론은 쓰지 않는다.
@@ -264,6 +273,7 @@ _ISSUE_USER = """[계약의 실질 — 이 판단을 전제로 검토하라]
       "recommendation": "협상에서 요구할 수정 방향",
       "proposed_clause_text": "상대방에게 그대로 건넬 수 있는 **완성된 조문 문안**. 기존 조항을 고치는 경우에는 원문을 유지한 채 필요한 문장만 더하거나 바꾼 전체 문장을 쓴다. 조항 신설이면 신설 조문 전문을 쓴다. '추후 협의', 'TBD', 빈칸은 절대 쓰지 말 것",
       "practical_position": "협상 실무 포지션 — 상대방이 받아들일 가능성과 대안",
+      "finance_confirmation": "세무·회계 축인 경우, 재경/세무팀이 확인해야 할 사항. 법무가 계약 문구로 해결할 수 없는 부분만. 해당 없으면 빈 문자열",
       "severity": "HIGH" | "MEDIUM",
       "materiality_reason": "왜 이것이 꼭 다뤄야 할 논점인지"
     }}
@@ -486,6 +496,7 @@ def spot_issues(
                 materiality_reason=str(raw.get("materiality_reason") or "").strip(),
                 proposed_clause_text=str(raw.get("proposed_clause_text") or "").strip(),
                 practical_position=str(raw.get("practical_position") or "").strip(),
+                finance_confirmation=str(raw.get("finance_confirmation") or "").strip(),
             )
         )
         if len(out) >= max_issues:
@@ -770,6 +781,10 @@ def counsel_issues_to_clause_results(
         # 최소수정안으로 채운다. 그것도 불가능하면 FACT_CONFIRMATION_REQUIRED
         # 로 표시하고 확인해야 할 사실을 명시한다.
         _attach_complete_edit(cr, issue)
+        # 세무·회계 처리 판단은 법무 결론과 분리해 표시한다(지시 항목 7).
+        if issue.finance_confirmation:
+            from runtime.review.amount_claim_guard import split_finance_confirmation
+            split_finance_confirmation(cr, issue.finance_confirmation)
         out.append(cr)
     return out
 

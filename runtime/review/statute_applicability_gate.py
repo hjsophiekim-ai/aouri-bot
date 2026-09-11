@@ -60,7 +60,7 @@ DOMAIN_LABELS: dict[str, str] = {
 #: 우리(발주자) 측이 **업으로 영위하는** 도메인.
 #:
 #: 2026-09-10 확인 — 퍼시스그룹 계열사는 모두 가구를 제조·판매하거나
-#: 설치용역·물류업무(바로스)를 수행하는 회사다. 콘텐츠 제작, 광고·마케팅,
+#: 설치용역·물류업무(레터스, 구 바로스)를 수행하는 회사다. 콘텐츠 제작, 광고·마케팅,
 #: 소프트웨어 개발은 어느 계열사의 업도 아니다.
 #:
 #: 이 표는 "우리가 무엇을 업으로 하는가"라는 회사 사실이지 계약별 하드코딩이
@@ -73,19 +73,23 @@ GROUP_DEFAULT_BUSINESS_DOMAINS: frozenset[str] = frozenset({
     "logistics",
 })
 
-#: 계열사별 예외. 키는 회사명 일부(대소문자 무시), 값은 그 회사의 업 도메인.
-#: 비어 있으면 그룹 기본값을 쓴다.
-OUR_BUSINESS_DOMAINS: dict[str, frozenset[str]] = {
-    "바로스": frozenset({"installation_service", "logistics"}),
-}
+#: 계열사별 예외. `group_entities` 의 registry 에서 가져온다 — 회사명·상호변경
+#: 이력은 그쪽이 단일 출처다(2026-09-11 지시: 바로스 → 레터스 상호 변경).
+#: 이 dict 는 registry 를 거치지 않는 추가 예외를 넣기 위해 남겨 둔다.
+OUR_BUSINESS_DOMAINS: dict[str, frozenset[str]] = {}
 
 
 def our_business_domains(entity: str | None) -> frozenset[str]:
     """우리 회사가 업으로 영위하는 도메인 집합."""
+    from runtime.review.group_entities import entity_business_domains
+
     name = str(entity or "").strip().lower()
     for key, domains in OUR_BUSINESS_DOMAINS.items():
         if key.lower() in name:
             return domains
+    registered = entity_business_domains(entity)
+    if registered:
+        return registered
     return GROUP_DEFAULT_BUSINESS_DOMAINS
 
 

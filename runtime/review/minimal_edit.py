@@ -50,28 +50,38 @@ from runtime.review.clause_effect import (
 
 FACT_CONFIRMATION_REQUIRED = "FACT_CONFIRMATION_REQUIRED"
 
-#: 효과 범주별 최소 방어장치. 원문의 법률효과를 **바꾸지 않고** 절차·한도·
-#: 예외만 덧붙이는 문장이라, 어느 계약유형에서도 성립한다.
-_MINIMAL_ADDITION: dict[str, str] = {
+#: 효과 범주별 최소 방어장치 — **방향에 따라 다르다**.
+#:
+#: 2026-09-11 지시 — "상대방에게 새로운 이의권·방어권·시정기간·책임제한을
+#: 만들어주는 수정은 특별한 법적 필요가 있을 때만. 목표는 '중립적 문구'가
+#: 아니라 법적으로 유효하면서 우리 회사의 실질적 위험을 줄이는 최소수정안."
+#:
+#: 종전 템플릿은 "일방/당사자/상대방" 으로 대칭 서술해 균형이 잡혀 보였지만,
+#: 실제로는 우리가 수혜자인 조항에까지 상대방의 방어권·시정기간을 새로
+#: 만들어 넣고 있었다(배상 조항의 "상대방은 방어 및 화해 절차에 참여할
+#: 권리를 가진다", 해지 조항의 "30일 전 시정 요구 서면 최고").
+#:
+#:   WE_BEAR    우리가 의무·책임을 진다  → 한도·예외·절차로 우리를 보호한다
+#:   THEY_BEAR  상대방이 의무를 진다     → 희석하지 않고 **집행력**만 보강한다
+_ADDITION_WHEN_WE_BEAR: dict[str, str] = {
     EFFECT_LIABILITY: (
-        "다만 본조에 따른 손해배상 책임은 고의 또는 중대한 과실이 있는 경우를 제외하고 "
-        "직접손해에 한하며, 그 총액은 본 계약에 따라 상대방이 수령한 대가의 총액을 "
-        "초과하지 아니한다. 제3자 청구가 제기된 경우 배상의무자는 지체 없이 상대방에게 "
-        "서면으로 통지하고, 상대방은 방어 및 화해 절차에 참여할 권리를 가진다."
+        "다만 본조에 따른 우리 측의 손해배상 책임은 고의 또는 중대한 과실이 있는 경우를 "
+        "제외하고 직접·통상손해에 한하며, 그 총액은 본 계약에 따라 우리가 수령한 대가의 "
+        "총액을 초과하지 아니한다. 간접손해·특별손해·일실이익은 배상 범위에서 제외한다."
     ),
     EFFECT_TERMINATION: (
-        "다만 일방이 본 계약을 해지하고자 하는 경우에는 30일 전까지 시정을 요구하는 "
+        "다만 상대방이 본 계약을 해지하고자 하는 경우에는 30일 전까지 시정을 요구하는 "
         "서면 최고를 하여야 하며, 그 기간 내에 시정되지 아니한 때에 한하여 해지할 수 있다. "
         "해지의 효력은 이미 이행된 부분에 소급하지 아니한다."
     ),
     EFFECT_PAYMENT: (
-        "대가의 산정 기준·지급 시기 및 공제·상계 사유는 본조 또는 별도 서면으로 특정하며, "
-        "공제·상계를 하는 당사자는 그 사유와 산출 근거를 증빙자료와 함께 사전에 서면으로 "
-        "통지하여야 한다."
+        "대가의 산정 기준과 지급 시기를 본조에 특정하며, 상대방이 공제·상계·지급 유보를 "
+        "하려는 경우에는 그 사유와 산출 근거를 증빙자료와 함께 사전에 서면으로 통지하여야 "
+        "하고, 사전 통지 없는 공제·상계·유보는 효력이 없다."
     ),
     EFFECT_DELIVERY: (
-        "검수는 목적물 수령일로부터 10영업일 이내에 완료하며, 그 기간 내에 서면으로 "
-        "구체적 사유를 들어 이의를 제기하지 아니한 경우 검수에 합격한 것으로 본다. "
+        "검수는 목적물 수령일로부터 10영업일 이내에 완료하며, 그 기간 내에 계약에서 정한 "
+        "사양과의 불일치를 구체적으로 적시한 서면 이의가 없으면 검수에 합격한 것으로 본다. "
         "불합격 사유는 계약에서 정한 사양과의 불일치로 한정한다."
     ),
     EFFECT_OWNERSHIP: (
@@ -80,13 +90,12 @@ _MINIMAL_ADDITION: dict[str, str] = {
     ),
     EFFECT_IP: (
         "본조에 따른 권리의 이전 또는 이용허락의 범위에는 2차적저작물작성권을 포함하며, "
-        "이용의 매체·기간·지역에 제한을 두지 아니한다. 권리를 이전하는 당사자는 해당 "
-        "결과물이 제3자의 권리를 침해하지 아니함을 보증한다."
+        "이용의 매체·기간·지역에 제한을 두지 아니한다."
     ),
     EFFECT_CONFIDENTIALITY: (
         "비밀유지의무는 공지의 정보, 수령 전부터 보유하던 정보, 제3자로부터 적법하게 "
-        "취득한 정보 및 독자적으로 개발한 정보에는 미치지 아니하며, 법령 또는 "
-        "관계기관의 요구에 따른 공개는 사전 통지를 조건으로 허용한다."
+        "취득한 정보 및 독자적으로 개발한 정보에는 미치지 아니하며, 법령 또는 관계기관의 "
+        "요구에 따른 공개는 사전 통지를 조건으로 허용한다."
     ),
     EFFECT_PRIVACY: (
         "개인정보를 수집·이용·제공하는 당사자는 관계 법령에 따라 수집·이용 목적, 항목, "
@@ -94,13 +103,13 @@ _MINIMAL_ADDITION: dict[str, str] = {
         "요청 시 제시한다."
     ),
     EFFECT_WARRANTY: (
-        "하자담보책임의 기간과 범위를 본조에 명시하며, 통상의 사용에 따른 자연 마모 및 "
+        "하자담보책임의 기간은 인수일로부터 1년으로 하며, 통상의 사용에 따른 자연 마모 및 "
         "상대방의 지시 또는 제공 자료에 기인한 하자는 책임 범위에서 제외한다."
     ),
     EFFECT_CHANGE: (
         "업무 범위의 변경 또는 추가가 필요한 경우 그 내용·기간·대가를 서면으로 합의한 "
-        "후에 착수하며, 서면 합의 없이 수행된 추가 업무에 대하여는 대가 청구 및 "
-        "이행 지체의 책임을 지지 아니한다."
+        "후에 착수하며, 서면 합의 없이 수행된 추가 업무에 대하여는 대가 청구 및 이행 "
+        "지체의 책임을 지지 아니한다."
     ),
     EFFECT_SUBCONTRACT: (
         "제3자에게 업무의 전부 또는 일부를 위탁하려는 당사자는 상대방의 사전 서면 동의를 "
@@ -119,6 +128,110 @@ _MINIMAL_ADDITION: dict[str, str] = {
         "업무는 본 계약의 이행 범위에 포함되지 아니한다."
     ),
 }
+
+#: 상대방이 의무를 지는 조항 — 그 의무를 **깎지 않고** 집행 가능하게만 만든다.
+#: 새로운 이의권·방어권·시정기간·책임제한을 만들어주지 않는다.
+_ADDITION_WHEN_THEY_BEAR: dict[str, str] = {
+    EFFECT_LIABILITY: (
+        "본조에 따른 배상 의무의 이행을 담보하기 위하여, 배상의무자는 우리의 서면 청구를 "
+        "받은 날부터 30일 이내에 배상액을 지급하며, 지급이 지연되는 경우 연 6%의 "
+        "지연손해금을 가산한다."
+    ),
+    EFFECT_TERMINATION: (
+        "본조에 따른 해지권의 행사는 우리의 서면 통지로써 효력이 발생하며, 해지로 인하여 "
+        "우리가 이미 제공한 급부의 반환 및 손해배상 청구권에 영향을 미치지 아니한다."
+    ),
+    EFFECT_PAYMENT: (
+        "본조에 따른 지급 의무의 산정 근거와 지급 시기를 특정하며, 지급이 지연되는 경우 "
+        "지연손해금을 가산하고 우리는 이를 상대방에 대한 다른 채무와 상계할 수 있다."
+    ),
+    EFFECT_DELIVERY: (
+        "납품·검수의 기준과 기한을 본조에 특정하며, 기한 내 이행되지 아니한 경우 우리는 "
+        "시정을 요구하거나 그에 상당하는 손해의 배상을 청구할 수 있다."
+    ),
+    EFFECT_OWNERSHIP: (
+        "목적물의 소유권과 위험의 이전 시점을 본조에 특정하고, 그 시점까지 우리는 담보 "
+        "목적의 소유권을 유보한다."
+    ),
+    EFFECT_IP: (
+        "권리를 이전하는 당사자는 해당 결과물이 제3자의 권리를 침해하지 아니함을 보증하고, "
+        "결과물에 포함된 제3자 소재에 대하여 본조의 이용 범위를 모두 충족하는 라이선스를 "
+        "확보하여 그 증빙을 우리의 요청 시 제시한다."
+    ),
+    EFFECT_CONFIDENTIALITY: (
+        "비밀유지의무를 부담하는 당사자는 본 계약 종료 시 우리의 요청에 따라 비밀정보를 "
+        "반환 또는 파기하고 그 이행 결과를 서면으로 확인한다."
+    ),
+    EFFECT_PRIVACY: (
+        "개인정보를 처리하는 당사자는 관계 법령상 요구되는 동의를 적법하게 확보하고, "
+        "그 증빙을 우리의 요청 시 지체 없이 제시하며, 미확보로 인하여 발생한 제재·손해를 "
+        "자신의 비용과 책임으로 해결한다."
+    ),
+    EFFECT_WARRANTY: (
+        "하자담보책임의 기간을 인수일로부터 1년 이상으로 특정하며, 기간 내 발견된 하자는 "
+        "상대방의 비용과 책임으로 보수한다."
+    ),
+    EFFECT_CHANGE: (
+        "업무 범위의 변경 또는 추가는 우리의 사전 서면 승인을 받은 경우에만 효력이 있으며, "
+        "승인 없이 수행된 업무에 대하여 우리는 대가 지급 의무를 부담하지 아니한다."
+    ),
+    EFFECT_SUBCONTRACT: (
+        "상대방은 우리의 사전 서면 동의 없이 업무의 전부 또는 일부를 제3자에게 위탁할 수 "
+        "없으며, 동의를 받아 위탁한 경우에도 그 제3자의 행위에 대하여 자신의 행위와 "
+        "동일한 책임을 진다."
+    ),
+    EFFECT_DISPUTE: (
+        "본 계약과 관련한 분쟁의 관할 법원을 본조에 특정한다."
+    ),
+    EFFECT_COMPLIANCE: (
+        "상대방은 본 계약의 이행과 관련하여 적용되는 법령을 준수하며, 위반으로 인하여 "
+        "관계기관의 조사·제재 또는 제3자의 청구가 발생한 경우 자신의 비용과 책임으로 "
+        "이를 해결한다."
+    ),
+    EFFECT_SCOPE: (
+        "상대방이 수행할 업무의 범위·산출물·완료 기준을 본조 또는 별첨으로 특정하며, "
+        "특정된 기준을 충족하지 못한 이행은 이행으로 보지 아니한다."
+    ),
+}
+
+#: 방향을 판단할 수 없을 때 — 어느 쪽 권리도 새로 만들지 않는 중립적 보완만.
+_ADDITION_WHEN_UNKNOWN: dict[str, str] = {
+    EFFECT_LIABILITY: (
+        "본조에 따른 손해배상의 범위와 총액 상한, 간접·특별손해의 취급을 본조에 명시한다."
+    ),
+    EFFECT_TERMINATION: (
+        "해지 사유와 절차, 해지의 효력이 미치는 범위를 본조에 명시한다."
+    ),
+    EFFECT_PAYMENT: (
+        "대가의 산정 기준·지급 시기 및 공제·상계 사유와 그 절차를 본조에 명시한다."
+    ),
+    EFFECT_DELIVERY: (
+        "검수의 기준·기한과 합격 간주의 요건을 본조에 명시한다."
+    ),
+    EFFECT_OWNERSHIP: (
+        "목적물의 소유권과 멸실·훼손 위험의 이전 시점을 본조에 명시한다."
+    ),
+    EFFECT_IP: (
+        "권리의 이전 또는 이용허락의 범위(2차적저작물작성권 포함 여부, 매체·기간·지역)를 "
+        "본조에 명시한다."
+    ),
+    EFFECT_CONFIDENTIALITY: (
+        "비밀유지의무의 예외(공지 정보·기보유 정보·독자 개발 정보·법령상 공개)를 본조에 "
+        "명시한다."
+    ),
+    EFFECT_PRIVACY: (
+        "개인정보의 수집·이용 목적, 항목, 보유기간 및 제3자 제공의 근거를 본조에 명시한다."
+    ),
+    EFFECT_WARRANTY: "하자담보책임의 기간과 범위, 면책 사유를 본조에 명시한다.",
+    EFFECT_CHANGE: "업무 변경·추가 시 대가와 기간의 조정 절차를 본조에 명시한다.",
+    EFFECT_SUBCONTRACT: "제3자 위탁의 허용 여부와 동의 절차, 책임 귀속을 본조에 명시한다.",
+    EFFECT_DISPUTE: "분쟁해결 절차와 관할을 본조에 명시한다.",
+    EFFECT_COMPLIANCE: "준수 대상 법령과 위반 시 책임 귀속을 본조에 명시한다.",
+    EFFECT_SCOPE: "업무의 범위·산출물·완료 기준을 본조 또는 별첨으로 특정한다.",
+}
+
+#: 하위호환 — 기존 호출부가 참조하던 이름. 방향을 모를 때의 표현을 쓴다.
+_MINIMAL_ADDITION: dict[str, str] = _ADDITION_WHEN_UNKNOWN
 
 #: 효과별 practical position(협상 실무 포지션). 문구만 주고 끝내지 않는다.
 _PRACTICAL_POSITION: dict[str, str] = {
@@ -146,18 +259,37 @@ def minimal_edit_for(
     original_text: str,
     clause_title: str = "",
     effects: list[str] | None = None,
+    our_labels: tuple[str, ...] = (),
 ) -> tuple[str, str, str]:
     """원문 + 최소 방어장치로 이루어진 완성 문구를 만든다.
+
+    [2026-09-11 지시] 덧붙이는 문장은 **방향에 따라 달라진다**. 우리가 의무를
+    지는 조항에는 한도·예외를 넣어 우리를 보호하고, 상대방이 의무를 지는
+    조항에는 그 의무를 깎지 않고 집행력만 보강한다. 대칭적으로 쓰면 우리가
+    수혜자인 조항에까지 상대방의 방어권·시정기간을 새로 만들어주게 된다.
 
     돌려주는 값: (final_clause_text, addition, practical_position).
     만들 수 없으면 ("", "", "").
     """
+    from runtime.review.clause_direction import (
+        DIRECTION_THEY_BEAR,
+        DIRECTION_WE_BEAR,
+        burden_direction,
+    )
+
     body = str(original_text or "").strip()
     if not body:
         return "", "", ""
+
+    direction = burden_direction(body, our_labels)
+    table = {
+        DIRECTION_WE_BEAR: _ADDITION_WHEN_WE_BEAR,
+        DIRECTION_THEY_BEAR: _ADDITION_WHEN_THEY_BEAR,
+    }.get(direction, _ADDITION_WHEN_UNKNOWN)
+
     eff_list = effects or classify_clause_effects(title=clause_title, text=body)
     for eff in eff_list:
-        addition = _MINIMAL_ADDITION.get(eff)
+        addition = table.get(eff) or _ADDITION_WHEN_UNKNOWN.get(eff)
         if addition:
             return (
                 f"{body.rstrip()} {addition}".strip(),
@@ -172,6 +304,7 @@ def apply_minimal_edit(
     *,
     reason: str,
     fact_needed: str = "",
+    our_labels: tuple[str, ...] = (),
 ) -> bool:
     """신뢰할 수 없는 문안을 **최소수정안**으로 교체한다.
 
@@ -182,6 +315,16 @@ def apply_minimal_edit(
     if not isinstance(cr, dict):
         return False
 
+    # 호칭을 명시로 받지 못했으면 finding 자체에 실린 것을 쓴다. 이 함수는
+    # 게이트·다운로드 등 8곳에서 불리는데, 그 전부에 호칭을 인자로 꿰면 한
+    # 곳만 빠져도 방향이 조용히 `unknown` 으로 떨어진다. 계약 컨텍스트는
+    # finding 이 들고 다니는 편이 안전하다(2026-09-11).
+    labels = tuple(our_labels or ())
+    if not labels:
+        stored = cr.get("our_labels")
+        if isinstance(stored, (list, tuple)):
+            labels = tuple(str(x) for x in stored if str(x or "").strip())
+
     original = str(cr.get("original_text") or "").strip()
     title = str(cr.get("clause_title") or "")
     final_text, addition, position = minimal_edit_for(
@@ -190,6 +333,7 @@ def apply_minimal_edit(
         effects=(
             cr.get("clause_effects") if isinstance(cr.get("clause_effects"), list) else None
         ),
+        our_labels=labels,
     )
 
     if not final_text:

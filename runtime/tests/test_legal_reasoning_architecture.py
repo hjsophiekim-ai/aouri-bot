@@ -232,14 +232,50 @@ class EffectBaselineReviewTest(unittest.TestCase):
     """항목 2 — 유형 룰팩이 없어도 실질 리스크를 잡는가."""
 
     def test_supply_contract_material_risks_are_found(self) -> None:
-        """실측: 무과실 전부배상·무통지 즉시해지가 있는데 finding 0건이었다."""
+        """실측: 대금·지연·하자 축 finding 이 0건이었다."""
         text = (FIXTURES / "supply_purchase.txt").read_text(encoding="utf-8")
         findings = run_effect_baseline_review(
             extract_clauses(text)[0] or [], full_text=text, existing_results=[],
         )
         checks = {str(f.get("effect_check_id") or "") for f in findings}
-        self.assertIn("eb_liability_no_fault", checks)
-        self.assertIn("eb_termination_immediate_no_cure", checks)
+        self.assertIn("eb_liability_uncapped", checks)
+        self.assertIn("eb_delivery_short_inspection", checks)
+
+    def test_clauses_favorable_to_us_are_kept_unless_unlawful(self) -> None:
+        """[2026-09-11 지시] 우리에게 유리한 즉시해지·무과실배상 조항은
+        특별한 위법성(약관성)이 없으면 지적하지 않는다 — 스스로 권리를 깎는
+        수정안을 만들지 않는다. 방향 기준은 조항 성격에 따라 다르다:
+        해지권은 **보유자**, 배상책임은 **부담자** 를 본다."""
+        cases = [
+            # (라벨, 본문, 무과실 지적, 즉시해지 지적)
+            ("상대방이 무과실 부담 → 우리에게 유리",
+             "제4조(손해배상) 을의 귀책이 아닌 경우에도 을은 모든 손해를 배상한다.",
+             False, False),
+            ("우리가 무과실 부담 → 불리하므로 지적",
+             "제4조(손해배상) 갑의 귀책이 아닌 경우에도 갑은 모든 손해를 배상한다.",
+             True, False),
+            ("우리가 즉시해지권 보유 → 유리",
+             "제5조(계약해지) 갑은 사전 통지 없이 즉시 해지할 수 있다.",
+             False, False),
+            ("상대방이 즉시해지권 보유 → 지적",
+             "제5조(계약해지) 을은 사전 통지 없이 즉시 해지할 수 있다.",
+             False, True),
+            ("약관성이 있으면 우리 권리라도 지적",
+             "본 약관은 미리 작성된 것이다.\n제5조(계약해지) 갑은 사전 통지 없이 즉시 해지할 수 있다.",
+             False, True),
+        ]
+        for label, text, want_no_fault, want_immediate in cases:
+            with self.subTest(label=label):
+                checks = {
+                    str(f.get("effect_check_id") or "")
+                    for f in run_effect_baseline_review(
+                        extract_clauses(text)[0] or [], full_text=text, existing_results=[],
+                    )
+                }
+                self.assertEqual("eb_liability_no_fault" in checks, want_no_fault)
+                self.assertEqual(
+                    "eb_termination_immediate_no_cure" in checks, want_immediate,
+                )
 
     def test_baseline_takes_no_contract_type_argument(self) -> None:
         """유형과 무관하게 성립해야 하므로 유형을 인자로 받지 않는다."""
@@ -283,8 +319,29 @@ class MinimalEditTest(unittest.TestCase):
             original_text=original, clause_title="손해배상",
         )
         self.assertTrue(final.startswith(original), "원문이 보존되지 않았다")
-        self.assertIn("총액", addition)
+        self.assertTrue(addition.strip(), "보완 문구가 비어 있다")
         self.assertTrue(position)
+
+    def test_minimal_edit_caps_our_liability_only_when_we_bear_it(self) -> None:
+        """같은 자리에 방향에 따라 정반대 문구가 들어가야 한다.
+
+        우리가 부담자면 한도·예외로 우리를 보호하고, 상대방이 부담자면 그
+        한도를 우리가 먼저 만들어 주지 않는다(2026-09-11 지시).
+        """
+        we_bear = "갑은 을이 입은 모든 손해를 배상하여야 한다."
+        _f1, addition_we, _p1 = minimal_edit_for(
+            original_text=we_bear, clause_title="손해배상", our_labels=("갑",),
+        )
+        self.assertIn("총액", addition_we, "우리가 부담자인데 책임 한도가 없다")
+
+        they_bear = "을은 갑이 입은 모든 손해를 배상하여야 한다."
+        _f2, addition_they, _p2 = minimal_edit_for(
+            original_text=they_bear, clause_title="손해배상", our_labels=("갑",),
+        )
+        self.assertNotIn(
+            "초과하지", addition_they,
+            "상대방이 부담자인데 우리가 먼저 책임 상한을 만들어 주었다",
+        )
 
     def test_no_banned_placeholder_wording_is_produced(self) -> None:
         cr = {

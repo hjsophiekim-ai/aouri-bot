@@ -1055,6 +1055,13 @@ def _apply_rental_filter(clause_results: list[dict[str, Any]], is_rental: bool) 
     for cr in clause_results:
         if not isinstance(cr, dict):
             continue
+        # 효과 레이어가 만든 finding 은 렌탈 템플릿에서 온 것이 아니라 이 계약
+        # 자신의 법률효과에서 나온 것이다. `_RENTAL_COMMENT_KW` 는 "소유권"
+        # 하나만으로 발동하는데, 소유권은 렌탈의 표지가 아니라 매매·바터·
+        # 물품공급 어디에나 있는 보편 개념이다. 그대로 두면 "소유권 이전시점을
+        # 늦추라" 는 선이행 리스크 제안이 통째로 지워진다(2026-09-11 실측).
+        if bool(cr.get("is_risk_package")) or bool(cr.get("is_effect_baseline")):
+            continue
         combined = (cr.get("suggested_rewrite") or "") + " " + (cr.get("rewrite_reason") or "")
         if _RENTAL_COMMENT_KW.search(combined):
             cr["suggested_rewrite"] = None
@@ -1443,6 +1450,7 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
             # 조항 자신의 문언을 직접 확인해 만든 finding 이므로
             # clause_topic 이 비었다는 이유로 LOW 로 내리면 탐지 누락이 된다.
             and not bool(cr.get("is_effect_baseline"))
+            and not bool(cr.get("is_risk_package"))
         ):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
@@ -1471,6 +1479,7 @@ def _apply_review_priority_engine(clause_results: list[dict[str, Any]], max_high
         # is_common_legal_risk 를 캡에서 빼는 것과 같은 근거다.
         and not bool(cr.get("is_counsel_agent"))
         and not bool(cr.get("is_effect_baseline"))
+        and not bool(cr.get("is_risk_package"))
     ]
     if len(high_items) > max_high:
         high_items.sort(key=lambda x: (int(x.get("_priority_level") or 3), -int(bool(x.get("must_fix"))), -int(bool(x.get("approval_required")))))
@@ -2016,6 +2025,11 @@ def _apply_checklist_item_priority_demotion(
         if not isinstance(cr, dict) or not bool(cr.get("is_checklist_item")):
             continue
         if bool(cr.get("user_focus_hit")) or bool(cr.get("factual_hit")) or bool(cr.get("is_mandatory")):
+            continue
+        # 리스크 사슬 finding 은 "없는 조항 신설" 권고이지만, 계약 전체를 보고
+        # 끊긴 고리를 확인한 결과다 — 유형별 관심 주제에 없다는 이유로 LOW 로
+        # 내리면 선이행 회수 위험 같은 핵심 판단이 사라진다(2026-09-10 항목 1).
+        if bool(cr.get("is_risk_package")):
             continue
         topic = str(cr.get("clause_topic") or "")
         if topic and topic in wanted_topics:
@@ -5306,6 +5320,14 @@ def build_clause_level_result(
             rt = set()
         if is_dealer_contract and (not strong_app_dev) and any(k in sr for k in ("오픈소스", "소스코드")):
             rt = set()
+        # 리스크 사슬 finding 의 제안은 본래 여러 주제에 걸친다 — 선이행
+        # 회수는 분할이행(이행)·소유권 이전시점(소유권)·담보(보증)를 한꺼번에
+        # 다뤄야 성립하기 때문이다. 조항 주제 하나와 맞추라고 요구하면 그
+        # 제안이 통째로 지워진다(2026-09-11 실측: 제15조 제1항에 붙은 선이행
+        # 제안이 null 이 됐다). is_common_legal_risk 를 예외로 두는 것과
+        # 같은 근거 — 계약 구조를 직접 확인해 만든 finding 이다.
+        if bool(cr.get("is_risk_package")):
+            continue
         if not is_topic_compatible(clause_topic=clause_topic, rewrite_topics=rt):
             cr["guardrail_block"] = {"clause_topic": clause_topic, "rewrite_topics": sorted(list(rt))[:8]}
             cr["suggested_rewrite"] = None
@@ -5353,12 +5375,68 @@ def build_clause_level_result(
         )
         _cr_eff["clause_effects"] = _classify_effects(title=_t_eff, text=_b_eff)
 
+    # 우리 쪽 호칭. 계약서가 당사자를 "갑/을"이 아니라 회사명·브랜드·구 상호로
+    # 부르면 방향 판단이 통째로 어긋나므로, 본문에 등장하는 퍼시스그룹 계열사의
+    # 모든 표기를 우리 호칭으로 합친다(2026-09-11 지시).
+    from runtime.review.group_entities import (
+        entity_advisories as _entity_advisories,
+        our_side_labels as _group_our_labels,
+    )
+
+    _our_labels_for_review = tuple(dict.fromkeys(
+        x for x in (
+            str(_canonical_state.party_label or ""),
+            str(_legal_state.our_label or ""),
+            str(entity or ""),
+            *_group_our_labels(str(text or ""), entity=str(entity or "")),
+        ) if str(x or "").strip()
+    ))
+    _entity_checks = _entity_advisories(str(text or ""), entity=str(entity or ""))
+    if _entity_checks:
+        logger.info("group entity advisories: %d", len(_entity_checks))
+
+    # 호칭을 finding 에 실어 둔다. 최소수정안은 "누가 부담자인가"에 따라 정반대
+    # 문구가 나오는데, 그 판단이 필요한 지점(게이트·다운로드 경로 등)은 계약
+    # 컨텍스트에서 멀리 떨어져 있다. 여기서 한 번 붙여 두면 어디서 불리든
+    # 방향이 유지된다.
+    for _cr_lbl in clause_results:
+        if isinstance(_cr_lbl, dict):
+            _cr_lbl["our_labels"] = list(_our_labels_for_review)
     _baseline_findings = _run_effect_baseline(
-        clauses, full_text=str(text or ""), existing_results=clause_results,
+        clauses,
+        full_text=str(text or ""),
+        existing_results=clause_results,
+        our_labels=_our_labels_for_review,
     )
     if _baseline_findings:
         logger.info("effect baseline review produced %d findings", len(_baseline_findings))
         clause_results.extend(_baseline_findings)
+
+    # ── [리스크 사슬 검토] (2026-09-10 지시 항목 1) ────────────────────────────
+    # 조항별 나열이 아니라 거래위험을 사슬로 연결해 본다. 특히 선이행 구조는
+    # 선제공 → 소유권 이전 → 상대방 미이행 → 반환·환수 → 손해배상 → 담보까지
+    # 이어서 판단해야 한다 — 조항 하나하나는 정상으로 보여도 사슬 끝의 회수
+    # 수단이 비어 있으면 노출은 급부의 전액이다. 실측: 대물교환 계약에서
+    # risk_packages 가 빈 배열이어서 선이행 위험이 판단에서 통째로 빠졌다.
+    from runtime.review.effect_risk_package import (
+        build_effect_risk_packages as _build_chains,
+        package_findings as _chain_findings,
+    )
+    _effect_chains = _build_chains(text=str(text or ""))
+    _last_article_no_for_chain = 0
+    for _c_chain in (clauses or []):
+        _raw_chain = str(getattr(_c_chain, "article_number", "") or "").strip()
+        if _raw_chain.isdigit():
+            _last_article_no_for_chain = max(_last_article_no_for_chain, int(_raw_chain))
+    _chain_new = _chain_findings(
+        _effect_chains,
+        clauses=clauses,
+        last_article_number=_last_article_no_for_chain,
+        existing_results=clause_results,
+    )
+    if _chain_new:
+        logger.info("risk chain review produced %d findings", len(_chain_new))
+        clause_results.extend(_chain_new)
 
     # ── [법률 적용요건 선판단 게이트] (2026-09-10 지시) ──────────────────────
     # "법률명이 떠오른다고 바로 finding 을 만들지 않는다." 각 법률의 법정
@@ -5785,6 +5863,7 @@ def build_clause_level_result(
             or bool(cr.get("is_checklist_item"))
             or bool(cr.get("is_mandatory"))
             or bool(cr.get("is_effect_baseline"))
+            or bool(cr.get("is_risk_package"))
         ):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
@@ -6545,6 +6624,49 @@ def build_clause_level_result(
     # endpoint — so "what the reviewer sees here" and "what ends up in the
     # downloaded file" are computed by the same rule, not two independently
     # maintained filters that can silently diverge in count and content.
+    # ── [근거 없는 금액 추정 제거] (2026-09-10 지시 항목 7) ──────────────────
+    # 계약서에 금액이 공란인데 "수천만~수억 원 추징" 같은 규모 추정이 검토의견에
+    # 실리면, 담당자가 그 숫자를 들고 협상하거나 보고하게 된다. 계약 원문에
+    # 근거가 없는 금액·비율 표현만 정성적 서술로 바꾼다(finding 은 남긴다).
+    from runtime.review.amount_claim_guard import scrub_unfounded_amounts as _scrub_amounts
+    _amount_scrubbed = _scrub_amounts(clause_results, contract_text=str(text or ""))
+    if _amount_scrubbed:
+        logger.info("scrubbed unfounded amount estimates in %d findings", len(_amount_scrubbed))
+
+    # ── [내부통제는 계약조항이 아니다] (2026-09-11 지시) ─────────────────────
+    # 세무 논점이 잡히면 엔진이 습관적으로 조문 문안을 만들었다. 그런데 증빙
+    # 보관·세무조정·내부 결재 같은 것은 우리가 우리 안에서 하는 일이지 상대방과
+    # 합의할 사항이 아니다. 지적은 남기고 자리만 옮긴다.
+    from runtime.review.internal_control_split import (
+        split_internal_controls as _split_internal_controls,
+    )
+    _internal_controls = _split_internal_controls(clause_results)
+    if _internal_controls:
+        logger.info("moved %d findings to internal-control items", len(_internal_controls))
+
+    # ── [ACCEPT/KEEP — 유리하고 적법한 조항은 건드리지 않는다] (항목 2) ──────
+    # 상대방에게 부과된 면책·배상·보증·즉시해지 책임을 완화·분담·상호화하는
+    # 수정안은, 읽기에는 균형이 잡혀 보이지만 실제로는 우리 쪽에서 먼저
+    # 양보안을 내는 것이다. "형평성"·"균형" 은 그 양보의 법적 이유가 아니다.
+    # 강행법규 위반 시정 근거가 있을 때만 수정을 유지한다.
+    from runtime.review.accept_keep import apply_accept_keep as _apply_accept_keep
+    # 우리 쪽 호칭을 넘긴다 — 계약서는 당사자를 "갑/을" 이 아니라 회사명·약칭
+    # 으로 부르는 경우가 많아, 이것이 없으면 우리가 부담자인 조항까지
+    # "상대방 책임" 으로 오인해 정당한 완화 수정을 막는다.
+    # baseline·리스크사슬·에이전트가 그 사이에 새 finding 을 만들었을 수 있다.
+    # 호칭이 비어 있는 finding 만 채운다.
+    for _cr_lbl2 in clause_results:
+        if isinstance(_cr_lbl2, dict) and not _cr_lbl2.get("our_labels"):
+            _cr_lbl2["our_labels"] = list(_our_labels_for_review)
+
+    _accept_kept = _apply_accept_keep(
+        clause_results,
+        statute_decisions=[d.to_dict() for d in _statute_decisions],
+        our_labels=_our_labels_for_review,
+    )
+    if _accept_kept:
+        logger.info("ACCEPT/KEEP applied to %d findings", len(_accept_kept))
+
     # ── [우리에게 유리한 조항 보호] (2026-09-10 지시) ────────────────────────
     # 원문이 상대방의 청구를 차단하고 있는데 수정안이 "다만 …은 청구할 수
     # 있다"로 예외를 신설하면, 협상 테이블에 우리 쪽에서 먼저 양보안을
@@ -6558,6 +6680,41 @@ def build_clause_level_result(
     _our_side_withdrawn = _enforce_our_side(
         clause_results, statute_decisions=[d.to_dict() for d in _statute_decisions],
     )
+
+    # ── [상대방 권리 신설 차단] (2026-09-11 지시) ────────────────────────────
+    # 위 `our_side_protection` 은 "상대방의 **기존** 청구를 막던 문언이 풀리는"
+    # 경우를 본다. 그 반대 방향이 남아 있었다 — 원문에 **없던** 이의권·방어권·
+    # 시정기간·책임제한을 수정안이 상대방에게 새로 만들어주는 경우다. 절차적
+    # 보완처럼 읽혀 그대로 통과하지만, 협상에서는 우리가 먼저 상대방의 카드를
+    # 만들어 건네는 것과 같다. 선이행 구조에서는 즉시해지·환수·보전이 유일한
+    # 회수 장치이므로 더 엄격히 본다.
+    from runtime.review.clause_direction import we_perform_first as _we_perform_first
+    from runtime.review.counterparty_grant_guard import (
+        enforce_no_new_counterparty_rights as _enforce_no_new_rights,
+    )
+
+    from runtime.review.transaction_consistency import (
+        CONSIDERATION_NON_MONETARY as _NON_MONETARY,
+        classify_consideration_structure as _classify_consideration,
+    )
+
+    _we_first = _we_perform_first(
+        str(text or ""),
+        is_non_monetary=(
+            _classify_consideration(str(text or "")) == _NON_MONETARY
+        ),
+    )
+    _grant_blocked = _enforce_no_new_rights(
+        clause_results,
+        statute_decisions=[d.to_dict() for d in _statute_decisions],
+        our_labels=_our_labels_for_review,
+        we_perform_first=_we_first,
+    )
+    if _grant_blocked:
+        logger.info(
+            "counterparty-grant guard reverted %d proposals (we_perform_first=%s)",
+            len(_grant_blocked), _we_first,
+        )
 
     # ── [거래실질 정합성 검사] (2026-09-10 지시) ──────────────────────────────
     # 현금 대가가 없는 교환(바터) 계약에 "대금 완납 시 사용권 이전" 같은
@@ -6582,7 +6739,9 @@ def build_clause_level_result(
     # 떨어져 최종 결과에서 통째로 사라졌다. 인용 검증까지 마친 논점의 등급은
     # 에이전트의 판단을 정본으로 삼는다.
     for _cr_restore in clause_results:
-        if not isinstance(_cr_restore, dict) or not _cr_restore.get("is_counsel_agent"):
+        if not isinstance(_cr_restore, dict) or not (
+            _cr_restore.get("is_counsel_agent") or _cr_restore.get("is_risk_package")
+        ):
             continue
         if bool(_cr_restore.get("dedup_suppressed")) or bool(_cr_restore.get("keep_as_is")):
             continue
@@ -6923,6 +7082,17 @@ def build_clause_level_result(
     meta["legal_state"] = _legal_state.to_dict()
     meta["transaction_consistency"] = _txn_consistency
     meta["our_side_protection"] = {"withdrawn": _our_side_withdrawn}
+    meta["counterparty_grant_guard"] = {
+        "we_perform_first": _we_first,
+        "blocked": _grant_blocked,
+    }
+    # 계열사 인식·상호변경·해외법인 명칭은 계약서만으로 단정할 수 없다.
+    # 사람이 등기로 확인할 항목으로 분리해 남긴다(2026-09-11 지시).
+    meta["group_entity_checks"] = _entity_checks
+    meta["internal_control_items"] = _internal_controls
+    meta["effect_risk_chains"] = _effect_chains
+    meta["amount_estimates_scrubbed"] = _amount_scrubbed
+    meta["accept_keep"] = {"clauses": _accept_kept}
     meta["finding_semantic_gate"] = _semantic_gate_report
     meta["clause_reference_gate"] = _clause_reference_report
     if _semantic_gate_report.get("status") and not meta.get("review_status"):
@@ -7079,6 +7249,46 @@ def build_clause_level_result(
         meta["review_status_detail"] = f"수정 위치/방식/완성문구가 불완전한 finding: {', '.join(_incomplete_redline_ids)}"
     meta["incomplete_redline_clause_ids"] = _incomplete_redline_ids
 
+    # ── [적용법률 결론 ↔ finding 일관성 최종 확인] (2026-09-11 지시) ──────────
+    # 적용요건 게이트는 검토 도중 한 번 돈다. 그 뒤에도 finding 은 계속
+    # 만들어지므로(에이전트·효과검토·리스크사슬), 최종 출력 직전에 한 번 더
+    # 확인해야 "비적용이라 써놓고 그 법 위반을 지적하는" 자기모순이 남지 않는다.
+    from runtime.review.statute_finding_consistency import (
+        enforce_statute_conclusion_consistency as _enforce_statute_consistency,
+        reframe_settled_ip_scope as _reframe_ip_scope,
+    )
+    _statute_conflict = _enforce_statute_consistency(
+        clause_results,
+        [d.to_dict() for d in _statute_decisions],
+        contract_text=str(text or ""),
+    )
+    meta["statute_finding_conflict"] = _statute_conflict
+    if _statute_conflict.get("status") and not meta.get("review_status"):
+        meta["review_status"] = str(_statute_conflict["status"])
+        meta["review_status_detail"] = str(_statute_conflict.get("detail") or "")
+
+    # ── [상대방 역할 오분류 시 결과 생성 금지] (2026-09-11 지시) ─────────────
+    # 당사자 지위는 검토의 좌표축이다. 뒤집히면 어느 조항이 유리한지부터
+    # 어떤 법률이 적용되는지까지 전부 반대로 선다. finding 하나를 고쳐서
+    # 해소되는 문제가 아니므로 상태를 세워 확정본으로 쓰지 못하게 한다.
+    from runtime.review.counterparty_role_gate import (
+        enforce_counterparty_role as _enforce_role,
+    )
+    _role_conflict = _enforce_role(
+        _legal_state.to_dict(),
+        party_role=meta.get("party_role") if isinstance(meta.get("party_role"), dict) else None,
+        contract_text=str(text or ""),
+    )
+    meta["counterparty_role_gate"] = _role_conflict
+    if _role_conflict.get("status") and not meta.get("review_status"):
+        meta["review_status"] = str(_role_conflict["status"])
+        meta["review_status_detail"] = str(_role_conflict.get("detail") or "")
+
+    # 이미 2차적저작물작성권이 명시돼 있으면 "권리범위 불명확" 이 아니라
+    # 실제 권리 확보(chain of title·제3자 소재)를 검토해야 한다(지시 항목 4).
+    _ip_reframed = _reframe_ip_scope(clause_results, contract_text=str(text or ""))
+    meta["ip_scope_reframed"] = _ip_reframed
+
     # ── [Final Senior Counsel Gate] (2026-09-10 아키텍처 지시 항목 12) ────────
     # 출력 직전 10개 항목을 전부 점검한다. 하나라도 실패하면 "정상 완료"로
     # 표시하지 않는다 — 다만 담당자가 나머지 결과를 쓸 수 있도록, 차단이 아니라
@@ -7116,15 +7326,22 @@ def build_clause_level_result(
     # 복원하고, 그 결과를 final_findings 에도 반영한다.
     _counsel_restored: list[str] = []
     for _cr_fin in clause_results:
-        if not isinstance(_cr_fin, dict) or not _cr_fin.get("is_counsel_agent"):
+        if not isinstance(_cr_fin, dict) or not (
+            _cr_fin.get("is_counsel_agent") or _cr_fin.get("is_risk_package")
+        ):
             continue
         if bool(_cr_fin.get("keep_as_is")):
             continue
         _want_fin = str(_cr_fin.get("counsel_severity") or "").upper()
         if _want_fin not in ("HIGH", "MEDIUM"):
             continue
-        if bool(_cr_fin.get("dedup_suppressed")) or str(_cr_fin.get("risk_tier") or "").upper() != _want_fin:
-            _cr_fin["dedup_suppressed"] = False
+        # dedup 은 되돌리지 않는다 — 같은 조항을 이미 다른 finding 이 다루고
+        # 있어 병합된 것이라면 그대로 두는 것이 맞고, 여기서 되살리면 UI 에는
+        # 뜨는데 DOCX 에는 없는 항목이 생긴다(실측: 대리점·용역 계약에서
+        # UI-only 조항 발생). 등급만 복원한다.
+        if bool(_cr_fin.get("dedup_suppressed")):
+            continue
+        if str(_cr_fin.get("risk_tier") or "").upper() != _want_fin:
             _cr_fin["risk_tier"] = _want_fin
             _cr_fin["severity"] = _want_fin
             _cr_fin["review_tier"] = "MUST" if _want_fin == "HIGH" else "SUGGEST"

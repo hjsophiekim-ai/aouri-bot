@@ -2218,6 +2218,59 @@ def create_handler(service: RuleQueryService):
                             detail="원문이 상대방의 청구를 차단하고 있는데 수정안이 예외를 신설했습니다.",
                         )
 
+                    # [상대방 권리 신설 차단, 2026-09-11 지시] 위 보호가 "기존
+                    # 차단이 풀리는" 경우를 본다면, 이것은 원문에 없던 이의권·
+                    # 방어권·시정기간·책임제한이 상대방에게 새로 생기는 경우를
+                    # 본다. 다운로드 경로도 문안을 재구성하므로 같이 건다.
+                    from runtime.review.clause_direction import (
+                        we_perform_first as _we_perform_first_docx,
+                    )
+                    from runtime.review.counterparty_grant_guard import (
+                        enforce_no_new_counterparty_rights as _enforce_no_new_rights_docx,
+                    )
+                    from runtime.review.group_entities import (
+                        our_side_labels as _group_labels_docx,
+                    )
+                    from runtime.review.transaction_consistency import (
+                        CONSIDERATION_NON_MONETARY as _NON_MONETARY_DOCX,
+                        classify_consideration_structure as _classify_consideration_docx,
+                    )
+
+                    _our_labels_docx = tuple(dict.fromkeys(
+                        x for x in (
+                            *(
+                                str(y) for r in _all_results
+                                if isinstance(r, dict) and isinstance(r.get("our_labels"), list)
+                                for y in r["our_labels"]
+                            ),
+                            str(entity or ""),
+                            *_group_labels_docx(str(text or ""), entity=str(entity or "")),
+                        ) if str(x or "").strip()
+                    ))
+                    _grant_blocked_docx = _enforce_no_new_rights_docx(
+                        _all_results,
+                        statute_decisions=[d.to_dict() for d in _statute_decisions_docx],
+                        our_labels=_our_labels_docx,
+                        we_perform_first=_we_perform_first_docx(
+                            str(text or ""),
+                            is_non_monetary=(
+                                _classify_consideration_docx(str(text or ""))
+                                == _NON_MONETARY_DOCX
+                            ),
+                        ),
+                    )
+                    if _grant_blocked_docx:
+                        _delivery.add(
+                            "COUNTERPARTY_GRANT_BLOCKED",
+                            clause_ids=[
+                                str(b.get("clause_id") or "") for b in _grant_blocked_docx
+                            ],
+                            reason="상대방에게 없던 권리를 새로 부여하는 수정안을 보류함",
+                            detail=str(
+                                "; ".join(_grant_blocked_docx[0].get("reasons") or [])
+                            ),
+                        )
+
                     # [거래실질 정합성, 2026-09-10 지시] 현금 대가가 없는 교환
                     # 구조에 대금 지급 전제의 템플릿 문안이 들어가지 않게 한다.
                     from runtime.review.transaction_consistency import (

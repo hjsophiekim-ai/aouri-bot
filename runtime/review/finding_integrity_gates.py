@@ -221,7 +221,13 @@ def enforce_valid_clause_references(
         refs: set[str] = set()
         new_clause_refs: set[str] = set()
         for key in ("display_path", "clause_title"):
-            refs |= _referenced_articles(str(cr.get(key) or ""), skip_statutes=False)
+            _val = str(cr.get(key) or "")
+            # "제20조 신설" 처럼 그 자체로 신설을 가리키는 표기는 아직 없는
+            # 번호를 가리키는 것이 정상이다. 종전에는 이것도 기존 조항 참조로
+            # 세어, 계약 말미에 조항을 신설하라는 정당한 권고가 "존재하지 않는
+            # 조항을 가리킴" 으로 차단됐다(2026-09-10 실측: 리스크 사슬 finding).
+            target = new_clause_refs if "신설" in _val else refs
+            target |= _referenced_articles(_val, skip_statutes=False)
         ri = cr.get("redline_instruction")
         if isinstance(ri, dict):
             loc = str(ri.get("edit_location") or "")

@@ -389,6 +389,154 @@ class CrossContractHoldoutTest(unittest.TestCase):
                 )
         self.assertEqual(failures, [], "자가점검 실패 항목")
 
+    # ── 9. 리스크 사슬 (2026-09-10 범용 보정 항목 1) ──────────────────────
+    def test_pre_performance_structures_are_judged_as_a_package(self) -> None:
+        """선이행 구조가 있으면 반드시 사슬로 판단한다 — 조항이 개별적으로
+        정상이라도 사슬 끝의 회수 수단이 비어 있으면 노출은 급부의 전액이다.
+        '적정' 으로 넘어가면 안 된다."""
+        from runtime.review.effect_risk_package import build_effect_risk_packages
+
+        bad: list[str] = []
+        for case in CASES:
+            text = (FIXTURES / case.fixture).read_text(encoding="utf-8")
+            chains = {c["key"]: c for c in build_effect_risk_packages(text=text)}
+            pre = chains.get("pre_performance_recovery")
+            if pre is None:
+                continue  # 선이행 구조가 없는 계약은 대상이 아니다
+            if not pre["chain_broken"]:
+                continue  # 사슬이 온전하면 지적할 것이 없다
+            # 사슬이 끊겼으면 그 판단이 실제 finding 으로 나와야 한다.
+            found = any(
+                str(cr.get("risk_chain_key") or "") == "pre_performance_recovery"
+                for cr in _live_findings(self._run(case).bundle.clause_results)
+            )
+            if not found:
+                bad.append(f"{case.key}: 선이행 사슬이 끊겼는데 검토의견이 없음")
+        self.assertEqual(bad, [], "선이행 package 미검토")
+
+    def test_risk_chain_findings_carry_a_complete_edit(self) -> None:
+        from runtime.review.redline_instruction import is_incomplete_redline
+
+        bad: list[str] = []
+        for case in CASES:
+            for cr in _live_findings(self._run(case).bundle.clause_results):
+                if not cr.get("is_risk_package"):
+                    continue
+                if is_incomplete_redline(cr.get("redline_instruction")):
+                    bad.append(f"{case.key}/{cr.get('clause_id')}")
+        self.assertEqual(bad, [], "리스크 사슬 finding 에 완성 문구가 없다")
+
+    # ── 10. 근거 없는 금액 추정 금지 (항목 7) ─────────────────────────────
+    def test_no_unfounded_amount_estimates(self) -> None:
+        """계약서에 금액이 없는데 '수천만~수억 원' 을 적으면, 담당자가 그 숫자를
+        들고 협상하거나 보고하게 된다 — 틀린 숫자는 없는 숫자보다 나쁘다."""
+        import re
+
+        rx = re.compile(r"수\s*(?:십|백|천)?\s*(?:만|억|조)\s*원|[0-9]{1,2}\s*[~∼-]\s*[0-9]{1,3}\s*%")
+        bad: list[str] = []
+        for case in CASES:
+            text = (FIXTURES / case.fixture).read_text(encoding="utf-8")
+            for cr in _live_findings(self._run(case).bundle.clause_results):
+                blob = _finding_text(cr)
+                for m in rx.finditer(blob):
+                    token = m.group(0)
+                    if token.replace(" ", "") in text.replace(" ", ""):
+                        continue  # 계약 원문이 쓰는 숫자면 근거가 있다
+                    bad.append(f"{case.key}/{cr.get('clause_id')}: {token}")
+        self.assertEqual(bad, [], "근거 없는 금액·비율 추정")
+
+    # ── 11. 우리에게 유리한 조항 약화 금지 (항목 2) ───────────────────────
+    def test_counterparty_burden_is_never_softened_without_legal_ground(self) -> None:
+        from runtime.review.accept_keep import softens_counterparty_burden
+
+        bad: list[str] = []
+        for case in CASES:
+            for cr in _live_findings(self._run(case).bundle.clause_results):
+                if bool(cr.get("legal_compliance_override")):
+                    continue  # 강행법규 준수 목적의 수정은 허용된다
+                proposed = " ".join(
+                    str(cr.get(k) or "")
+                    for k in ("suggested_rewrite", "proposed_revision", "recommendation_text")
+                )
+                if softens_counterparty_burden(str(cr.get("original_text") or ""), proposed):
+                    bad.append(f"{case.key}/{cr.get('clause_id')}")
+        self.assertEqual(bad, [], "상대방 책임을 법적 이유 없이 완화하는 수정안이 남았다")
+
+    # ── 12. 적용법률 결론 ↔ finding 일관성 (2026-09-11 지시) ─────────────
+    def test_no_finding_asserts_an_inapplicable_statute(self) -> None:
+        """비적용으로 확정한 법률의 의무·제재를 주장하는 finding 이 남으면,
+        같은 문서 안에서 스스로 모순되는 결론을 내는 것이다."""
+        from runtime.review.statute_finding_consistency import find_statute_conflicts
+
+        bad: list[str] = []
+        for case in CASES:
+            meta = self._run(case).bundle.meta
+            decisions = (meta.get("statute_applicability_gate") or {}).get("decisions") or []
+            text = (FIXTURES / case.fixture).read_text(encoding="utf-8")
+            conflicts = find_statute_conflicts(
+                self._run(case).bundle.clause_results, decisions, contract_text=text,
+            )
+            for c in conflicts:
+                bad.append(f"{case.key}/{c['clause_id']}: {c['statute']}")
+        self.assertEqual(bad, [], "적용법률 결론과 충돌하는 finding")
+
+    # ── 13. 이미 명시된 권리를 불명확으로 지적 금지 (지시 항목 4) ─────────
+    def test_settled_derivative_right_is_not_reported_as_unclear_scope(self) -> None:
+        import re
+
+        rx_unclear = re.compile(
+            r"(?:범위|귀속)[^.\n]{0,20}(?:불명확|명확하지\s*(?:않|아니))"
+            r"|양도에\s*포함되지\s*(?:않|아니)"
+        )
+        bad: list[str] = []
+        for case in CASES:
+            text = (FIXTURES / case.fixture).read_text(encoding="utf-8")
+            if "2차적저작물" not in text:
+                continue  # 명시되지 않은 계약은 대상이 아니다
+            for cr in _live_findings(self._run(case).bundle.clause_results):
+                if str(cr.get("risk_tier") or "").upper() != "HIGH":
+                    continue
+                blob = _finding_text(cr)
+                if "2차적저작물" in blob and rx_unclear.search(blob):
+                    bad.append(f"{case.key}/{cr.get('clause_id')}")
+        self.assertEqual(bad, [], "이미 명시된 2차적저작물작성권을 '범위 불명확' HIGH 로 지적")
+
+    # ── 14. 바터계약에 현금 템플릿 금지 (지시 항목 3) ─────────────────────
+    def test_no_cash_payment_template_in_non_monetary_contracts(self) -> None:
+        from runtime.review.transaction_consistency import (
+            _RX_CASH_PAYMENT_TEMPLATE,
+            classify_consideration_structure,
+        )
+
+        bad: list[str] = []
+        for case in CASES:
+            text = (FIXTURES / case.fixture).read_text(encoding="utf-8")
+            if classify_consideration_structure(text) != "non_monetary_exchange":
+                continue
+            for cr in _live_findings(self._run(case).bundle.clause_results):
+                proposed = " ".join(
+                    str(cr.get(k) or "")
+                    for k in ("suggested_rewrite", "proposed_revision", "recommendation_text")
+                )
+                m = _RX_CASH_PAYMENT_TEMPLATE.search(proposed)
+                if m and not _RX_CASH_PAYMENT_TEMPLATE.search(str(cr.get("original_text") or "")):
+                    bad.append(f"{case.key}/{cr.get('clause_id')}: {m.group(0)}")
+        self.assertEqual(bad, [], "무현금 교환계약에 현금 대금 템플릿이 삽입됨")
+
+    # ── 15. 선이행 제안은 구조 우선 (지시 항목 5) ─────────────────────────
+    def test_pre_performance_recommends_structure_before_wording(self) -> None:
+        """반환청구 문구를 다듬는 것으로는 회수 가능성이 달라지지 않는다 —
+        분할이행·소유권 이전시점·담보를 먼저 제안해야 한다."""
+        bad: list[str] = []
+        for case in CASES:
+            for cr in _live_findings(self._run(case).bundle.clause_results):
+                if str(cr.get("risk_chain_key") or "") != "pre_performance_recovery":
+                    continue
+                proposed = str(cr.get("suggested_rewrite") or "")
+                if not all(k in proposed for k in ("분할", "소유권", "담보")):
+                    bad.append(f"{case.key}/{cr.get('clause_id')}: 구조 제안 누락")
+        self.assertEqual(bad, [], "선이행 제안이 구조(분할이행·소유권·담보)를 담지 않음")
+
     def test_every_contract_produces_at_least_one_finding(self) -> None:
         bad = [
             case.key for case in CASES

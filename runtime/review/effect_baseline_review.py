@@ -72,6 +72,17 @@ class EffectCheck:
     absent_globally: re.Pattern[str] | None = None
     #: 이 패턴이 조항에 있으면 발동하지 않는다(이미 방어장치가 있음).
     unless: re.Pattern[str] | None = None
+    #: 이 조항이 **우리에게 유리한** 경우를 가리는 기준.
+    #:
+    #: 2026-09-11 지시 — "우리 회사에 유리한 즉시해지·면책·비용청구 제한
+    #: 조항은 특별한 위법성이 없으면 KEEP 처리." 약관성(일방이 미리 작성한
+    #: 정형 약관) 신호가 있을 때만 지적한다. 개별 교섭으로 체결한 계약에서
+    #: 우리가 가진 권리를 스스로 깎을 이유가 없다.
+    #:
+    #: 방향 기준은 조항 성격에 따라 다르다.
+    #:   "ours_holds"  권리(해지권 등)를 **우리가 보유**하면 유리
+    #:   "theirs_bears" 책임(배상 등)을 **상대방이 부담**하면 유리
+    favorable_when: str = ""
 
 
 def _rx(p: str) -> re.Pattern[str]:
@@ -146,6 +157,7 @@ CHECKS: tuple[EffectCheck, ...] = (
         problem="귀책사유를 묻지 않고 손해배상 의무를 지우는 무과실 책임 구조입니다.",
         legal_reason="무과실·전부배상 조항은 약관규제법 제7조 및 민법상 신의칙에 비추어 그 범위에서 효력이 부정될 수 있고, 우리가 그 조항의 수혜자인 경우에도 분쟁 시 집행되지 않을 위험이 있습니다.",
         present=_rx(r"귀책(?:사유)?(?:이)?\s*(?:아닌|없는)\s*경우에도|고의\s*·?\s*과실을?\s*불문|무과실"),
+        favorable_when="theirs_bears",
     ),
     EffectCheck(
         check_id="eb_liability_uncapped",
@@ -177,6 +189,7 @@ CHECKS: tuple[EffectCheck, ...] = (
         legal_reason="최고 없는 즉시해지는 민법 제544조의 예외에 해당하는 좁은 사유에서만 유효하며, 약관규제법 제9조에 비추어 그 범위에서 효력이 부정될 수 있습니다. 우리가 해지권자인 경우에도 실제 행사 시 무효 주장을 받게 됩니다.",
         present=_rx(r"(?:사전\s*)?(?:통지|최고|催告)\s*없이\s*(?:즉시\s*)?해[지제]|즉시\s*해[지제]할\s*수\s*있"),
         unless=_rx(r"파산|회생|해산|압류|명백한\s*이행불능"),
+        favorable_when="ours_holds",
     ),
     EffectCheck(
         check_id="eb_termination_no_survival",
@@ -264,6 +277,23 @@ CHECKS: tuple[EffectCheck, ...] = (
 #: 같은 조항에 이미 같은 효과의 finding 이 있으면 중복이므로 만들지 않는다.
 _EXISTING_EFFECT_KEY = "clause_effects"
 
+#: 약관성 신호 — 일방이 미리 작성한 정형 약관이면 약관규제법 제7조·제9조가
+#: 실제로 적용되므로, 우리에게 유리한 조항이라도 효력이 부정될 수 있다.
+_RX_ADHESION_CONTRACT = re.compile(
+    r"약관|표준\s*계약(?:서)?|일방(?:이|적으로)\s*(?:미리\s*)?(?:작성|마련)"
+    r"|정형\s*양식|부동문자",
+    re.IGNORECASE,
+)
+
+# 방향 판단은 `clause_direction` 하나만 쓴다. 종전에는 이 파일이 자체 구현을
+# 들고 있었는데, 그 사본에는 "갑"을 우리로 가정하고 관형절 주어("갑이 **입은**
+# 손해")와 부정형("부담하지 **아니한다**")을 구분하지 못하는 결함이 있었다.
+# 같은 판단을 여러 곳에서 따로 구현하면 한 곳을 고칠 때 다른 곳이 어긋난다.
+from runtime.review.clause_direction import (  # noqa: E402
+    ours_bears_burden as _ours_bears_the_burden,
+    ours_holds_right as _ours_holds_the_right,
+)
+
 
 def _clause_attr(clause: Any, name: str) -> str:
     if isinstance(clause, dict):
@@ -276,6 +306,7 @@ def run_effect_baseline_review(
     *,
     full_text: str,
     existing_results: list[dict[str, Any]] | None = None,
+    our_labels: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """조항별 법률효과만 보고 기본 점검을 수행한다.
 
@@ -332,6 +363,17 @@ def run_effect_baseline_review(
                 fires = globally_absent.get(check.check_id, False)
             if not fires:
                 continue
+
+            # [우리에게 유리한 조항은 위법성이 있을 때만 지적, 2026-09-11 지시]
+            # 즉시해지권·무과실 배상청구권이 **우리 쪽** 권리라면 그 조항은
+            # 우리에게 유리하다. 약관성(일방이 미리 작성한 정형 약관) 신호가
+            # 없으면 개별 교섭 계약이므로 효력이 부정될 현실적 위험이 낮다 —
+            # 스스로 권리를 깎는 수정안을 만들지 않는다.
+            if check.favorable_when and not _RX_ADHESION_CONTRACT.search(body):
+                if check.favorable_when == "ours_holds" and _ours_holds_the_right(text, our_labels):
+                    continue
+                if check.favorable_when == "theirs_bears" and not _ours_bears_the_burden(text, our_labels):
+                    continue
 
             # 부재형 점검은 계약 전체에 대해 한 번만 보고한다.
             if check.absent_globally is not None and check.present is None:

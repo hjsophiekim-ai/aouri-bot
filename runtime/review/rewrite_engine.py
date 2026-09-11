@@ -386,6 +386,47 @@ def _rewrite_risk_001_liability_cap(text: str, *, matched_keywords: list[str], p
     )
 
 
+#: 제3자 청구 절차 문안. 우리가 배상을 **받는** 쪽인지 **지는** 쪽인지에 따라
+#: 같은 자리에 정반대 문구가 들어가야 한다.
+_INDEMNITY_PROCEDURE_PROTECTED = (
+    " (제3자 청구에 따른 배상은 상대방의 귀책 범위 내에서 당사를 방어·면책하는 "
+    "구조로 하며, ①통지: 당사는 청구 수령 후 상대방에게 서면 통지하고, "
+    "②방어·비용: 상대방은 자신의 비용으로 당사를 방어하며 합리적 변호사보수를 "
+    "포함한 일체의 비용을 부담하고, ③승인: 당사의 사전 서면 승인 없이 합의·변제할 "
+    "수 없으며, ④지급: 당사의 서면 청구일부터 30일 이내에 배상액을 지급한다.)"
+)
+_INDEMNITY_PROCEDURE_BEARING = (
+    " (제3자 청구에 따른 배상은 당사의 귀책 범위 내의 직접·통상손해에 한하며, "
+    "①통지: 상대방은 청구 수령 후 지체 없이 당사에 서면 통지하고, "
+    "②방어권: 당사는 자신의 비용으로 방어에 참여할 권리를 가지며, "
+    "③승인: 당사의 사전 서면 승인 없이 합의·변제할 수 없고, "
+    "④범위·한도: 간접·특별·결과적 손해를 제외하고 본 계약상 당사가 수령한 대가 "
+    "총액을 한도로 한다.)"
+)
+_INDEMNITY_PROCEDURE_MUTUAL = (
+    " (제3자 청구에 따른 배상은 상호주의를 원칙으로 하며, "
+    "①통지: 청구 수령 후 즉시 상대방에게 서면 통지, "
+    "②방어권: 통지받은 당사자는 자신의 비용으로 방어에 참여할 권리를 가짐, "
+    "③승인: 합의·변제는 상대방의 사전 서면 승인 없이 불가, "
+    "④이의제기권: 배상 청구에 대하여 14일 이내 서면 이의 가능, "
+    "⑤범위·한도: 귀책 범위 내로 제한)"
+)
+
+
+def _indemnity_procedure_clause(posture: str) -> str:
+    """검토 자세에 맞는 제3자 청구 절차 문안.
+
+    `buyer_favorable`  우리가 발주·구매 측 — 상대방이 배상하는 구조를 명확히 한다.
+    `seller_favorable` 우리가 공급 측 — 우리 책임의 범위·한도를 명확히 한다.
+    그 밖에는 방향을 단정할 수 없으므로 종전의 상호주의 문안을 쓴다.
+    """
+    if str(posture or "") == "buyer_favorable":
+        return _INDEMNITY_PROCEDURE_PROTECTED
+    if str(posture or "") == "seller_favorable":
+        return _INDEMNITY_PROCEDURE_BEARING
+    return _INDEMNITY_PROCEDURE_MUTUAL
+
+
 def _rewrite_risk_002_indemnity(text: str, *, matched_keywords: list[str], posture: str) -> RewriteProposal | None:
     original = _norm_ws(text)
     if not original:
@@ -410,15 +451,15 @@ def _rewrite_risk_002_indemnity(text: str, *, matched_keywords: list[str], postu
             if new_ns != ns:
                 changed_segs.append({"before": "을은 갑을 면책", "after": "각 당사자는 상대방을 합리적인 범위에서 면책"})
                 ns = new_ns
-        # 2단계: 이의제기권 + 방어권 + 승인 절차 삽입
-        procedure_clause = (
-            " (제3자 청구에 따른 배상은 상호주의를 원칙으로 하며, "
-            "①통지: 청구 수령 후 즉시 상대방에게 서면 통지, "
-            "②방어권: 통지받은 당사자는 자신의 비용으로 방어에 참여할 권리를 가짐, "
-            "③승인: 합의·변제는 상대방의 사전 서면 승인 없이 불가, "
-            "④이의제기권: 배상 청구에 대하여 14일 이내 서면 이의 가능, "
-            "⑤범위·한도: 귀책 범위 내로 제한)"
-        )
+        # 2단계: 절차 삽입 — **방향을 보고** 넣는다.
+        #
+        # 종전에는 posture 와 무관하게 "상호주의 + 상대방의 방어권·이의제기권"
+        # 을 넣었다. 읽기에는 균형이 잡혀 보이지만, 우리가 배상을 **받는** 쪽인
+        # 계약에서는 원문에 없던 방어권·이의제기권을 우리가 먼저 상대방에게
+        # 만들어 건네는 문안이 된다(2026-09-11 지시: "상대방에게 새로운
+        # 이의권·방어권·시정기간·책임제한을 만들어주는 수정은 특별한 법적
+        # 필요가 있을 때만"). 검토의 목표는 중립이 아니라 우리 위험의 감축이다.
+        procedure_clause = _indemnity_procedure_clause(posture)
         if ns == s:
             ns = s + procedure_clause
             changed_segs.append({"before": "(면책 절차 없음)", "after": procedure_clause.strip()})
