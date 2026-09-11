@@ -2065,6 +2065,7 @@ HIGH/MEDIUM 완성 문구 · UI/DOCX 동일성
 
 | 날짜 | 변경 내용 |
 |------|-----------|
+| 2026-09-11 | 퍼시스그룹 계열사 인식(바로스→레터스 상호변경, 데스커 브랜드·해외법인 사실확인 분리, 계열사 간 거래 구분), 조항 방향 판단 단일 출처, 상대방 권리 신설 차단, 세무·회계 내부통제 분리, 상대방 역할 오분류 게이트 |
 | 2026-09-10 | v8.0 공통 Legal Reasoning Engine: 법률효과 taxonomy 14범주(clause_effect) → 거래 원형 → 계약유형 라벨 순으로 판단 순서 역전, Canonical Legal State 11축 단일화(legal_state), 효과 기반 기본검토 신설(effect_baseline_review, 유형 인자 없음), 자리표시자 금지·최소수정안 생성(minimal_edit), canned question 범위 게이트+효과 기반 질문(question_scope/effect_questions), 적용요건 게이트 6개 법률로 확장, UI/DOCX 단일 결과 객체, Final Senior Counsel Gate 10항목(final_counsel_gate). license_ip·barter_exchange 유형 신설. 8종 교차 hold-out + AI-on 5종 전부 통과, 1,050개 테스트 통과 |
 | 2026-09-10 | v7.0 법률 적용요건 선판단 게이트(statute_applicability_gate — 하도급법 4개 위탁유형 법정 정의, 우리 업 도메인 표, 비적용 시 전용 rule 비활성화), 사내변호사형 3-Pass 에이전트(counsel_agent — 이해/쟁점/인용검증, 법률·세무·경제 3축), 전달 게이트(delivery_gate — 409 차단을 제거·기록 후 전달로 전환), 거래실질 정합성(transaction_consistency — 바터에 현금 템플릿 금지), 계약을 읽고 만드는 사전질문(contract_question_agent), keyword-only matching 금지, 조문 존재 판정을 발췌가 아닌 전문으로. 987개 테스트 통과 |
 | 2026-06-30 | v4.0 렌탈대리점 전문 변호사급 검토 엔진: dealer_rental_rules.py (DLR-001~008), review_orchestrator.py (7단계 파이프라인), ProfessionalFinding 데이터클래스, 조항-문안 hard gate 3중 차단, isr_*/sppc_* 3중 차단, 역할 매트릭스, test_dealer_rental_professional_review.py (6개 테스트). 커밋: "refactor dealer rental review into professional legal risk engine" |
@@ -2079,3 +2080,59 @@ HIGH/MEDIUM 완성 문구 · UI/DOCX 동일성
 | 2026-05-11 | Project Installation Contract 분류 추가 (`project_installation`), 안전 10개·교육 8개 체크리스트 추가, HIGH cap에서 `is_checklist_item` 제외 |
 | 2026-05-07 | docx 다운로드 soft MEDIUM 수정본 생성 실패 버그 수정 (must_fix/approval_required 없는 MEDIUM은 suggested_rewrite 불필요) |
 | 2026-05-07 | xlsx 파일 업로드 지원 추가 (openpyxl 기반) |
+
+---
+
+# [Fursys Group Entity Recognition] 퍼시스그룹 계열사 인식 및 검토 기본원칙
+> 최종 업데이트: 2026-09-11
+> 적용 파일: `runtime/review/group_entities.py`, `runtime/review/clause_direction.py`,
+> `runtime/review/counterparty_grant_guard.py`, `runtime/review/internal_control_split.py`,
+> `runtime/review/counterparty_role_gate.py`
+
+## 계열사 목록 (검토의 "우리 회사 측")
+
+퍼시스 · 일룸 · 데스커 · 시디즈 · 레터스 · 퍼플식스 · 퍼시스 베트남 ·
+시디즈 아메리카 · 퍼시스 아메리카 · 일룸 타이완 · 퍼시스 지주 · 일룸 지주
+
+위 계열사가 계약 당사자이거나 실질적 이해관계자인 경우, 아우리봇은 해당 계열사의
+**사내변호사 관점**에서 검토한다.
+
+## 명칭 정합성 (Entity Name Consistency)
+
+- **바로스 → 레터스**: 상호가 변경되었다. 현재 법인명은 레터스이며, 설치용역·물류 업(業)도
+  그대로 따라온다. 다만 체결 당시 법인명이 바로스였던 문서는 **그 당시 명칭을 보존**하고,
+  등기부상 법인 동일성(상호 변경인지 별개 법인인지)을 확인 항목으로 올린다.
+- **데스커**: 독립 법인명이라기보다 브랜드 표기일 수 있다. 계약서상 **법적 당사자 명칭**을
+  우선 확인한다.
+- **해외법인**: 각 법인의 정확한 영문 법인명과 계약 당사자성을 별도로 확인한다(자동 단정 금지).
+- **긴 이름 우선 매칭**: "퍼시스"가 "퍼시스 아메리카"로, 또는 그 반대로 해석되지 않는다.
+- **계열사 간 계약**: 양쪽이 모두 계열사면 외부 제3자 계약과 동일한 협상기준을 기계적으로
+  적용하지 않고, 내부거래·이해상충(거래조건의 정상성, 지원행위 해당 여부) 관점의 확인
+  항목을 세운다.
+
+## 검토 기본원칙
+
+1. 법령·강행규정·공정거래 규제를 준수하되, 단순히 "균형"이나 "상호주의"를 이유로 우리
+   회사에 유리한 **적법한** 권리까지 약화시키지 않는다.
+2. 기존 조항이 우리 회사에 유리하고 위법·무효 가능성이 높지 않다면 원칙적으로 **KEEP /
+   ACCEPT** 처리한다.
+3. 상대방에게 새로운 **시정기간·이의제기권·방어권·책임제한·면책·손해배상 cap** 을 추가하는
+   수정은, 법적으로 필요하거나 우리 회사의 실질적 리스크를 줄이는 경우에만 제안한다.
+4. 검토의 목표는 "양 당사자에게 중립적인 계약"이 아니라, **법률을 준수하면서 우리 회사의
+   권리·경제적 이익·협상력을 최대한 보호하는 현실적인 계약**을 만드는 것이다.
+5. 단, 우리 회사에 유리하더라도 **강행법규 위반·무효 가능성·불공정거래·제재·손해배상 위험**이
+   큰 조항은 그대로 유지하지 말고 최소수정안으로 조정한다.
+6. 각 finding 마다 판단한다 — ① 우리에게 유리한가/불리한가 ② 법적으로 유지 가능한가
+   ③ 실제 협상에서 굳이 수정할 필요가 있는가 ④ 수정 시 우리 권리가 약화되는가.
+7. 수정안은 **우리 회사 보호 우선 → 법적 유효성 → 협상 수용가능성** 순서로 판단한다.
+
+## 구현 게이트
+
+| 게이트 | 파일 | 역할 |
+|---|---|---|
+| 계열사 registry | `group_entities.py` | 계열사·구 상호·브랜드·영문명을 우리 호칭으로 해석. 하도급법 업(業) 판단의 단일 출처 |
+| 방향 판단 | `clause_direction.py` | 의무는 부담자, 권리는 보유자 기준. 관형절 주어·부정형·"갑" 가정 배제 |
+| 상대방 권리 신설 차단 | `counterparty_grant_guard.py` | 원문에 없던 이의권·방어권·시정기간·책임제한 부여 차단. 선이행 시 즉시해지·환수·보전 보호 |
+| 내부통제 분리 | `internal_control_split.py` | 세무·회계 내부통제를 계약 조항이 아닌 내부 확인사항으로 분리 |
+| 역할 오분류 차단 | `counterparty_role_gate.py` | 당사자 지위 모순 시 `REVIEW_FAILED_COUNTERPARTY_ROLE_CONFLICT` (다운로드는 사유 명시 후 계속) |
+
