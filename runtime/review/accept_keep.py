@@ -130,11 +130,97 @@ def softens_counterparty_burden(
     return bool(_RX_BURDEN_SOFTENED.search(proposed))
 
 
+#: 쌍방에 대칭으로 적용되는 조항의 표지.
+_RX_MUTUAL = re.compile(
+    r"각\s*당사자|양\s*당사자|쌍방|상호(?:간|적으로)?|서로|어느\s*一?일방"
+    r"|each\s+party|both\s+parties|mutual",
+    re.IGNORECASE,
+)
+
+#: 우리 권리·상대방 의무에 **새로 붙는** 제한. 원문에 없던 것만 본다.
+_RX_RESTRICTION_ADDED = re.compile(
+    r"에\s*한(?:하여|한다|함)|한\s*경우에만|경우에\s*한(?:하여|한다)"
+    r"|범위\s*(?:내에서|내로)\s*(?:만)?|상당한\s*기간|사전\s*(?:서면\s*)?협의를\s*거쳐"
+    r"|합의(?:하여|를\s*거쳐)\s*(?:정한다|결정)|상호\s*협의|쌍방\s*합의"
+    r"|초과할\s*수\s*없|제외한다|배제한다",
+)
+
+
+#: 계약 **전체**가 당사자 지위를 번갈아 부여하는 구조인지. 상호 NDA 가 전형이다
+#: ("정보 별로 제공자와 수신자를 분별한다"). 조항 문면만 보면 "수신자가 의무를
+#: 부담한다" 로 읽히지만, 그 수신자가 이번에는 우리일 수 있다.
+_RX_MUTUAL_CONTRACT = re.compile(
+    r"제공(?:하는|한)\s*자를[^.\n]{0,20}(?:라고\s*)?하고[^.\n]{0,30}제공받는\s*자"
+    r"|정보\s*별로[^.\n]{0,20}(?:제공자|수신자)"
+    r"|각\s*당사자(?:는|가)[^.\n]{0,40}(?:제공자|수신자|공히|모두)"
+    r"|상호(?:\s*간)?\s*(?:정보|비밀정보)(?:를)?\s*(?:주고\s*받|제공|교환)"
+    r"|양사가\s*상호|쌍방(?:이|은)?\s*각각"
+    r"|each\s+party\s+(?:may|shall)\s+(?:act\s+as|be)\s+(?:a\s+)?(?:disclos|receiv)",
+    re.IGNORECASE,
+)
+
+
+def has_alternating_party_roles(contract_text: str) -> bool:
+    """계약이 당사자 지위를 번갈아 부여하는가(상호 구조인가)."""
+    return bool(_RX_MUTUAL_CONTRACT.search(str(contract_text or "")))
+
+
+def weakens_our_favorable_clause(
+    original_text: str,
+    proposed_text: str,
+    *,
+    our_labels: tuple[str, ...] = (),
+    contract_text: str = "",
+) -> bool:
+    """이미 우리에게 유리한 조항에 수정안이 **없던 제한**을 붙이는가.
+
+    2026-09-11 지시 — "우리 회사에 유리하고 위법하지 않은 조항은 KEEP 처리하고
+    불필요하게 약화하지 마세요."
+
+    `softens_counterparty_burden` 은 상대방의 **책임**이 완화되는 문형만 본다.
+    그런데 약화는 다른 모습으로도 온다 — 우리 권리에 "상호 협의를 거쳐",
+    "상당한 기간을 정하여", "귀책 범위에 한하여" 같은 조건이 새로 붙는 식이다.
+    문장만 보면 합리적으로 읽히지만, 결과적으로 우리가 행사할 수 있던 권리에
+    상대방의 동의·기간·범위 제한이 생긴다.
+
+    유리 판정은 `clause_direction` 하나만 쓴다 — 상대방이 부담자이거나 우리가
+    권리자인 조항이 우리에게 유리한 조항이다.
+    """
+    from runtime.review.clause_direction import DIRECTION_THEY_BEAR, burden_direction
+
+    original = str(original_text or "")
+    proposed = str(proposed_text or "")
+    if not original.strip() or not proposed.strip():
+        return False
+    # 쌍방에 똑같이 적용되는 조항은 우리에게 유리한 조항이 아니다. 제한을
+    # 붙이면 양쪽이 같이 제한되고, 실제 위험은 상대방의 행사에서 온다.
+    # 실측: 웹젠 NDA 의 "관련 계약 연쇄해지" 는 상호 조항인데 우리 권리로
+    # 읽혀, 이를 제한하는 정당한 수정안이 KEEP 되고 HIGH finding 이 사라졌다.
+    if _RX_MUTUAL.search(original):
+        return False
+    # 대칭성은 조항이 아니라 계약 앞부분에 선언되는 경우가 많다. 실측: 웹젠
+    # NDA 는 제1조에서 "정보 별로 제공자와 수신자를 분별한다" 고 정해 두었다.
+    # 조항만 보면 "수신자가 의무를 부담한다" 이므로 우리에게 유리해 보이지만,
+    # 그 수신자는 이번에 우리다 — 이를 놓쳐 HIGH finding 두 건이 KEEP 됐다.
+    if has_alternating_party_roles(contract_text):
+        return False
+    # 판정은 **부담 방향**으로만 한다. "우리가 권리자인가"(`ours_holds_right`)
+    # 는 "…할 수 있다" 문형에 우리 호칭이 스치기만 해도 참이 되어, 우리에게
+    # 불리한 조항까지 보호 대상으로 만든다.
+    if burden_direction(original, our_labels) != DIRECTION_THEY_BEAR:
+        return False
+    # 원문에 이미 제한이 붙어 있으면 계약이 그렇게 정한 것이다.
+    if _RX_RESTRICTION_ADDED.search(original):
+        return False
+    return bool(_RX_RESTRICTION_ADDED.search(proposed))
+
+
 def apply_accept_keep(
     clause_results: list[dict[str, Any]],
     *,
     statute_decisions: list[dict[str, Any]] | None = None,
     our_labels: tuple[str, ...] = (),
+    contract_text: str = "",
 ) -> list[dict[str, Any]]:
     """상대방 책임을 줄이는 수정안을 `ACCEPT/KEEP` 으로 되돌린다.
 
@@ -153,9 +239,20 @@ def apply_accept_keep(
             continue
         if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
             continue
-        if not softens_counterparty_burden(
-            str(cr.get("original_text") or ""), _proposed(cr), our_labels=our_labels,
-        ):
+        _original = str(cr.get("original_text") or "")
+        _proposal = _proposed(cr)
+        _softens = softens_counterparty_burden(
+            _original, _proposal, our_labels=our_labels,
+        )
+        # 약화는 "상대방 책임 완화" 외에도 "우리 권리에 없던 제한 추가" 로 온다.
+        _restricts = (
+            False if _softens
+            else weakens_our_favorable_clause(
+                _original, _proposal,
+                our_labels=our_labels, contract_text=contract_text,
+            )
+        )
+        if not (_softens or _restricts):
             continue
         if is_legal_compliance_fix(cr, allowed):
             cr["legal_compliance_override"] = True
@@ -166,6 +263,11 @@ def apply_accept_keep(
             "현행 조항은 상대방에게 면책·배상·보증 등의 책임을 지우고 있어 우리 회사에 "
             "유리하며, 강행법규에 저촉되는 부분도 확인되지 않았습니다. 상대방의 책임을 "
             "완화·분담하는 수정은 우리 쪽에서 먼저 양보안을 제시하는 셈이 되므로 "
+            "현행 유지(ACCEPT/KEEP)를 권고합니다."
+        ) if _softens else (
+            "현행 조항은 우리 회사가 권리자이거나 상대방이 의무를 부담하는 구조로 "
+            "우리에게 유리하며, 위법·무효 위험도 확인되지 않았습니다. 제안된 수정은 "
+            "그 권리에 협의·기간·범위 제한을 새로 붙여 행사 요건을 무겁게 만들므로 "
             "현행 유지(ACCEPT/KEEP)를 권고합니다."
         )
         for key in _PROPOSAL_FIELDS:

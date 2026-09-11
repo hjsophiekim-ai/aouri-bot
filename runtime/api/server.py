@@ -219,6 +219,59 @@ def _transaction_type_for(clause_meta: dict | None, text: str) -> str:
         return ""
 
 
+def _statute_decisions_for(
+    clause_meta: dict | None,
+    *,
+    entity: str,
+    text: str,
+    contract_type_code: str = "",
+) -> list:
+    """적용법률 판단을 하나만 확정해 돌려준다.
+
+    [2026-09-11 지시] "상대방 역할·계약유형·적용법률은 한 번 확정한 canonical
+    값만 사용하고, downstream 에서 다시 추론하지 말 것."
+
+    검토가 확정해 세션에 저장한 `statute_applicability_gate.decisions` 가 있으면
+    그것을 복원해 쓴다. 재평가하면 같은 계약에서 화면과 문서가 다른 법률 판단을
+    근거로 삼게 된다 — 계약유형에서 이미 같은 사고가 났다("리포트 상단은 장비
+    구매·설치, 본문 법률분석은 공사도급").
+
+    저장된 값이 없는 옛 세션에서만 새로 판단한다.
+    """
+    from runtime.review.statute_applicability_gate import (
+        StatuteDecision,
+        assess_statutes,
+    )
+
+    stored = None
+    if isinstance(clause_meta, dict):
+        gate = clause_meta.get("statute_applicability_gate")
+        if isinstance(gate, dict):
+            rows = gate.get("decisions")
+            if isinstance(rows, list) and rows:
+                stored = rows
+    if stored:
+        restored: list = []
+        for row in stored:
+            if not isinstance(row, dict):
+                continue
+            try:
+                restored.append(StatuteDecision(
+                    statute=str(row.get("statute") or ""),
+                    conclusion=str(row.get("conclusion") or ""),
+                    reason=str(row.get("reason") or ""),
+                    disabled_topics=[str(t) for t in (row.get("disabled_topics") or [])],
+                    facts_needed=[str(f) for f in (row.get("facts_needed") or [])],
+                ))
+            except Exception:
+                continue
+        if restored:
+            return restored
+    return assess_statutes(
+        entity=entity, text=text, contract_type_code=contract_type_code,
+    )
+
+
 def _build_question_plan(
     *,
     entity: str,
@@ -2181,18 +2234,43 @@ def create_handler(service: RuleQueryService):
                             detail="수정 위치·방식·완성문구를 자동으로 확정하지 못했습니다.",
                         )
 
+                    # ── [canonical 결과 재추론 금지, 2026-09-11 지시] ──────────
+                    # "상대방 역할·계약유형·적용법률은 한 번 확정한 canonical 값만
+                    # 사용하고 downstream 에서 다시 추론하지 말 것. 최종 UI/DOCX 는
+                    # 동일한 canonical finding 만 사용."
+                    #
+                    # 아래 게이트들은 검토 파이프라인에서 이미 한 번 돌았다. UI 가
+                    # 확정한 결과(`_use_stored_findings`)가 있는데 여기서 다시 돌리면
+                    # 게이트가 finding 을 변형·회수해 문서 본문이 화면과 어긋난다 —
+                    # 같은 게이트를 두 번 적용하는 것이 곧 재추론이다.
+                    #
+                    # 그래서 재적용 대상을 **final_findings 를 저장하지 않은 옛
+                    # 세션**으로 한정한다. 그 경로는 여기서 _all_results 를
+                    # 독립적으로 재구성하므로 게이트를 다시 걸어야 비적용 법률
+                    # finding 등이 되살아나지 않는다. UI 확정본이 있으면 빈
+                    # 리스트를 넘겨 게이트를 무효화한다 — 게이트를 지우는 것이
+                    # 아니라 정본을 건드리지 않게 하는 것이다.
+                    _gate_targets = [] if _use_stored_findings else _all_results
+
                     # [법률 적용요건 게이트 재적용, 2026-09-10 지시] 이 경로는
                     # _all_results 를 독립적으로 재구성(mandatory_issues 재주입 등)
                     # 하므로, 검토 단계에서 비적용으로 확정된 법률의 finding 이
                     # 다운로드 파일에서 되살아날 수 있다. 같은 게이트를 다시 건다.
+                    # [2026-09-11 지시] "적용법률은 한 번 확정한 canonical 값만
+                    # 사용하고 downstream 에서 다시 추론하지 말 것." 여기서
+                    # assess_statutes 를 다시 돌리면 검토 화면과 문서가 서로 다른
+                    # 법률 판단을 근거로 삼을 수 있다 — 계약유형·당사자 지위에서
+                    # 이미 같은 사고가 났던 지점이다.
                     from runtime.review.statute_applicability_gate import (
-                        assess_statutes as _assess_statutes_docx,
                         deactivate_inapplicable_statute_findings as _deactivate_statute_docx,
                     )
-                    _statute_decisions_docx = _assess_statutes_docx(
-                        entity=str(entity or ""), text=str(text or ""), contract_type_code=_ct_code,
+                    _statute_decisions_docx = _statute_decisions_for(
+                        clause_meta,
+                        entity=str(entity or ""),
+                        text=str(text or ""),
+                        contract_type_code=_ct_code,
                     )
-                    _statute_removed_docx = _deactivate_statute_docx(_all_results, _statute_decisions_docx)
+                    _statute_removed_docx = _deactivate_statute_docx(_gate_targets, _statute_decisions_docx)
                     if _statute_removed_docx:
                         _delivery.add(
                             "STATUTE_NOT_APPLICABLE",
@@ -2207,7 +2285,7 @@ def create_handler(service: RuleQueryService):
                         enforce_our_side_protection as _enforce_our_side_docx,
                     )
                     _our_side_withdrawn_docx = _enforce_our_side_docx(
-                        _all_results,
+                        _gate_targets,
                         statute_decisions=[d.to_dict() for d in _statute_decisions_docx],
                     )
                     if _our_side_withdrawn_docx:
@@ -2248,7 +2326,7 @@ def create_handler(service: RuleQueryService):
                         ) if str(x or "").strip()
                     ))
                     _grant_blocked_docx = _enforce_no_new_rights_docx(
-                        _all_results,
+                        _gate_targets,
                         statute_decisions=[d.to_dict() for d in _statute_decisions_docx],
                         our_labels=_our_labels_docx,
                         we_perform_first=_we_perform_first_docx(
@@ -2276,7 +2354,7 @@ def create_handler(service: RuleQueryService):
                     from runtime.review.transaction_consistency import (
                         check_transaction_consistency as _check_txn_docx,
                     )
-                    _txn_report_docx = _check_txn_docx(_all_results, contract_text=str(text or ""))
+                    _txn_report_docx = _check_txn_docx(_gate_targets, contract_text=str(text or ""))
                     if _txn_report_docx.get("withdrawn"):
                         _delivery.add(
                             "TRANSACTION_STRUCTURE_MISMATCH",

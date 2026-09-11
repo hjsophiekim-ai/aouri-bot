@@ -6663,6 +6663,9 @@ def build_clause_level_result(
         clause_results,
         statute_decisions=[d.to_dict() for d in _statute_decisions],
         our_labels=_our_labels_for_review,
+        # 대칭 구조(상호 NDA 등)는 계약 앞부분에서 선언되므로 조항 문면만으로는
+        # 알 수 없다 — 본문을 함께 넘긴다.
+        contract_text=str(text or ""),
     )
     if _accept_kept:
         logger.info("ACCEPT/KEEP applied to %d findings", len(_accept_kept))
@@ -7292,6 +7295,25 @@ def build_clause_level_result(
     # ── [Final Senior Counsel Gate] (2026-09-10 아키텍처 지시 항목 12) ────────
     # 출력 직전 10개 항목을 전부 점검한다. 하나라도 실패하면 "정상 완료"로
     # 표시하지 않는다 — 다만 담당자가 나머지 결과를 쓸 수 있도록, 차단이 아니라
+    # ── [타 유형 템플릿 혼입 시 결과 생성 금지] (2026-09-11 지시) ────────────
+    # 최종 자가점검이 이 오염을 감지하고는 있었지만, 결과는 상태 한 줄로만
+    # 남고 오염된 finding 은 화면·문서에 그대로 실렸다. NDA 검토서에 판매장려금
+    # 지적이, 바터 계약에 기성고 정산 문안이 들어가는 식이다. 계약에 존재하지
+    # 않는 제도를 근거로 한 지적은 협상에 쓸 수 없으므로 내보내지 않는다.
+    from runtime.review.cross_type_template_gate import (
+        enforce_no_cross_type_template as _enforce_no_cross_type,
+    )
+    _cross_type_removed = _enforce_no_cross_type(
+        clause_results,
+        transaction_type=str(getattr(_legal_state, "transaction_type", "") or ""),
+        contract_text=str(text or ""),
+    )
+    if _cross_type_removed:
+        logger.info(
+            "cross-type template gate removed %d findings", len(_cross_type_removed)
+        )
+    meta["cross_type_template_gate"] = {"removed": _cross_type_removed}
+
     # 사유를 기록해 문서에 그대로 싣는다(항목 2의 "절대 에러나지 않게" 와의 조화).
     try:
         from runtime.review.final_counsel_gate import run_final_counsel_gate as _run_final_gate
@@ -7305,7 +7327,18 @@ def build_clause_level_result(
             answers=answers,
             contract_text=str(text or ""),
             our_side_withdrawn=_our_side_withdrawn,
-            cross_clause_suppressed=[],
+            # [2026-09-11 지시] "이미 계약서에 보호조항이 있으면 중복 HIGH/MEDIUM
+            # 생성 금지." 이 인자가 종전에 빈 배열로 고정되어 있어, 교차조항
+            # 검증이 정정한 오탐이 최종 자가점검에 전달되지 않았다 — 기전은
+            # 있는데 아무것도 공급하지 않는 상태였다.
+            cross_clause_suppressed=[
+                str(row.get("display_path") or row.get("clause_id") or "")
+                for row in (
+                    ((_senior_pass_report or {}).get("cross_clause_protection") or {})
+                    .get("corrected") or []
+                )
+                if isinstance(row, dict)
+            ],
         )
         meta["final_counsel_gate"] = _final_gate.to_dict()
         if not _final_gate.passed and not meta.get("review_status"):

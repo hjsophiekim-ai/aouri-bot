@@ -176,7 +176,12 @@ def absence_claims(cr: dict[str, Any]) -> list[str]:
     return sorted({topic for topic, pat in _ABSENCE_CLAIMS if pat.search(blob)})
 
 
-_DOWNGRADE = {"CRITICAL": "MEDIUM", "HIGH": "MEDIUM", "MEDIUM": "LOW"}
+#: [2026-09-11 지시] "이미 계약서에 보호조항이 있으면 중복 HIGH/MEDIUM 생성
+#: 금지." 종전에는 한 단계만 내려(HIGH→MEDIUM) 여전히 "권장수정" 목록에 남았다.
+#: 보호장치가 이미 있는 사항은 필수·권장 수정이 아니라 참고 사항이므로 LOW 로
+#: 내린다. 삭제하지 않는 이유는 그대로다 — 하위 정합성 게이트가 금전 리스크
+#: finding 의 존재를 검사하므로, 지우면 다운로드가 막힌다(2026-09-09 실측).
+_DOWNGRADE = {"CRITICAL": "LOW", "HIGH": "LOW", "MEDIUM": "LOW"}
 
 
 def reconcile_absence_claims(

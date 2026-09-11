@@ -120,9 +120,15 @@ class DeliveryGateTest(unittest.TestCase):
 
 
 class SemanticGateRemediationTest(unittest.TestCase):
-    def test_non_whitelisted_type_withdraws_instead_of_failing(self) -> None:
-        """whitelist 밖 계약유형에서도 결함을 실제로 해소한다 — status 만 세우고
-        방치하면 그 상태가 409 로 이어져 영원히 다운로드되지 않는다."""
+    """[2026-09-11 지시] 문제점과 수정문구의 법률효과가 다르면 즉시 hard fail.
+
+    종전에는 계약유형 whitelist(사실상 NDA)에서만 삭제하고 나머지 유형에서는
+    문안만 회수한 뒤 문제 제기를 남겼다. 그러나 효과가 어긋난 finding 은
+    담당자에게 **틀린 근거로 틀린 문안**을 건네는 것이므로 유형에 따라 남길
+    이유가 없다. 검토의 목표는 finding 수가 아니라 정확도다.
+    """
+
+    def test_effect_mismatch_is_hard_failed_in_every_contract_type(self) -> None:
         clause_results = [{
             "clause_id": "CP-003",
             "original_text": "을사는 어떠한 경우에도 금전 지급을 청구할 수 없다.",
@@ -134,13 +140,38 @@ class SemanticGateRemediationTest(unittest.TestCase):
         report = enforce_clause_semantic_gate(
             clause_results, contract_type_code="advertising_content_production",
         )
+        self.assertTrue(report["hard_delete"], "유형에 따라 삭제 여부가 갈리면 안 된다")
+        self.assertEqual(report["removed_count"], 1)
+        self.assertEqual(clause_results, [], "효과가 어긋난 finding 이 남았다")
+
+    def test_resolving_the_defect_does_not_block_delivery(self) -> None:
+        """삭제로 결함이 실제 해소되므로 검토 실패 상태를 세우지 않는다 —
+        그 상태가 409 로 이어지면 사용자가 몇 번을 눌러도 수정본을 못 받는다."""
+        clause_results = [{
+            "clause_id": "CP-004",
+            "original_text": "을사는 금전 지급을 청구할 수 없다.",
+            "risk_tier": "HIGH",
+            "original_effect_tags": ["payment_obligation"],
+            "rewrite_effect_tags": ["confidentiality"],
+            "suggested_rewrite": "비밀유지 의무를 부담한다.",
+        }]
+        report = enforce_clause_semantic_gate(clause_results, contract_type_code="")
         self.assertEqual(report["status"], "", "해소했으면 검토 실패 상태를 세우지 않는다")
-        self.assertEqual(report["withdrawn_count"], 1)
-        self.assertEqual(len(clause_results), 1, "finding 자체는 남아야 한다")
-        rewrite = str(clause_results[0]["suggested_rewrite"] or "")
-        self.assertNotIn("대금 지급을 유보할 수 있다", rewrite, "잘못된 문안이 남았다")
-        self.assertNotIn("[수정문안 보류]", rewrite)
-        self.assertTrue(clause_results[0].get("minimal_edit_applied"))
+        self.assertEqual(report["mismatches"][0]["status"], "REVIEW_FAILED_SEMANTIC_MISMATCH")
+
+    def test_a_matching_finding_survives(self) -> None:
+        """효과가 겹치면 그대로 남는다 — 이 게이트는 정확한 finding 을 지우지 않는다."""
+        clause_results = [{
+            "clause_id": "CP-005",
+            "original_text": "을사는 금전 지급을 청구할 수 없다.",
+            "risk_tier": "MEDIUM",
+            "original_effect_tags": ["payment_obligation"],
+            "rewrite_effect_tags": ["payment_obligation"],
+            "suggested_rewrite": "을사는 기성 부분에 대하여 대금을 청구할 수 있다.",
+        }]
+        report = enforce_clause_semantic_gate(clause_results, contract_type_code="")
+        self.assertEqual(report["removed_count"], 0)
+        self.assertEqual(len(clause_results), 1)
 
 
 class TransactionConsistencyTest(unittest.TestCase):

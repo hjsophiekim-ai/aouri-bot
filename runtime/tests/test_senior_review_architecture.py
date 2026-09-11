@@ -275,7 +275,10 @@ class CrossClauseProtectionTest(unittest.TestCase):
         rep = reconcile_absence_claims([cr], contract_text=self._CAPPED)
         self.assertEqual(rep["corrected_count"], 1)
         self.assertFalse(cr.get("dedup_suppressed"), "정정이어야 하는데 삭제했다")
-        self.assertEqual(cr["risk_tier"], "MEDIUM", "등급이 내려가지 않았다")
+        # [2026-09-11 지시] 이미 보호조항이 있으면 중복 HIGH/MEDIUM 을 만들지
+        # 않는다. 한 단계만 내려 MEDIUM 에 남기면 여전히 "권장수정" 목록에
+        # 올라가므로 LOW(참고)까지 내린다.
+        self.assertEqual(cr["risk_tier"], "LOW", "HIGH/MEDIUM 에서 빠지지 않았다")
         self.assertIn("교차조항 확인", cr["rewrite_reason"])
         self.assertTrue(cr["cross_clause_protection_evidence"])
 
@@ -290,7 +293,7 @@ class CrossClauseProtectionTest(unittest.TestCase):
         reconcile_absence_claims([cr], contract_text=self._CAPPED)
         again = reconcile_absence_claims([cr], contract_text=self._CAPPED)
         self.assertEqual(again["corrected_count"], 0)
-        self.assertEqual(cr["risk_tier"], "MEDIUM")
+        self.assertEqual(cr["risk_tier"], "LOW")
 
     def test_unrelated_topic_protection_does_not_excuse(self) -> None:
         """다른 주제의 상한이 있다고 이 주장이 틀린 것은 아니다."""

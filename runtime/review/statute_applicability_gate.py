@@ -617,6 +617,74 @@ _RX_FACT_OR_GAP = re.compile(
 )
 
 
+#: 법률명 → 그 법의 topic 들. 어느 법의 근거가 떨어졌는지 사유에 적기 위함이다.
+_TOPICS_BY_STATUTE: dict[str, tuple[str, ...]] = {
+    "하도급법": SUBCONTRACT_ACT_TOPICS,
+    "대리점법": DEALER_ACT_TOPICS,
+    "개인정보보호법": PRIVACY_ACT_TOPICS,
+    "건설산업기본법": CONSTRUCTION_ACT_TOPICS,
+    "대규모유통업법": LARGE_RETAIL_ACT_TOPICS,
+    "표시광고법": AD_ACT_TOPICS,
+}
+
+#: 근거를 떼어낼 때 손대는 텍스트 필드. 조문 문안(`suggested_rewrite`)은 넣지
+#: 않는다 — 문안은 계약서에 들어가는 문장이라 문장 삭제가 곧 문안 훼손이다.
+_GROUND_TEXT_FIELDS = (
+    "problem", "rewrite_reason", "legal_business_reason",
+    "recommendation_text", "negotiation_strategy", "worst_case_scenario",
+)
+
+
+def _statute_of_topic(topic: str) -> str:
+    for statute, topics in _TOPICS_BY_STATUTE.items():
+        if topic in topics:
+            return statute
+    return ""
+
+
+def _is_contract_grounded(cr: dict[str, Any]) -> bool:
+    """이 finding 의 근거가 **계약 문언**인가.
+
+    계약 원문을 정규식으로 직접 확인해 만든 결정론적 rule 이 그렇다. 그 지적은
+    법률이 적용되지 않아도 계약상 위험으로 성립한다. 반대로 AI 가 생성하거나
+    체크리스트가 주입한 finding 은 법률 근거가 빠지면 남는 것이 없다.
+    """
+    if bool(cr.get("is_common_legal_risk")):
+        return True
+    return bool(str(cr.get("original_text") or "").strip()) and bool(
+        str(cr.get("rule_id") or "").strip()
+    )
+
+
+def _strip_statute_grounds(cr: dict[str, Any], topics: list[str]) -> list[str]:
+    """비적용 법률을 근거로 삼은 **문장만** 걷어낸다. 제거한 표현을 돌려준다."""
+    hit_terms: list[str] = []
+    for field in _GROUND_TEXT_FIELDS:
+        value = cr.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+|\n+", value)
+        survivors: list[str] = []
+        for sentence in sentences:
+            matched = next((t for t in topics if t in sentence), "")
+            if matched and len(sentences) > 1:
+                hit_terms.append(matched)
+                continue
+            if matched:
+                # 문장이 하나뿐이면 지우면 설명이 사라진다. 법률명만 지운다.
+                for t in topics:
+                    if t in sentence:
+                        hit_terms.append(t)
+                        sentence = sentence.replace(t, "관련 법령")
+            survivors.append(sentence)
+        rebuilt = " ".join(s.strip() for s in survivors if s.strip()).strip()
+        if rebuilt != value.strip():
+            cr[field] = rebuilt
+    if hit_terms:
+        cr["statute_grounds_removed"] = sorted(set(hit_terms))
+    return sorted(set(hit_terms))
+
+
 def deactivate_inapplicable_statute_findings(
     clause_results: list[dict[str, Any]],
     decisions: list[StatuteDecision],
@@ -660,12 +728,39 @@ def deactivate_inapplicable_statute_findings(
         if not hit:
             kept.append(cr)
             continue
-        # 그 법을 근거로 무엇인가를 **주장**하지 않으면 제거 대상이 아니다.
-        if not _RX_STATUTE_ASSERTION.search(blob):
-            kept.append(cr)
-            continue
-        # 사실확인·누락 지적은 법률 적용이 아니라 계약 미비의 지적이다.
-        if _RX_FACT_OR_GAP.search(blob):
+        # [2026-09-11 지시] "비적용으로 확정된 법률의 finding 은 전부 차단."
+        #
+        # 종전에는 여기서 두 번 빠져나갔다 — 그 법의 의무·금지를 **주장**하지
+        # 않으면 남기고(`_RX_STATUTE_ASSERTION`), 사실확인·누락 지적이면
+        # 남겼다(`_RX_FACT_OR_GAP`). 두 예외 모두 "법률명은 나오는데 근거로
+        # 쓰이지는 않는다"를 가려내려던 것이지만, 실제로는 비적용 법률의
+        # 어휘를 쓴 finding 이 계속 살아남는 통로가 됐다.
+        #
+        # 대신 과차단은 **topic 목록**으로 막는다. `disabled_topics` 는 그
+        # 법률 고유의 용어(하도급대금·원사업자·정보주체 등)만 담으므로, 그
+        # 용어가 나왔다는 것 자체가 그 법을 근거로 삼았다는 뜻이다. 일반적인
+        # 계약 미비 지적("개인정보 처리 범위가 규정되지 않았다")은 이 목록에
+        # 걸리지 않으므로 그대로 남는다.
+        #
+        # 다만 "근거를 차단한다"와 "위험을 지운다"는 다르다. 계약 원문을
+        # 정규식으로 직접 확인해 만든 결정론적 rule 은 그 근거가 **계약 문언**
+        # 이고, 법률명은 설명에 곁들여진 것이다. 실측: 전략적 제휴계약에
+        # 설계·시공 위탁 조항이 실제로 있는데 관련 규정이 공백이라는 지적이,
+        # 건설산업기본법 비적용 판정 때문에 통째로 사라졌다. 계약상 공백은
+        # 그 법이 적용되지 않아도 그대로 위험이다.
+        #
+        # 그래서 그런 finding 은 남기되 **비적용 법률의 근거만 떼어낸다**.
+        # 어느 쪽이든 비적용 법률을 근거로 한 주장은 결과에 남지 않는다.
+        if _is_contract_grounded(cr):
+            scrubbed = _strip_statute_grounds(cr, topics)
+            if scrubbed:
+                # 무엇이 왜 빠졌는지는 finding 에 남긴다 — 상위 파이프라인이
+                # 이를 모아 meta·문서 말미에 싣는다.
+                cr["statute_ground_removal_reason"] = (
+                    f"{_statute_of_topic(hit) or '해당 법률'} 적용요건이 충족되지 "
+                    "않아 법률 근거를 제외하고 계약상 위험만 남겼습니다. "
+                    + str(reasons.get(_statute_of_topic(hit), ""))
+                ).strip()
             kept.append(cr)
             continue
         removed.append({

@@ -88,8 +88,19 @@ def enforce_clause_semantic_gate(
     contract_type_code: str,
 ) -> dict[str, Any]:
     """원문 조항의 법률효과와 제안된 finding의 법률효과가 전혀 겹치지 않는
-    finding을 삭제한다. 삭제 내역 리포트를 돌려준다."""
-    hard_delete = bool(CONTRACT_TYPE_DOMAIN_WHITELIST.get((contract_type_code or "").strip()))
+    finding을 삭제한다. 삭제 내역 리포트를 돌려준다.
+
+    [2026-09-11 지시] "각 finding의 문제점과 수정문구의 법률효과가 다르면 즉시
+    hard fail 처리." 종전에는 `CONTRACT_TYPE_DOMAIN_WHITELIST` 에 등재된 유형
+    (사실상 NDA 하나)에서만 삭제하고, 나머지 유형에서는 문안만 회수한 뒤 문제
+    제기를 남겼다. 그 완화는 "삭제하면 다운로드가 409로 막힌다"는 당시 사정
+    때문이었는데, 지금은 전달 게이트가 결함을 제거·기록한 뒤 전달하므로 그
+    사정이 없어졌다.
+
+    문제점과 문안의 법률효과가 어긋난 finding 은 담당자에게 **틀린 근거로 틀린
+    문안**을 건네는 것이다. 유형에 따라 남길 이유가 없다.
+    """
+    hard_delete = True
     report: dict[str, Any] = {
         "hard_delete": hard_delete,
         "status": "",
