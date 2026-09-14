@@ -229,6 +229,13 @@ def enforce_valid_clause_references(
         if not isinstance(cr, dict):
             kept.append(cr)
             continue
+        # [2026-09-14] 존재 검증 게이트가 이미 '신설 제N조' 로 정정한 항목은
+        # 정의상 아직 없는 번호를 가리킨다. 여기서 다시 잡으면 그 항목의
+        # 완성된 조문이 최소수정안으로 교체돼 버린다(실측: CP-006/007/008 의
+        # 311·253·143자 조문이 '…를 본조에 명시한다.' 로 바뀌었다).
+        if bool(cr.get("is_new_clause")):
+            kept.append(cr)
+            continue
         refs: set[str] = set()
         new_clause_refs: set[str] = set()
         for key in ("display_path", "clause_title"):

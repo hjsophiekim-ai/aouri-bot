@@ -477,11 +477,17 @@ class FinalCounselGateTest(unittest.TestCase):
         base.update(overrides)
         return run_final_counsel_gate(**base)
 
-    def test_gate_has_exactly_the_ten_required_checks(self) -> None:
+    def test_gate_runs_the_required_checks_in_order(self) -> None:
+        """지시가 명시한 항목이 **순서대로** 앞에 오는지 본다.
+
+        개수를 고정하지 않는다 — 2026-09-14 최종보정 지시 항목 5 로 교차 정합성
+        점검이 뒤에 더해졌고, 앞으로도 더해질 수 있다. 고정해야 하는 것은
+        "지시한 항목이 빠지지 않았는가" 이지 "그 외에는 아무것도 없는가" 가 아니다.
+        """
         report = self._run()
-        self.assertEqual(len(report.checks), 10)
+        keys = [c.key for c in report.checks]
         self.assertEqual(
-            [c.key for c in report.checks],
+            keys[:10],
             [
                 "type_and_role", "no_fabricated_user_request", "answers_applied",
                 "statute_gate_first", "no_cross_type_template", "no_false_absence",
@@ -489,6 +495,13 @@ class FinalCounselGateTest(unittest.TestCase):
                 "ui_docx_identical",
             ],
         )
+        # 2026-09-14 최종보정 지시 항목 5 — 교차 정합성
+        for required in (
+            "type_matches_archetype", "role_matches_structure",
+            "no_inapplicable_statute_language", "finding_rewrite_coherent",
+            "no_keep_in_must_fix",
+        ):
+            self.assertIn(required, keys)
 
     def test_clean_review_passes(self) -> None:
         self.assertTrue(self._run().passed)

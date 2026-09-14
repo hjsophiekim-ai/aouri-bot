@@ -629,9 +629,16 @@ _TOPICS_BY_STATUTE: dict[str, tuple[str, ...]] = {
 
 #: 근거를 떼어낼 때 손대는 텍스트 필드. 조문 문안(`suggested_rewrite`)은 넣지
 #: 않는다 — 문안은 계약서에 들어가는 문장이라 문장 삭제가 곧 문안 훼손이다.
+#
+# [2026-09-14 지시] "비적용으로 확정되면 이후 finding·수정이유·협상포지션에
+# 해당 법률을 다시 사용하지 말 것." 종전 목록에는 `negotiation_position` 과
+# `issue_title` 이 빠져 있어, 본문에서 근거를 떼어내고도 제목과 협상포지션에는
+# 그 법률 이름이 그대로 남았다 — 담당자가 실제로 협상 테이블에 들고 가는 두
+# 줄이 하필 그 둘이다.
 _GROUND_TEXT_FIELDS = (
-    "problem", "rewrite_reason", "legal_business_reason",
-    "recommendation_text", "negotiation_strategy", "worst_case_scenario",
+    "issue_title", "problem", "rewrite_reason", "legal_business_reason",
+    "recommendation_text", "negotiation_strategy", "negotiation_position",
+    "worst_case_scenario",
 )
 
 
@@ -770,3 +777,65 @@ def deactivate_inapplicable_statute_findings(
         })
     clause_results[:] = kept
     return removed
+
+
+# ── 최종 스크럽 — 살아남은 finding 에서 비적용 법률의 **이름**까지 지운다 ────
+
+#: 법률 근거를 지운 자리에 남길 표현. 계약상 위험 서술은 그대로 두고 "어느 법에
+#: 따라" 만 중립화한다.
+_NEUTRAL_STATUTE = "관련 법령"
+
+
+def scrub_inapplicable_statutes(
+    clause_results: list[dict[str, Any]],
+    decisions: list[StatuteDecision],
+) -> list[dict[str, Any]]:
+    """비적용 법률의 이름·전용 용어를 살아남은 finding 의 출력 문장에서 지운다.
+
+    [2026-09-14 지시 항목 2] `deactivate_inapplicable_statute_findings()` 는
+    검토 **도중** 한 번 돈다. 그 뒤로도 finding 은 계속 만들어지고(에이전트
+    패스·효과 기반 검토·리스크 사슬·필수 이슈 주입), 후단에서 협상포지션과
+    수정이유가 새로 붙는다. 그래서 출력 직전에 한 번 더 훑어야 "비적용이라고
+    써놓고 그 법 이름으로 협상하라" 는 자기모순이 남지 않는다.
+
+    여기서는 finding 을 지우지 않는다 — 지우는 판단은 앞의 두 게이트
+    (`deactivate_inapplicable_statute_findings`,
+    `statute_finding_consistency.enforce_statute_conclusion_consistency`)가
+    이미 내렸다. 이 함수는 그 판단을 통과해 **남기로 한** 항목에서 법률 어휘만
+    중립화한다. 계약 문언 자체인 `suggested_rewrite` 는 손대지 않는다(문장을
+    고치면 그것이 곧 계약서 훼손이다).
+
+    바뀐 내역을 돌려준다.
+    """
+    blocked_statutes = [d.statute for d in decisions if d.blocked and d.statute]
+    topics = blocked_topics(decisions)
+    if not blocked_statutes and not topics:
+        return []
+    # 긴 것부터 바꿔야 "하도급법" 이 "하도급거래 공정화에 관한 법률" 의 일부를
+    # 잘라먹지 않는다.
+    needles = sorted(set(blocked_statutes) | set(topics), key=len, reverse=True)
+    changed: list[dict[str, Any]] = []
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        hits: list[str] = []
+        for field in _GROUND_TEXT_FIELDS:
+            value = cr.get(field)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            rebuilt = value
+            for needle in needles:
+                if needle in rebuilt:
+                    hits.append(needle)
+                    rebuilt = rebuilt.replace(needle, _NEUTRAL_STATUTE)
+            if rebuilt != value:
+                cr[field] = rebuilt
+        if hits:
+            entry = {
+                "clause_id": str(cr.get("clause_id") or ""),
+                "display_path": str(cr.get("display_path") or ""),
+                "removed_terms": sorted(set(hits)),
+            }
+            cr["statute_language_scrubbed"] = entry["removed_terms"]
+            changed.append(entry)
+    return changed

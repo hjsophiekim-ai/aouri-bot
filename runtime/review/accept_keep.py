@@ -294,3 +294,153 @@ def apply_accept_keep(
             "display_path": str(cr.get("display_path") or ""),
         })
     return accepted
+
+
+# ── KEEP/보류 판단이 필수수정 목록에 남지 않게 한다 (2026-09-14 지시 항목 3) ──
+
+#: "고칠 필요가 없다" 는 결론의 표지. **결론**을 적은 문장이어야 하므로
+#: 권고·수정문안 자리에서만 찾는다(문제점 서술에 "현행 유지가 어렵다" 처럼
+#: 반대 취지로 등장할 수 있기 때문).
+_RX_KEEP_VERDICT = re.compile(
+    r"현행\s*(?:문언|조항|규정|계약)?\s*(?:을|를)?\s*유지"
+    r"|그대로\s*유지"
+    r"|수정(?:이|할)?\s*(?:필요\s*)?(?:없|불필요)"
+    r"|수정하지\s*(?:않|아니)"
+    r"|변경\s*불필요"
+    r"|ACCEPT\s*/?\s*KEEP"
+    r"|협상\s*대상으로\s*올리지",
+    re.IGNORECASE,
+)
+
+#: 법률 적용 여부 자체가 미확정이라는 표지. 이것만으로는 **필수수정**의 근거가
+#: 될 수 없다 — 적용될지도 모르는 법을 근거로 "반드시 고치라" 고 할 수는 없다.
+_RX_APPLICABILITY_HELD = re.compile(
+    r"(?:적용|판단)\s*(?:여부)?\s*보류"
+    r"|적용\s*여부[^.\n]{0,20}(?:미확정|확정되지\s*(?:않|아니)|불분명)"
+    r"|적용\s*가능성만",
+)
+
+_VERDICT_FIELDS = ("recommendation_text", "proposed_revision", "rewrite_reason")
+_BASIS_FIELDS = ("legal_business_reason", "rewrite_reason", "problem")
+
+
+def _demote_to_note(cr: dict[str, Any], *, reason: str, kind: str) -> None:
+    """HIGH/MEDIUM 목록에서 빠지도록 등급과 표시를 낮춘다.
+
+    `keep_as_is` 를 세우는 것이 핵심이다 — `output_filter.
+    clause_results_to_review_issues()` 가 이 표시를 보고 최종 목록에서
+    통째로 제외하므로, UI 와 DOCX 가 같이 빠진다.
+    """
+    cr["keep_as_is"] = True
+    cr["accept_keep"] = True
+    cr["accept_keep_reason"] = reason
+    cr["keep_verdict_kind"] = kind
+    cr["risk_tier"] = "LOW"
+    cr["severity"] = "LOW"
+    cr["review_tier"] = "NOTE"
+    cr["must_fix"] = False
+    cr["approval_required"] = False
+    cr["high_risk"] = False
+
+
+def enforce_keep_verdict_removal(
+    clause_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """결론이 "고치지 않는다" 인 항목을 필수·권장 목록에서 뺀다.
+
+    [2026-09-14 지시 항목 3]
+      · "우리 회사에 유리한 조항이라 KEEP 또는 수정 불필요로 판단했으면
+         HIGH/MEDIUM 목록에서 완전히 제거."
+      · "'적용 보류' 라고 써놓고 필수수정으로 남기지 말 것."
+
+    `apply_accept_keep()` 은 **수정안이 상대방 책임을 완화하는가**를 보고
+    되돌린다. 그 경로를 타지 않은 채 결론만 "현행 유지" 로 적힌 항목 —
+    AI 가 스스로 그렇게 판단했거나, 후단에서 등급이 되살아난 항목 — 은
+    여전히 빨간 글씨 필수수정으로 남았다. 담당자는 "반드시 고치라" 는 칸에서
+    "고칠 필요 없다" 는 문장을 읽게 된다.
+
+    두 종류를 처리한다.
+      keep_verdict  — 결론이 현행 유지·수정 불필요다.
+      applicability_held — 근거로 든 법률의 적용 여부 자체가 보류 상태다.
+
+    어느 쪽이든 **삭제가 아니라 참고(LOW)로 내린다.** 판단 자체는 기록으로
+    남을 가치가 있고, 조용히 없애면 담당자가 "왜 이 조항은 아무도 안 봤나" 를
+    되묻게 된다.
+    """
+    moved: list[dict[str, Any]] = []
+    for cr in clause_results:
+        if not isinstance(cr, dict):
+            continue
+        if bool(cr.get("dedup_suppressed")):
+            continue
+        tier = str(cr.get("risk_tier") or "").upper()
+        if tier not in ("HIGH", "MEDIUM"):
+            # 이미 KEEP 인데 등급만 살아 있는 경우가 없으므로 여기서 끝.
+            continue
+
+        # 무결성 게이트가 문안을 의도적으로 회수한 항목은 "KEEP" 이 아니다 —
+        # 문제 제기는 유효하고 문안만 보류된 상태다(v7 전달 게이트 설계).
+        if bool(cr.get("advisory_only")) or str(cr.get("proposal_replaced_reason") or "").strip():
+            continue
+        if str(cr.get("fact_confirmation_required") or "").strip():
+            continue
+
+        if bool(cr.get("keep_as_is")) or bool(cr.get("accept_keep")):
+            _demote_to_note(
+                cr,
+                reason=str(cr.get("accept_keep_reason") or "현행 유지로 판단된 항목입니다."),
+                kind="keep_flag_restored",
+            )
+            moved.append({
+                "clause_id": str(cr.get("clause_id") or ""),
+                "display_path": str(cr.get("display_path") or ""),
+                "kind": "keep_flag_restored",
+                "from_tier": tier,
+            })
+            continue
+
+        verdict_text = "\n".join(
+            str(cr.get(k) or "") for k in _VERDICT_FIELDS
+        )
+        has_change = bool(cr.get("has_rewrite_change")) or bool(
+            str(cr.get("suggested_rewrite") or "").strip()
+        )
+        if not has_change and _RX_KEEP_VERDICT.search(verdict_text):
+            _demote_to_note(
+                cr,
+                reason=(
+                    "검토 결론이 '현행 유지·수정 불필요' 이므로 필수·권장 수정 목록에서 "
+                    "제외하고 참고 항목으로 내립니다."
+                ),
+                kind="keep_verdict",
+            )
+            moved.append({
+                "clause_id": str(cr.get("clause_id") or ""),
+                "display_path": str(cr.get("display_path") or ""),
+                "kind": "keep_verdict",
+                "from_tier": tier,
+            })
+            continue
+
+        # 적용 여부가 보류인 법률만을 근거로 든 항목. 계약 문언을 직접 확인해
+        # 만든 finding 은 법률과 무관하게 계약상 위험이 성립하므로 제외한다.
+        if bool(cr.get("is_common_legal_risk")) or bool(cr.get("is_risk_package")):
+            continue
+        basis_text = "\n".join(str(cr.get(k) or "") for k in _BASIS_FIELDS)
+        if not has_change and _RX_APPLICABILITY_HELD.search(basis_text):
+            _demote_to_note(
+                cr,
+                reason=(
+                    "근거로 든 법률의 적용 여부가 아직 확정되지 않아(적용 보류) "
+                    "필수·권장 수정으로 제시하지 않고 참고 항목으로 내립니다. "
+                    "적용요건이 확인되면 다시 검토하십시오."
+                ),
+                kind="applicability_held",
+            )
+            moved.append({
+                "clause_id": str(cr.get("clause_id") or ""),
+                "display_path": str(cr.get("display_path") or ""),
+                "kind": "applicability_held",
+                "from_tier": tier,
+            })
+    return moved

@@ -22,3 +22,6 @@ server_stderr*.log
 
 # 실제 고객 계약 원문 — 절대 커밋 금지 (저장소가 public)
 runtime/tests/fixtures/nda_ai_sleep_collaboration.txt
+
+# 서버 supervisor 로그 (scripts/serve.ps1)
+logs/

@@ -81,12 +81,23 @@ REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     # 결과 생성 금지"). 결과를 확정본으로 쓰지 못하게 하되, 사유를 문서에
     # 명시한 채 전달 자체는 막지 않는다.
     "REVIEW_FAILED_COUNTERPARTY_ROLE_CONFLICT",
+    # [2026-09-14 Hallucination Zero] 존재하지 않는 조항·문구를 가리킨 항목은
+    # 정정하거나 제거하는 것으로 결함이 실제로 해소된다 — 전달은 계속한다.
+    "REVIEW_FAILED_NONEXISTENT_CLAUSE",
+    "REVIEW_FAILED_FAKE_QUOTE",
+    "REVIEW_FAILED_HALLUCINATED_REFERENCE",
+    "CLAUSE_STRUCTURE_UNCERTAIN",
+    "REVIEW_FAILED_INCOMPLETE_REWRITE",
 })
 
 #: 제거·중화가 불가능해 다운로드를 실제로 막아야 하는 상태.
 #: 내보낼 내용 자체가 없거나 신뢰할 수 없는 경우에 한한다.
 NON_REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     "REVIEW_FAILED_TEXT_EXTRACTION",
+    # [2026-09-14 지시 항목 4] 계약서가 우리 법인을 명시적으로 반대편으로
+    # 정의해 두었는데 판정이 그 반대인 경우. 제거할 결함이 따로 있는 것이
+    # 아니라 검토서 전체가 반대로 서 있으므로 중화가 불가능하다.
+    "REVIEW_BLOCKED_ROLE_STRUCTURE_MISMATCH",
 })
 
 #: 사용자에게 보여줄 한국어 사유. 없는 코드는 코드 그대로 노출한다.
@@ -119,6 +130,12 @@ STATUS_LABELS: dict[str, str] = {
     "REVIEW_NEEDS_ATTENTION": "최종 자가점검 10개 항목 중 확인이 필요한 항목이 있음",
     "REVIEW_FAILED_COUNTERPARTY_ROLE_CONFLICT": "상대방 당사자 지위 판정이 일관되지 않아 확인이 필요함",
     "REVIEW_FAILED_STATUTE_CONFLICT": "비적용으로 판단한 법률의 의무를 주장하는 검토의견이 있어 제거함",
+    "REVIEW_BLOCKED_ROLE_STRUCTURE_MISMATCH": "당사자 지위 판정이 계약서상 거래구조와 어긋나 결과를 생성하지 않음 — 당사자 정의를 확인한 뒤 재검토 필요",
+    "REVIEW_FAILED_NONEXISTENT_CLAUSE": "계약에 존재하지 않는 조항을 가리켜 신설 형식으로 정정하거나 제외함",
+    "REVIEW_FAILED_FAKE_QUOTE": "계약 원문에 없는 문장이 원문으로 표시되어 제외함",
+    "REVIEW_FAILED_HALLUCINATED_REFERENCE": "최종 전수검증에서 실재하지 않는 조항·인용을 가리킨 항목을 제거함",
+    "CLAUSE_STRUCTURE_UNCERTAIN": "조항 구조를 확정하지 못해 조항 존재 검증을 보류함 — 원문 구조 확인 필요",
+    "REVIEW_FAILED_INCOMPLETE_REWRITE": "일부 항목에 그대로 삽입 가능한 완성 문구가 없어 담당자 확정이 필요함",
 }
 
 #: 수정문안이 걷어내진 finding 에 남기는 표시. DOCX/PDF 작성기와

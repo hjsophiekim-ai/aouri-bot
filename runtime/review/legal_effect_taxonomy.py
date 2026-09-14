@@ -83,12 +83,14 @@ LEGAL_EFFECT_TAGS: tuple[str, ...] = (
 _PATTERNS: dict[str, list[re.Pattern[str]]] = {
     "payment_obligation": [
         re.compile(r"대금[^.\n]{0,20}(지급|지불|납부)|(지급|지불|납부)[^.\n]{0,20}대금", re.DOTALL),
+        re.compile(r"shall\s+pay|payment\s+(?:of|shall\s+be\s+made)|invoice[^.\n]{0,20}paid", re.IGNORECASE),
     ],
     "payment_withholding": [
         re.compile(r"대금[^.\n]{0,20}(거부|거절|유예|보류)할\s*수\s*있다", re.DOTALL),
     ],
     "liquidated_damages": [
         re.compile(r"지체상금|위약금|위약벌"),
+        re.compile(r"liquidated\s+damages|late\s+(?:delivery\s+)?penalty|penalty\s+of\s+[0-9]", re.IGNORECASE),
     ],
     "consequential_damages": [
         re.compile(r"간접적?\s*손해|특별\s*손해|예상\s*손실|일실\s*이익|위자료"),
@@ -98,6 +100,7 @@ _PATTERNS: dict[str, list[re.Pattern[str]]] = {
     ],
     "indemnity": [
         re.compile(r"면책(?:시켜야|하여야|한다)|손해를?\s*배상하고\s*면책"),
+        re.compile(r"indemnif(?:y|ies|ication)|hold\s+harmless", re.IGNORECASE),
     ],
     "third_party_liability": [
         re.compile(r"(제\s*3\s*자|하청업체|수급인|협력사)[^.\n]{0,90}(연대하여|고의|과실)[^.\n]{0,60}(배상|책임)", re.DOTALL),
@@ -110,6 +113,7 @@ _PATTERNS: dict[str, list[re.Pattern[str]]] = {
     ],
     "termination_for_breach": [
         re.compile(r"(위반|불이행)[^.\n]{0,40}(해지|해제)할?\s*수\s*있다", re.DOTALL),
+        re.compile(r"terminate[^.\n]{0,60}(?:breach|default|failure\s+to\s+(?:perform|comply))", re.IGNORECASE),
     ],
     "convenience_termination": [
         re.compile(r"(경영상의?\s*이유|경영\s*판단)[^.\n]{0,60}(해지|해제)할?\s*수\s*있다", re.DOTALL),
@@ -130,10 +134,25 @@ _PATTERNS: dict[str, list[re.Pattern[str]]] = {
         re.compile(r"(일방적으로|임의로)\s*(변경|수정)할?\s*수\s*있다"),
     ],
     "scope_change": [
-        re.compile(r"추가로?\s*요구하는\s*사항|범위를?\s*변경|scope\s*change", re.IGNORECASE),
+        # [2026-09-14 지시] "추가과업 이슈에 저작권 문구 삽입 금지" 를 강제하려면
+        # 추가과업·과업변경 어휘가 먼저 이 태그로 잡혀야 한다. 종전 패턴은
+        # "추가로 요구하는 사항" 형태만 잡아, 계약서가 실제로 쓰는 "추가 과업",
+        # "과업 범위의 변경", "change order" 를 전부 놓쳤다 — 태그가 비면
+        # effects_overlap() 이 "의견 없음" 으로 무조건 통과시키므로 게이트가 침묵한다.
+        re.compile(
+            r"추가로?\s*요구하는\s*사항"
+            r"|(?:과업|업무|용역|작업)\s*(?:의\s*)?범위[^.\n]{0,12}(?:변경|확대|추가|조정)"
+            r"|추가\s*(?:과업|업무|용역|작업|발주|요청사항)"
+            r"|과업\s*(?:변경|지시서?)"
+            r"|범위를?\s*변경"
+            r"|scope\s*(?:change|creep)|change\s*order"
+            r"|additional\s+(?:work|works|services|scope|deliverables)",
+            re.IGNORECASE,
+        ),
     ],
     "confidentiality": [
         re.compile(r"비밀\s*(정보|유지)|기밀\s*정보|confidential"),
+        re.compile(r"non-?disclosure|proprietary\s+information", re.IGNORECASE),
     ],
     "return_destruction": [
         re.compile(r"반환하거나?\s*폐기|파기하거나?\s*폐기|반환\s*또는\s*파기"),
@@ -152,19 +171,39 @@ _PATTERNS: dict[str, list[re.Pattern[str]]] = {
     ],
     "ip_ownership_transfer": [
         re.compile(r"(지식재산권|저작(?:재산)?권|특허권)[^.\n]{0,30}(양도|이전)(?:한다|하여야|하기로)"),
+        re.compile(r"(?:assign|transfer)s?\s+(?:all\s+)?(?:right|title|ownership|intellectual\s+property)", re.IGNORECASE),
     ],
     "license_grant": [
         re.compile(r"사용을?\s*허락|실시권을?\s*(?:부여|허락)|이용을?\s*허락|라이선스를?\s*부여"),
+        re.compile(r"grants?\s+(?:a\s+)?[^.\n]{0,40}licen[cs]e", re.IGNORECASE),
     ],
     "data_processing_restriction": [
-        re.compile(r"(학습|훈련|미세조정|파인튜닝|데이터셋)[^.\n]{0,30}(사용할\s*수\s*없|금지|제한)"
-                   r"|모델[^.\n]{0,20}(학습|개선)[^.\n]{0,30}(승인|동의|금지)"),
+        # [2026-09-14] 실제 조문은 제한어가 문장 끝에 한 번만 오고 그 앞에 학습
+        # 유형이 길게 열거된다 — "…모델의 학습, 사전학습, 미세조정, 성능 개선,
+        # 평가용 데이터셋 구축에 사용하거나 … 사용할 수 없다". 30자 창 안에서만
+        # 제한어를 찾던 종전 패턴은 이 형태를 통째로 놓쳤고, 그 결과 범용 모델
+        # 학습 제한 조문이 confidentiality 로만 태깅됐다(퍼시스 NDA 실측).
+        re.compile(
+            r"(?:범용\s*)?(?:인공지능|AI)\s*모델"
+            r"|사전\s*학습|미세\s*조정|파인\s*튜닝|파인튜닝"
+            r"|(?:학습|훈련|데이터셋)[^.\n]{0,60}(?:사용할\s*수\s*없|금지|제한|승인|동의)"
+            r"|모델[^.\n]{0,40}(?:학습|성능\s*개선)",
+            re.IGNORECASE,
+        ),
     ],
     "personal_data_protection": [
-        re.compile(r"개인정보[^.\n]{0,40}(처리|보호|위탁|파기|이전)|민감정보|정보주체"),
+        re.compile(
+            r"개인정보[^.\n]{0,40}(처리|보호|위탁|파기|이전|수집|이용|제공|동의|보유)"
+            r"|민감정보|정보주체|고유식별정보"
+        ),
     ],
     "content_deliverable_inspection": [
-        re.compile(r"(콘텐츠|시안|산출물|납품물)[^.\n]{0,15}검수|검수\s*(기준|절차|기간)|수정\s*요청\s*횟수"),
+        re.compile(
+            r"(콘텐츠|시안|산출물|납품물)[^.\n]{0,15}검수"
+            r"|검수(?:의|를|가|는|에|로|하여|한|해)?\s*(?:기준|절차|기간|기한|합격|불합격)"
+            r"|검수(?:에|를|의)?\s*(?:합격|불합격)"
+            r"|합격\s*간주|수정\s*요청\s*횟수"
+        ),
     ],
     "advertising_media_license": [
         re.compile(r"광고\s*매체|매체\s*사용권|광고\s*집행|SNS[^.\n]{0,12}(게재|노출|활용)"),

@@ -663,8 +663,41 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     function _setStartMsg(msg, isError) {
       const el = document.getElementById('startError');
       el.style.color = isError ? 'var(--danger)' : 'var(--primary)';
+      // 안내 메시지가 여러 줄일 수 있다(서버 미기동 안내 등). innerText 는
+      // 줄바꿈을 보존하지만 CSS 가 접어버리므로 여기서 함께 풀어준다.
+      el.style.whiteSpace = 'pre-wrap';
       el.innerText = msg;
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // fetch 가 던지는 'Failed to fetch' 는 브라우저가 아는 전부다 — 서버가 꺼졌는지,
+    // 네트워크가 끊겼는지, 요청이 중단됐는지를 구분해주지 않는다. 실제로 이 메시지가
+    // 떴던 경우는 거의 전부 **서버 프로세스가 떠 있지 않은** 상황이었다(2026-09-14).
+    // 그래서 여기서 /health 를 한 번 더 찔러보고, 그것도 안 되면 무엇을 해야 하는지
+    // 그대로 적어준다. 원문 오류 메시지는 뒤에 붙여 진단 정보를 잃지 않는다.
+    async function _connectionErrorMessage(label, err) {
+      const raw = (err && err.message) ? err.message : String(err);
+      let alive = false;
+      try {
+        const ping = await fetch('/health', { method: 'GET', cache: 'no-store' });
+        alive = ping.ok;
+      } catch (e) {
+        alive = false;
+      }
+      // 여러 줄 메시지는 백틱 템플릿 리터럴로 쓴다. 작은따옴표 문자열에
+      // 줄바꿈을 넣으면, 이 HTML 을 담은 Python 삼중따옴표 문자열이 그것을 진짜
+      // 내보내고, 그 순간 스크립트 전체가 SyntaxError 로 죽는다(실측 2026-09-14).
+      if (!alive) {
+        return [
+          '아우리봇 서버에 연결할 수 없습니다 — 서버가 실행 중이 아닙니다.',
+          '서버를 켠 뒤 다시 시도하세요:  aouri-bot 폴더에서  python scripts/serve.py --install-task',
+          '(원인: ' + label + ' / ' + raw + ')'
+        ].join(String.fromCharCode(10));
+      }
+      return [
+        '서버는 응답하지만 이 요청이 중단되었습니다 (' + label + '): ' + raw,
+        '문서가 크면 시간이 오래 걸릴 수 있습니다. 잠시 후 다시 시도하세요.'
+      ].join(String.fromCharCode(10));
     }
 
     function onFileSelected() {
@@ -723,7 +756,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             res = await fetch('/api/upload', { method: 'POST', body: fd });
             data = await res.json();
           } catch (fetchErr) {
-            _setStartMsg('서버 연결 오류 (업로드): ' + fetchErr.message, true);
+            _setStartMsg(await _connectionErrorMessage('업로드', fetchErr), true);
             return;
           }
           if (!res.ok) {
@@ -759,7 +792,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             });
             data = await res.json();
           } catch (fetchErr) {
-            _setStartMsg('서버 연결 오류: ' + fetchErr.message, true);
+            _setStartMsg(await _connectionErrorMessage('질문 생성', fetchErr), true);
             return;
           }
           if (!res.ok) {

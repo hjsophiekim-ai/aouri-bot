@@ -360,16 +360,32 @@ class CrossContractHoldoutTest(unittest.TestCase):
         self.assertEqual(bad, [], "핵심 위험축 누락")
 
     # ── 8. Final Senior Counsel Gate (지시 항목 12) ──────────────────────
+    #: 자가점검이 반드시 포함해야 하는 항목. 항목이 늘어나는 것은 정상이므로
+    #: 개수를 고정하지 않고 **키 집합**으로 확인한다 — 2026-09-14 교차 정합성
+    #: 5개가 더해지면서 개수 고정 검사가 실제 결함 없이 깨졌다.
+    REQUIRED_GATE_KEYS = (
+        "type_and_role", "no_fabricated_user_request", "answers_applied",
+        "statute_gate_first", "no_cross_type_template", "no_false_absence",
+        "our_side_not_weakened", "high_justified", "complete_rewrite",
+        "ui_docx_identical",
+        # 2026-09-14 최종보정 지시 항목 5 — 교차 정합성
+        "type_matches_archetype", "role_matches_structure",
+        "no_inapplicable_statute_language", "finding_rewrite_coherent",
+        "no_keep_in_must_fix",
+    )
+
     def test_final_counsel_gate_runs_on_every_contract(self) -> None:
-        """10개 항목 자가점검이 모든 유형에서 실행되고 결과를 남기는가."""
+        """자가점검이 모든 유형에서 실행되고 필수 항목을 빠짐없이 남기는가."""
         bad: list[str] = []
         for case in CASES:
             gate = self._run(case).bundle.meta.get("final_counsel_gate")
             if not isinstance(gate, dict) or not gate.get("checks"):
                 bad.append(f"{case.key}: 자가점검 결과 없음")
                 continue
-            if len(gate["checks"]) != 10:
-                bad.append(f"{case.key}: 점검 항목 {len(gate['checks'])}개(10개여야 함)")
+            keys = {str(c.get("key") or "") for c in gate["checks"] if isinstance(c, dict)}
+            missing = [k for k in self.REQUIRED_GATE_KEYS if k not in keys]
+            if missing:
+                bad.append(f"{case.key}: 점검 항목 누락 {missing}")
         self.assertEqual(bad, [], "Final Senior Counsel Gate 미실행")
 
     def test_final_counsel_gate_passes_on_every_contract(self) -> None:

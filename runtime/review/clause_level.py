@@ -6505,6 +6505,27 @@ def build_clause_level_result(
         enforce_clause_semantic_gate,
         enforce_valid_clause_references,
     )
+    # ── [검증된 Clause Index] (2026-09-14 Hallucination Zero 항목 4) ──────
+    # 조항 존재 판단의 단일 출처. 이후 모든 존재 검증은 이 색인만 본다 —
+    # AI 나 체크리스트가 자유롭게 조항번호를 만들어 내지 못하게 하기 위함이다.
+    from runtime.review.clause_index import build_clause_index as _build_clause_index
+    _clause_index = _build_clause_index(str(text or ""), clauses)
+
+    # ── [존재 검증 Hard Gate] (2026-09-14 지시 항목 1·2·3·6) ─────────────
+    # 없는 조항·없는 문구를 만들어 내는 것은 다른 어떤 오류보다 먼저 막는다.
+    # 실측(SNS마케팅 제휴계약): 계약이 제10조까지인데 체크리스트가
+    # 표준양식 번호로 제11·12·14조를 기존 조항처럼 인용했다.
+    from runtime.review.existence_gate import (
+        enforce_existence_gate as _enforce_existence,
+        enforce_title_consistency as _enforce_title_consistency,
+    )
+    _existence_report = _enforce_existence(clause_results, _clause_index)
+    _title_report = _enforce_title_consistency(clause_results, _clause_index)
+    if _existence_report.get("violations"):
+        logger.warning("existence gate: %s", _existence_report.get("detail"))
+    if _title_report.get("unresolved"):
+        logger.warning("title consistency: %s", _title_report.get("detail"))
+
     _contract_scope_report = enforce_contract_scope(
         clause_results, contract_type_code=_scope_type_code,
     )
@@ -6514,6 +6535,22 @@ def build_clause_level_result(
     _clause_reference_report = enforce_valid_clause_references(
         clause_results, clauses, contract_type_code=_scope_type_code,
     )
+
+    # ── [문제점 ↔ 법적 이유 ↔ 수정문구 정합성] (2026-09-14 지시 항목 1) ──
+    # 위 두 게이트는 비교 대상의 한쪽이 **원문 조항**이다. 한 조항이 여러
+    # 주제를 담고 있으면(총칙·정산·해지 조항이 대개 그렇다) "문제점은
+    # 추가과업을 말하는데 문안은 저작권을 넣는" finding 이 둘 다 통과한다
+    # — 저작권도 추가과업도 그 조항 어딘가에 걸쳐 있기 때문이다.
+    # 이 게이트는 원문을 보지 않고 finding 자신의 세 부분끼리 대조한다.
+    from runtime.review.finding_coherence import (
+        enforce_finding_coherence as _enforce_finding_coherence,
+    )
+    _coherence_report = _enforce_finding_coherence(clause_results)
+    if _coherence_report.get("mismatches"):
+        logger.warning(
+            "REVIEW_FAILED_SEMANTIC_MISMATCH (finding coherence) %s",
+            _coherence_report.get("detail"),
+        )
 
     # 이 패스는 build_final_findings() 보다 반드시 먼저 돌아야 한다 —
     # meta.final_findings 는 UI/DOCX 공유 원본이므로, 병합·강등을 그 뒤에
@@ -7085,6 +7122,10 @@ def build_clause_level_result(
     meta["legal_state"] = _legal_state.to_dict()
     meta["transaction_consistency"] = _txn_consistency
     meta["our_side_protection"] = {"withdrawn": _our_side_withdrawn}
+    meta["finding_coherence_gate"] = _coherence_report
+    meta["clause_index"] = _clause_index.to_dict()
+    meta["existence_gate"] = _existence_report
+    meta["title_consistency_gate"] = _title_report
     meta["counterparty_grant_guard"] = {
         "we_perform_first": _we_first,
         "blocked": _grant_blocked,
@@ -7270,6 +7311,21 @@ def build_clause_level_result(
         meta["review_status"] = str(_statute_conflict["status"])
         meta["review_status_detail"] = str(_statute_conflict.get("detail") or "")
 
+    # [2026-09-14 지시 항목 2] "비적용으로 확정되면 이후 finding·수정이유·
+    # 협상포지션에 해당 법률을 다시 사용하지 말 것." 위 두 게이트는 그 법을
+    # **근거로 주장하는** finding 을 지운다. 남기기로 한 항목에도 법률 이름은
+    # 문장에 그대로 남아 있으므로, 출력 직전에 한 번 더 중립화한다 — 담당자가
+    # 협상 테이블에 들고 가는 제목과 협상포지션이 특히 그렇다.
+    from runtime.review.statute_applicability_gate import (
+        scrub_inapplicable_statutes as _scrub_statutes,
+    )
+    _statute_scrubbed = _scrub_statutes(clause_results, _statute_decisions)
+    meta["statute_language_scrubbed"] = _statute_scrubbed
+    if _statute_scrubbed:
+        logger.info(
+            "scrubbed inapplicable statute language in %d findings", len(_statute_scrubbed)
+        )
+
     # ── [상대방 역할 오분류 시 결과 생성 금지] (2026-09-11 지시) ─────────────
     # 당사자 지위는 검토의 좌표축이다. 뒤집히면 어느 조항이 유리한지부터
     # 어떤 법률이 적용되는지까지 전부 반대로 선다. finding 하나를 고쳐서
@@ -7286,6 +7342,25 @@ def build_clause_level_result(
     if _role_conflict.get("status") and not meta.get("review_status"):
         meta["review_status"] = str(_role_conflict["status"])
         meta["review_status_detail"] = str(_role_conflict.get("detail") or "")
+
+    # [2026-09-14 지시 항목 4] 위 게이트는 **판정끼리의 모순**만 본다. 판정이
+    # 내부적으로는 일관되면서 통째로 반대편일 수 있고, 그 경우가 가장 위험하다.
+    # 계약서 자신의 당사자 정의와 대조해 어긋나면 결과를 만들지 않는다 —
+    # 이 상태만은 제거·중화가 불가능하므로 다른 상태를 덮어쓴다.
+    from runtime.review.counterparty_role_gate import (
+        enforce_role_matches_transaction_structure as _enforce_role_structure,
+    )
+    _role_structure = _enforce_role_structure(
+        _legal_state.to_dict(),
+        party_role=meta.get("party_role") if isinstance(meta.get("party_role"), dict) else None,
+        contract_text=str(text or ""),
+        entity=str(entity or ""),
+    )
+    meta["role_structure_gate"] = _role_structure
+    if _role_structure.get("status"):
+        meta["review_status"] = str(_role_structure["status"])
+        meta["review_status_detail"] = str(_role_structure.get("detail") or "")
+        logger.warning("role structure mismatch: %s", _role_structure.get("detail"))
 
     # 이미 2차적저작물작성권이 명시돼 있으면 "권리범위 불명확" 이 아니라
     # 실제 권리 확보(chain of title·제3자 소재)를 검토해야 한다(지시 항목 4).
@@ -7315,6 +7390,60 @@ def build_clause_level_result(
     meta["cross_type_template_gate"] = {"removed": _cross_type_removed}
 
     # 사유를 기록해 문서에 그대로 싣는다(항목 2의 "절대 에러나지 않게" 와의 조화).
+    # ── [KEEP/수정 불필요는 필수·권장 목록에서 제거] (2026-09-14 항목 3) ──
+    # 이 자리인 이유: 앞단의 강등·복원 루프가 모두 끝난 뒤라야 "최종 등급"
+    # 이 확정된다. `apply_accept_keep()` 직후에 한 번 내려도 severity
+    # 재분류·에이전트 복원이 뒤에서 다시 올려놓을 수 있다.
+    from runtime.review.accept_keep import (
+        enforce_keep_verdict_removal as _enforce_keep_removal,
+    )
+    # ── [최종 전수검증] (2026-09-14 지시 항목 7) ──────────────────────────
+    # HIGH/MEDIUM 전부에 대해 조항 존재·인용 진위·수정 대상을 다시 확인한다.
+    # 여기서 걸리면 앞 단계가 놓쳤다는 뜻이므로 그 항목을 결과에서 제거한다.
+    from runtime.review.existence_gate import (
+        audit_final_references as _audit_references,
+    )
+    _reference_audit = _audit_references(clause_results, _clause_index)
+    meta["final_reference_audit"] = _reference_audit
+    if _reference_audit.get("status") and not meta.get("review_status"):
+        meta["review_status"] = str(_reference_audit["status"])
+        meta["review_status_detail"] = str(_reference_audit.get("detail") or "")
+    elif _clause_index.structure_uncertain and not meta.get("review_status"):
+        # 구조를 확정하지 못했으면 존재 검증을 하지 못했다는 사실을 밝힌다
+        # (지시 항목 9 — 임의 보정·추정 금지).
+        from runtime.review.clause_index import (
+            STATUS_CLAUSE_STRUCTURE_UNCERTAIN as _STATUS_UNCERTAIN,
+        )
+        meta["review_status"] = _STATUS_UNCERTAIN
+        meta["review_status_detail"] = "; ".join(_clause_index.uncertainty_reasons)
+
+    # ── [수정문안 완성도] (2026-09-14 지시) ───────────────────────────────
+    # MEDIUM 도 HIGH 와 같은 기준으로 본다 — 복사해서 그대로 넣을 수 있는
+    # 조문이어야 하고, 같은 문안을 제안하는 항목은 하나로 합친다.
+    from runtime.review.rewrite_completeness import (
+        enforce_rewrite_completeness as _enforce_rewrite_completeness,
+    )
+    _completeness_report = _enforce_rewrite_completeness(clause_results)
+    meta["rewrite_completeness"] = _completeness_report
+    if _completeness_report.get("status") and not meta.get("review_status"):
+        meta["review_status"] = str(_completeness_report["status"])
+        meta["review_status_detail"] = str(_completeness_report.get("detail") or "")
+
+    _keep_demoted = _enforce_keep_removal(clause_results)
+    meta["keep_verdict_removed"] = _keep_demoted
+    if _keep_demoted:
+        logger.info("demoted %d KEEP/보류 findings out of HIGH/MEDIUM", len(_keep_demoted))
+        # UI/DOCX 공유 원본을 다시 만들어 두 화면이 같은 집합을 보게 한다.
+        try:
+            from runtime.review.output_filter import build_final_findings as _bff_keep
+            meta["final_findings"] = _bff_keep(
+                clause_results,
+                contract_type_code=str(_canonical_profile.contract_type or ""),
+                include_low=False,
+            )
+        except Exception:  # noqa: BLE001 - 재구성 실패가 검토를 막지 않는다
+            logger.warning("final_findings rebuild after KEEP removal failed", exc_info=True)
+
     try:
         from runtime.review.final_counsel_gate import run_final_counsel_gate as _run_final_gate
         _final_gate = _run_final_gate(
@@ -7338,6 +7467,14 @@ def build_clause_level_result(
                     .get("corrected") or []
                 )
                 if isinstance(row, dict)
+            ],
+            # [2026-09-14 지시 항목 5] 교차 정합성 — 각 게이트가 이미 낸
+            # 결론을 그대로 넘긴다. 같은 판단을 두 곳에서 하면 갈라진다.
+            coherence_report=_coherence_report,
+            role_structure_report=_role_structure,
+            keep_demoted=_keep_demoted,
+            statute_decisions_blocked=[
+                d.statute for d in _statute_decisions if d.blocked and d.statute
             ],
         )
         meta["final_counsel_gate"] = _final_gate.to_dict()

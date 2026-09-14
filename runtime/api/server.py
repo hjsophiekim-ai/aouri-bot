@@ -2376,6 +2376,90 @@ def create_handler(service: RuleQueryService):
                             _cr_cs["risk_tier"] = _want_cs
                             _cr_cs["severity"] = _want_cs
 
+                    # ── [최종보정 게이트 재적용] (2026-09-14 지시) ──────────────────
+                    # 이 경로는 _all_results 를 독립적으로 재구성하므로, 검토 단계에서
+                    # 적용한 세 게이트를 여기서도 다시 걸어야 화면과 문서가 같은 집합을
+                    # 본다. _gate_targets 규약을 따른다 — UI 확정본이 있으면 빈 리스트가
+                    # 넘어와 정본을 건드리지 않는다.
+                    from runtime.review.accept_keep import (
+                        enforce_keep_verdict_removal as _enforce_keep_removal_docx,
+                    )
+                    from runtime.review.finding_coherence import (
+                        enforce_finding_coherence as _enforce_coherence_docx,
+                    )
+                    from runtime.review.statute_applicability_gate import (
+                        scrub_inapplicable_statutes as _scrub_statutes_docx,
+                    )
+                    
+                    # [Hallucination Zero, 2026-09-14 항목 8] UI 에서 제거·정정된 조항이
+                    # 문서에서 되살아나면 안 된다. 세 출력이 같은 verified clause index 를
+                    # 쓰도록, 이 경로에서도 같은 색인을 만들어 같은 게이트를 건다.
+                    from runtime.review.clause_index import build_clause_index as _build_index_docx
+                    from runtime.review.existence_gate import (
+                        audit_final_references as _audit_refs_docx,
+                        enforce_existence_gate as _enforce_existence_docx,
+                        enforce_title_consistency as _enforce_titles_docx,
+                    )
+                    _clause_index_docx = _build_index_docx(str(text or ""), original_clauses)
+                    _existence_docx = _enforce_existence_docx(_gate_targets, _clause_index_docx)
+                    _titles_docx = _enforce_titles_docx(_gate_targets, _clause_index_docx)
+                    _refs_audit_docx = _audit_refs_docx(_gate_targets, _clause_index_docx)
+                    if _existence_docx.get("violations"):
+                        _delivery.add(
+                            "REVIEW_FAILED_NONEXISTENT_CLAUSE",
+                            clause_ids=[v["clause_id"] for v in _existence_docx["violations"]],
+                            reason="계약에 존재하지 않는 조항을 가리켜 신설 형식으로 정정하거나 제외함",
+                            detail=str(_existence_docx.get("detail") or ""),
+                        )
+                    if _titles_docx.get("unresolved"):
+                        _delivery.add(
+                            "REVIEW_FAILED_NONEXISTENT_CLAUSE",
+                            clause_ids=[u["clause_id"] for u in _titles_docx["unresolved"]],
+                            reason="표시된 조 제목이 원문과 달라 조항번호를 제거함 — 위치 확인 필요",
+                            detail=str(_titles_docx.get("detail") or ""),
+                        )
+                    if _refs_audit_docx.get("failures"):
+                        _delivery.add(
+                            "REVIEW_FAILED_HALLUCINATED_REFERENCE",
+                            clause_ids=[f["clause_id"] for f in _refs_audit_docx["failures"]],
+                            reason="최종 전수검증에서 실재하지 않는 조항·인용을 가리킨 항목을 제거함",
+                            detail=str(_refs_audit_docx.get("detail") or ""),
+                        )
+                    if _clause_index_docx.structure_uncertain:
+                        _delivery.add(
+                            "CLAUSE_STRUCTURE_UNCERTAIN",
+                            reason="조항 구조를 확정하지 못해 조항 존재 검증을 보류함",
+                            detail="; ".join(_clause_index_docx.uncertainty_reasons),
+                        )
+                    
+                    _coherence_docx = _enforce_coherence_docx(_gate_targets)
+                    if _coherence_docx.get("mismatches"):
+                        _delivery.add(
+                            "REVIEW_FAILED_SEMANTIC_MISMATCH",
+                            clause_ids=[
+                                str(m.get("clause_id") or "")
+                                for m in _coherence_docx["mismatches"]
+                            ],
+                            reason="문제점·법적 이유·수정문구의 법률효과가 서로 달라 제외하거나 문안을 회수함",
+                            detail=str(_coherence_docx.get("detail") or ""),
+                        )
+                    
+                    _statute_scrubbed_docx = _scrub_statutes_docx(_gate_targets, _statute_decisions_docx)
+                    if _statute_scrubbed_docx:
+                        _delivery.add(
+                            "STATUTE_NOT_APPLICABLE",
+                            clause_ids=[str(r.get("clause_id") or "") for r in _statute_scrubbed_docx],
+                            reason="적용요건 미충족 법률의 명칭·전용 용어를 검토의견에서 제외함",
+                        )
+                    
+                    _keep_demoted_docx = _enforce_keep_removal_docx(_gate_targets)
+                    if _keep_demoted_docx:
+                        _delivery.add(
+                            "ACCEPT_KEEP",
+                            clause_ids=[str(r.get("clause_id") or "") for r in _keep_demoted_docx],
+                            reason="현행 유지·수정 불필요로 판단되어 필수·권장 수정 목록에서 제외함",
+                        )
+                    
                     # [항목 11] UI 가 확정한 결과가 있으면 그것이 정본이다.
                     # 재계산본은 아래 검증에서 문서와 화면이 같은지 비교하는 데만 쓰고,
                     # 생성되는 문서에는 화면과 **같은** 객체를 넣는다.

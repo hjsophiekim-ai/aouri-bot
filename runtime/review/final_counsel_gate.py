@@ -1,4 +1,4 @@
-"""Final Senior Counsel Gate — 출력 직전 10개 항목 자가점검.
+"""Final Senior Counsel Gate — 출력 직전 자가점검.
 
 2026-09-10 아키텍처 지시 항목 12. 체크 목록은 지시가 명시한 그대로다.
 
@@ -12,6 +12,21 @@
      8. HIGH 가 정말 중요한 위험인가
      9. 모든 HIGH/MEDIUM 에 완성 문구가 있는가
     10. UI/DOCX 가 완전히 동일한가
+
+2026-09-14 최종보정 지시 항목 5 로 **교차 정합성** 5개를 더했다 —
+"contract type / party role / applicability / finding / rewrite 가 서로
+모순 없는지 확인. 하나라도 충돌하면 정상 완료하지 말 것."
+
+    11. 계약유형과 거래 원형이 서로 모순되지 않는가
+    12. 판정된 당사자 지위가 실제 거래구조와 맞는가
+    13. 비적용으로 판단한 법률의 어휘가 결과에 남아 있지 않은가
+    14. 문제점·법적 이유·수정문구가 같은 법률효과를 다루는가
+    15. KEEP/수정 불필요로 판단한 항목이 필수·권장 목록에 남지 않았는가
+
+앞의 10개가 "각 단계가 제 일을 했는가" 를 묻는다면, 이 5개는 "단계들의
+결론이 서로 같은 말을 하는가" 를 묻는다. 개별 단계가 모두 통과하고도
+전체가 자기모순인 결과가 실제로 나왔기 때문이다 — 유형은 NDA 인데 원형은
+물품공급, 법률은 비적용인데 협상포지션은 그 법 이름으로 시작하는 식.
 
 이 게이트의 성격
 ──────────────
@@ -68,7 +83,7 @@ class FinalCounselGateReport:
             "failed_keys": [c.key for c in self.failed],
             "review_status": "" if self.passed else REVIEW_STATUS_NEEDS_REVIEW,
             "summary": (
-                "10개 자가점검 항목 전부 통과" if self.passed
+                f"자가점검 {len(self.checks)}개 항목 전부 통과" if self.passed
                 else "확인 필요: " + "; ".join(f"{c.question} — {c.detail}" for c in self.failed[:6])
             ),
         }
@@ -116,8 +131,15 @@ def run_final_counsel_gate(
     contract_text: str,
     our_side_withdrawn: list[dict[str, Any]] | None = None,
     cross_clause_suppressed: list[str] | None = None,
+    # [2026-09-14 지시 항목 5] 교차 정합성 점검용. 각 게이트가 이미 낸
+    # 결론을 여기서 다시 계산하지 않고 그대로 받는다 — 같은 판단을 두
+    # 곳에서 하면 언젠가 서로 달라진다.
+    coherence_report: dict[str, Any] | None = None,
+    role_structure_report: dict[str, Any] | None = None,
+    keep_demoted: list[dict[str, Any]] | None = None,
+    statute_decisions_blocked: list[str] | None = None,
 ) -> FinalCounselGateReport:
-    """10개 항목을 전부 점검한다."""
+    """자가점검 항목을 전부 확인한다."""
     state = legal_state or {}
     live = _live(clause_results)
     report = FinalCounselGateReport()
@@ -290,6 +312,82 @@ def run_final_counsel_gate(
         ("최종 결과에 있는데 clause_results 에 없는 finding: " + ", ".join(dangling[:4]))
         if dangling else "",
     )
+
+    # ── 교차 정합성 (2026-09-14 지시 항목 5) ────────────────────────────
+
+    # 11. 계약유형 ↔ 거래 원형. enum 라벨은 보조자료이므로 원형과 어긋나면
+    #     라벨 쪽이 틀린 것이고, 그 라벨에 매달린 체크리스트가 통째로
+    #     잘못 돌았다는 뜻이다(v8 아키텍처).
+    from runtime.review.legal_state import ARCHETYPE_OF_TYPE_CODE
+    _type_code = str(state.get("contract_type") or "").strip()
+    _archetype = str(state.get("transaction_type") or "").strip()
+    _implied = ARCHETYPE_OF_TYPE_CODE.get(_type_code, "")
+    # 원형을 함의하지 않는 코드(표에 없음)나 원형 미확정은 충돌로 세지 않는다.
+    _type_archetype_ok = not (
+        _implied and _archetype and _archetype not in ("unknown", "") and _implied != _archetype
+    )
+    add(
+        "type_matches_archetype", "계약유형과 거래 원형이 서로 모순되지 않는가",
+        _type_archetype_ok,
+        "" if _type_archetype_ok else
+        f"계약유형 {_type_code!r} 은 원형 {_implied!r} 을 함의하는데 확정된 원형은 {_archetype!r} 입니다.",
+    )
+
+    # 12. 당사자 지위 ↔ 실제 거래구조.
+    _role_conflicts = list((role_structure_report or {}).get("conflicts") or [])
+    add(
+        "role_matches_structure", "판정된 당사자 지위가 실제 거래구조와 맞는가",
+        not _role_conflicts,
+        "; ".join(_role_conflicts[:2]),
+    )
+
+    # 13. 비적용 법률의 어휘가 결과에 남아 있는가. 근거 제거·스크럽이 모두
+    #     돈 **뒤** 이므로, 여기서 잡히면 어느 경로가 빠져나간 것이다.
+    _blocked_terms = [t for t in (statute_decisions_blocked or []) if str(t or "").strip()]
+    _statute_leftover: list[str] = []
+    if _blocked_terms:
+        for cr in live:
+            blob = _finding_blob(cr)
+            hit = next((t for t in _blocked_terms if t in blob), "")
+            if hit:
+                _statute_leftover.append(f"{cr.get('clause_id')}:{hit}")
+    add(
+        "no_inapplicable_statute_language", "비적용으로 판단한 법률의 어휘가 결과에 남아 있지 않은가",
+        not _statute_leftover,
+        ("비적용 법률 어휘가 남음: " + ", ".join(_statute_leftover[:4])) if _statute_leftover else "",
+    )
+
+    # 14. 문제점 ↔ 법적 이유 ↔ 수정문구.
+    _coherence = list((coherence_report or {}).get("mismatches") or [])
+    add(
+        "finding_rewrite_coherent", "문제점·법적 이유·수정문구가 같은 법률효과를 다루는가",
+        not _coherence,
+        ("법률효과가 어긋나 처리된 항목: " + ", ".join(
+            f"{m.get('clause_id')}({m.get('axis')})" for m in _coherence[:4]
+        )) if _coherence else "",
+    )
+
+    # 15. KEEP/수정 불필요가 필수·권장 목록에 남아 있는가. `live` 는 이미
+    #     keep_as_is 를 걸러내므로, 여기 걸리면 표시만 KEEP 이고 등급은
+    #     살아 있는 상태다.
+    _keep_in_must = [
+        str(cr.get("clause_id") or "") for cr in (clause_results or [])
+        if isinstance(cr, dict)
+        and (bool(cr.get("keep_as_is")) or bool(cr.get("accept_keep")))
+        and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+    ]
+    add(
+        "no_keep_in_must_fix", "KEEP/수정 불필요 항목이 필수·권장 목록에 남지 않았는가",
+        not _keep_in_must,
+        ("현행 유지로 판단했는데 필수·권장으로 남은 항목: " + ", ".join(_keep_in_must[:4]))
+        if _keep_in_must else "",
+    )
+    report.checks.append(GateCheck(
+        key="keep_demoted_recorded",
+        question="KEEP 으로 내린 항목의 사유를 기록했는가",
+        ok=all(bool(str(r.get("kind") or "")) for r in (keep_demoted or [])),
+        detail="",
+    ))
 
     return report
 
