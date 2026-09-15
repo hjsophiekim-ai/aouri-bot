@@ -393,6 +393,11 @@ def enforce_semantic_anchor(
             continue
         if bool(cr.get("is_new_clause")) or bool(cr.get("clause_reference_unresolved")):
             continue
+        # 계약 원문을 직접 찾아 붙인 체크리스트·결정론적 rule 은 연결이
+        # 구조적으로 옳다. 지적 내용과 조항의 법률효과가 다른 것이 정상인
+        # 경우도 많다 — 예: 해지 비용 지적은 '광고료 납부' 조항에 붙는다.
+        if bool(cr.get("is_ad_media_checklist")) or bool(cr.get("is_common_legal_risk")):
+            continue
         number = anchored_article(cr)
         if not number or not index.has_article(number):
             continue

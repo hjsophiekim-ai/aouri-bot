@@ -123,7 +123,12 @@ def enforce_clause_semantic_gate(
         # HIGH 캡이 같은 이유로 이 rule군을 예외 처리하는 것과 동일한 근거다.
         # 이 게이트의 대상은 원문에 근거가 없는 AI 생성·체크리스트 주입
         # finding이며, 그것이 이번 사고(콘텐츠 제작 권고 혼입)의 발생원이다.
-        if bool(cr.get("is_common_legal_risk")):
+        # 광고매체 집행형 체크리스트도 같은 근거로 예외다 — 계약 원문에서 문제
+        # 조항을 직접 찾아 붙였고, 붙는 문안은 그 조항의 효과를 **바꾸는** 것이
+        # 정상이다. 실측: 면책 조항(indemnity)에 붙인 책임범위 carve-out 문안이
+        # "초상권" 한 단어 때문에 portrait_or_location_release 로 태깅돼 통째로
+        # 삭제됐다 — 지시가 가장 강조한 축(제공 콘텐츠 책임 구분)이 사라졌다.
+        if bool(cr.get("is_common_legal_risk")) or bool(cr.get("is_ad_media_checklist")):
             kept.append(cr)
             continue
         original_text = str(cr.get("original_text") or "")

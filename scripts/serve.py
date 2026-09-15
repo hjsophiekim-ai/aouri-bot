@@ -77,6 +77,28 @@ _DETACHED_PROCESS = 0x00000008
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
+#: 서버 자식에게 주는 플래그. **콘솔을 갖지 않게** 하는 것이 핵심이다.
+#:
+#: 콘솔이 없는 부모에서 콘솔 앱을 띄우면 Windows 가 자식에게 새 콘솔을
+#: 할당하고, 그 콘솔로 Ctrl+C 가 도달한다. 프로세스 그룹만 바꾸는 것으로는
+#: 막지 못했다 — 서버가 계속 exit=0xC000013A 로 죽었다(2026-09-15 실측).
+_CHILD_FLAGS = (
+    (_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP) if os.name == "nt" else 0
+)
+
+#: 자식 안에서 한 번 더 막는다 — 신호가 어떻게든 도달해도 무시하고 계속 돈다.
+#: runtime/app.py 를 건드리지 않기 위해 런처에서 감싼다.
+_SERVER_BOOTSTRAP = (
+    "import signal, runpy\n"
+    "for _s in (getattr(signal, 'SIGINT', None), getattr(signal, 'SIGBREAK', None)):\n"
+    "    if _s is not None:\n"
+    "        try:\n"
+    "            signal.signal(_s, signal.SIG_IGN)\n"
+    "        except (ValueError, OSError):\n"
+    "            pass\n"
+    "runpy.run_module('runtime.app', run_name='__main__')\n"
+)
+
 
 def _use_utf8_streams() -> None:
     """콘솔 기본 코드페이지가 CP949 라 '—' 같은 문자에서 print 가 죽는다.
@@ -191,12 +213,12 @@ def run_supervisor() -> int:
 
             with _log_path().open("a", encoding="utf-8") as fh:
                 proc = subprocess.Popen(  # noqa: S603
-                    [sys.executable, "-u", "-m", "runtime.app"],
+                    [sys.executable, "-u", "-c", _SERVER_BOOTSTRAP],
                     cwd=str(ROOT),
                     stdout=fh,
                     stderr=subprocess.STDOUT,
                     stdin=subprocess.DEVNULL,
-                    creationflags=(_CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
+                    creationflags=_CHILD_FLAGS,
                     close_fds=True,
                     env=_child_env(),
                 )
@@ -205,7 +227,11 @@ def run_supervisor() -> int:
             ran_for = time.monotonic() - started
             _log(f"서버 종료 (exit={code}, 가동 {ran_for:.0f}초)")
 
-            if ran_for < MIN_HEALTHY_RUN_SEC:
+            # 0xC000013A(STATUS_CONTROL_C_EXIT)는 설정·포트 문제가 아니라
+            # 외부에서 들어온 신호다. 이걸로 supervisor 를 멈추면, 신호가
+            # 몇 번 몰려온 것만으로 서버가 영구히 내려간다(실측).
+            _killed_by_signal = (code or 0) in (0xC000013A, 0xC000013A - (1 << 32))
+            if ran_for < MIN_HEALTHY_RUN_SEC and not _killed_by_signal:
                 rapid_failures += 1
                 if rapid_failures >= MAX_RAPID_FAILURES:
                     _log(

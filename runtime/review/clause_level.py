@@ -6520,6 +6520,43 @@ def build_clause_level_result(
         enforce_semantic_anchor as _enforce_semantic_anchor,
         enforce_title_consistency as _enforce_title_consistency,
     )
+    # ── [광고 거래구조 판정] (2026-09-15 지시) ────────────────────────────
+    # 누가 콘텐츠를 만드는지를 먼저 확정한다. 상대방이 송출만 하는 집행형
+    # 이면 저작권 양도·2차 활용·저작인격권·chain of title 은 근거 자체가
+    # 없는 논점이다.
+    from runtime.review.ad_transaction_model import (
+        classify_ad_transaction_model as _classify_ad_model,
+        deactivate_production_only_findings as _deactivate_production_findings,
+    )
+    _ad_model = _classify_ad_model(
+        contract_text=str(text or ""),
+        user_description=str(review_focus or "") if isinstance(review_focus, str) else "",
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+    )
+    _ad_removed = _deactivate_production_findings(clause_results, _ad_model)
+    # 제작계약용 논점을 끄기만 하면 검토가 비어 버린다. 집행형 고유의 9개 축
+    # (급부 특정·미송출 구제·해지비용 cap·일방 중단권·제공 콘텐츠 책임 구분·
+    # 민원 부담·지급 연동·상대방 배상·신용정보 범위)을 대신 채운다.
+    from runtime.review.checklists.ad_media_placement import (
+        run_ad_media_placement_checklist as _run_ad_media_checklist,
+    )
+    _ad_checklist = _run_ad_media_checklist(
+        text=str(text or ""), clauses=clauses, model=_ad_model,
+    )
+    if _ad_checklist:
+        _existing_ids = {
+            str(c.get("clause_id") or "") for c in clause_results if isinstance(c, dict)
+        }
+        for _ad_item in _ad_checklist:
+            if str(_ad_item.get("clause_id") or "") not in _existing_ids:
+                clause_results.append(_ad_item)
+        logger.info("ad media placement checklist: %d건 주입", len(_ad_checklist))
+    if _ad_removed:
+        logger.info(
+            "ad transaction model=%s: 제작계약용 finding %d건 비활성화",
+            _ad_model.model, len(_ad_removed),
+        )
+
     _existence_report = _enforce_existence(clause_results, _clause_index)
     _title_report = _enforce_title_consistency(clause_results, _clause_index)
     # [2026-09-15 2차 보정 2·3항] 번호가 실재해도 그 조항이 다른 이야기를
@@ -7144,6 +7181,9 @@ def build_clause_level_result(
     meta["existence_gate"] = _existence_report
     meta["title_consistency_gate"] = _title_report
     meta["semantic_anchor_gate"] = _anchor_report
+    meta["ad_transaction_model"] = _ad_model.to_dict()
+    meta["ad_production_findings_removed"] = _ad_removed
+    meta["ad_media_checklist"] = [c["clause_id"] for c in _ad_checklist]
     meta["counterparty_grant_guard"] = {
         "we_perform_first": _we_first,
         "blocked": _grant_blocked,
@@ -7456,6 +7496,33 @@ def build_clause_level_result(
     if _completeness_report.get("status") and not meta.get("review_status"):
         meta["review_status"] = str(_completeness_report["status"])
         meta["review_status_detail"] = str(_completeness_report.get("detail") or "")
+
+    # ── [거래구조 불일치 Hard Gate] (2026-09-15 지시) ─────────────────────
+    # 사용자 설명과 계약 원문이 모두 매체 집행형을 가리키는데 제작계약용
+    # 논점이 결과에 남아 있으면, 앞 단계가 놓친 것이다. 남은 항목은 이미
+    # 비활성화 단계에서 제거되므로 여기서는 **상태만** 세운다 — 정상 완료로
+    # 표시하지 않기 위함이다.
+    # 앞쪽 비활성화는 그 시점까지 만들어진 finding 만 본다. 리스크 사슬·
+    # 에이전트 논점은 그 뒤에 생기므로 여기서 한 번 더 걸러야 한다 —
+    # 실측: 집행형 계약에서 '창작자 → 2차적저작물작성권 → 저작인격권'
+    # 리스크 사슬이 유일한 HIGH 로 남았다.
+    if _ad_model.is_media_placement and _ad_model.confident:
+        from runtime.review.ad_transaction_model import (
+            REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH as _RF_TXN_MODEL,
+            deactivate_production_only_findings as _deactivate_production_final,
+        )
+        _ad_removed_final = _deactivate_production_final(clause_results, _ad_model)
+        if _ad_removed_final:
+            meta["ad_production_findings_removed"] = (
+                list(_ad_removed) + list(_ad_removed_final)
+            )
+            if not meta.get("review_status"):
+                meta["review_status"] = _RF_TXN_MODEL
+                meta["review_status_detail"] = (
+                    "광고매체 집행형 계약인데 콘텐츠 제작계약용 논점이 최종 단계까지 "
+                    f"남아 제거했습니다({len(_ad_removed_final)}건). 상대방은 송출만 "
+                    "수행하므로 저작권 양도·2차 활용·저작인격권 논점은 성립하지 않습니다."
+                )
 
     _keep_demoted = _enforce_keep_removal(clause_results)
     meta["keep_verdict_removed"] = _keep_demoted

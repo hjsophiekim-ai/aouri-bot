@@ -353,6 +353,31 @@ def generate_questions(
                     break
         except Exception:
             pass
+
+    # [광고계약 거래구조 게이트, 2026-09-15 지시]
+    # '광고계약' 이라는 큰 분류만 보고 묻지 않는다. 상대방이 송출만 하는
+    # 집행형이면 2차 활용·재가공·저작인격권 질문은 성립하지 않는다 —
+    # 취득하는 지식재산이 없기 때문이다. 실측(타운보드 계약): 사용자가
+    # '광고 집행을 위탁' 이라고 적었는데도 Q-EFF-ip-scope 가 나갔다.
+    if contract_text:
+        try:
+            from runtime.questions.ad_media_questions import (
+                apply_ad_media_question_policy,
+            )
+            from runtime.review.ad_transaction_model import (
+                classify_ad_transaction_model,
+            )
+            _ad_model = classify_ad_transaction_model(
+                contract_text=str(contract_text),
+                user_description=str(review_focus or ""),
+                contract_type_code=str(contract_type_code or ""),
+            )
+            _ad_report = apply_ad_media_question_policy(
+                out, _ad_model, max_questions=max_questions,
+            )
+            out = _ad_report["questions"]
+        except Exception:  # noqa: BLE001 - 질문 생성이 실패해도 검토는 계속된다
+            pass
     return out
 
 

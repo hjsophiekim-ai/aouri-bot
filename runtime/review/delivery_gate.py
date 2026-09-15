@@ -90,6 +90,8 @@ REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     "REVIEW_FAILED_INCOMPLETE_REWRITE",
     # [2026-09-15] 조항 연결을 끊는 것으로 결함이 해소되므로 전달은 계속한다.
     "SEMANTIC_ANCHOR_MISMATCH",
+    # [2026-09-15] 거래구조에 맞지 않는 논점을 제거하는 것으로 결함이 해소된다.
+    "REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH",
 })
 
 #: 제거·중화가 불가능해 다운로드를 실제로 막아야 하는 상태.
@@ -139,6 +141,7 @@ STATUS_LABELS: dict[str, str] = {
     "CLAUSE_STRUCTURE_UNCERTAIN": "조항 구조를 확정하지 못해 조항 존재 검증을 보류함 — 원문 구조 확인 필요",
     "REVIEW_FAILED_INCOMPLETE_REWRITE": "일부 항목에 그대로 삽입 가능한 완성 문구가 없어 담당자 확정이 필요함",
     "SEMANTIC_ANCHOR_MISMATCH": "지적 내용과 맞지 않는 조항에 연결되어 있어 연결을 해제함 — 해당 조항 확인 필요",
+    "REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH": "거래구조(광고매체 집행형)에 맞지 않는 콘텐츠 제작계약용 논점을 제거함",
 }
 
 #: 수정문안이 걷어내진 finding 에 남기는 표시. DOCX/PDF 작성기와
