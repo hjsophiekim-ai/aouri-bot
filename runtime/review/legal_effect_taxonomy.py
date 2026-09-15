@@ -72,6 +72,11 @@ LEGAL_EFFECT_TAGS: tuple[str, ...] = (
     "content_deliverable_inspection",
     "advertising_media_license",
     "portrait_or_location_release",
+    # [2026-09-15] 분쟁해결·준거법 조항에 태그가 하나도 없어, 그 조항에 엉뚱한
+    # 지적이 걸려도 anchor 게이트가 판단 근거를 갖지 못했다(실측: 제9조
+    # "분쟁 해결 및 관할" 의 효과가 빈 목록이었다).
+    "dispute_resolution_forum",
+    "governing_law",
 )
 
 # Each tag maps to a list of (regex, requires_dotall) fairly specific phrase
@@ -210,6 +215,21 @@ _PATTERNS: dict[str, list[re.Pattern[str]]] = {
     ],
     "portrait_or_location_release": [
         re.compile(r"초상권|퍼블리시티권|촬영\s*장소|출연\s*동의"),
+    ],
+    "dispute_resolution_forum": [
+        re.compile(
+            r"관할\s*법원|전속\s*관할|합의\s*관할|제1심\s*법원"
+            r"|중재(?:인|판정|기관|규칙)|대한상사중재원|분쟁의?\s*해결"
+            r"|jurisdiction|arbitration|competent\s+court",
+            re.IGNORECASE,
+        ),
+    ],
+    "governing_law": [
+        re.compile(
+            r"준거법|대한민국\s*법(?:률|령)?(?:을|에)?\s*(?:따른다|적용)"
+            r"|governing\s+law|governed\s+by\s+the\s+laws?",
+            re.IGNORECASE,
+        ),
     ],
 }
 

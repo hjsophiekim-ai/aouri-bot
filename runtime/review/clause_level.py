@@ -6517,10 +6517,16 @@ def build_clause_level_result(
     # 표준양식 번호로 제11·12·14조를 기존 조항처럼 인용했다.
     from runtime.review.existence_gate import (
         enforce_existence_gate as _enforce_existence,
+        enforce_semantic_anchor as _enforce_semantic_anchor,
         enforce_title_consistency as _enforce_title_consistency,
     )
     _existence_report = _enforce_existence(clause_results, _clause_index)
     _title_report = _enforce_title_consistency(clause_results, _clause_index)
+    # [2026-09-15 2차 보정 2·3항] 번호가 실재해도 그 조항이 다른 이야기를
+    # 하면 연결을 끊는다. 맞는 조항을 임의로 찾아 옮겨 붙이지 않는다.
+    _anchor_report = _enforce_semantic_anchor(clause_results, _clause_index)
+    if _anchor_report.get("mismatches"):
+        logger.warning("semantic anchor: %s", _anchor_report.get("detail"))
     if _existence_report.get("violations"):
         logger.warning("existence gate: %s", _existence_report.get("detail"))
     if _title_report.get("unresolved"):
@@ -7084,7 +7090,18 @@ def build_clause_level_result(
         meta["contract_type_conflict_note"] = _type_conflict_note
     # 유형을 확신할 수 없으면 그 사실을 남긴다 — 틀린 유형의 체크리스트를
     # 주입하는 것보다 "모른다"가 안전하다(항목 2).
-    if _type_resolution.uncertain and not meta.get("review_status"):
+    #
+    # [2026-09-15 2차 보정 4항] 다만 **canonical 유형이 확정된 뒤에는** 이
+    # 상태를 세우지 않는다. 룰 분류기가 확신하지 못했더라도 법률효과 기반
+    # 판정(`legal_state.contract_type`)이 유형을 확정했으면 그것이 canonical
+    # 값이고, downstream 전부가 그 값을 쓴다. 실측(SNS마케팅 제휴계약):
+    # contract_type=advertising_content_production 으로 확정된 결과에
+    # "계약유형 미확정" 상태가 같이 붙어 담당자에게 자기모순으로 보였다.
+    _canonical_type_confirmed = bool(
+        str(getattr(_legal_state, "contract_type", "") or "").strip()
+    )
+    meta["canonical_contract_type_confirmed"] = _canonical_type_confirmed
+    if _type_resolution.uncertain and not _canonical_type_confirmed and not meta.get("review_status"):
         meta["review_status"] = _RF_TYPE_UNCERTAIN
         meta["review_status_detail"] = _type_resolution.reason
     # 다른 계약의 문안이 섞였으면 정상 완료로 취급하지 않는다(항목 3).
@@ -7126,6 +7143,7 @@ def build_clause_level_result(
     meta["clause_index"] = _clause_index.to_dict()
     meta["existence_gate"] = _existence_report
     meta["title_consistency_gate"] = _title_report
+    meta["semantic_anchor_gate"] = _anchor_report
     meta["counterparty_grant_guard"] = {
         "we_perform_first": _we_first,
         "blocked": _grant_blocked,
@@ -7405,6 +7423,16 @@ def build_clause_level_result(
     )
     _reference_audit = _audit_references(clause_results, _clause_index)
     meta["final_reference_audit"] = _reference_audit
+    # [2차 보정 1항] 사용자 요청 매핑·필수 검토 대상 표도 UI 가 그대로 그린다.
+    from runtime.review.existence_gate import (
+        scrub_meta_references as _scrub_meta_refs,
+    )
+    _meta_refs_removed = _scrub_meta_refs(meta, _clause_index)
+    if _meta_refs_removed:
+        meta["meta_reference_scrubbed"] = _meta_refs_removed
+    if _anchor_report.get("status") and not meta.get("review_status"):
+        meta["review_status"] = str(_anchor_report["status"])
+        meta["review_status_detail"] = str(_anchor_report.get("detail") or "")
     if _reference_audit.get("status") and not meta.get("review_status"):
         meta["review_status"] = str(_reference_audit["status"])
         meta["review_status_detail"] = str(_reference_audit.get("detail") or "")
@@ -7527,6 +7555,21 @@ def build_clause_level_result(
             meta["counsel_agent_restored_clause_ids"] = _counsel_restored
         except Exception:
             pass
+
+    # [2차 보정 4항] 앞단 어느 경로에서든 '계약유형 미확정' 이 세워졌더라도,
+    # canonical 유형이 확정돼 있으면 그 상태는 성립할 수 없다. 출력 직전에
+    # 한 번 더 확인해 자기모순을 남기지 않는다.
+    if meta.get("canonical_contract_type_confirmed") and str(
+        meta.get("review_status") or ""
+    ) in ("REVIEW_FAILED_CONTRACT_TYPE_UNCERTAIN", "REVIEW_FAILED_TYPE_UNCERTAIN"):
+        meta["contract_type_uncertain_cleared"] = {
+            "was": str(meta.get("review_status")),
+            "canonical_contract_type": str(
+                getattr(_legal_state, "contract_type", "") or ""
+            ),
+        }
+        meta["review_status"] = ""
+        meta["review_status_detail"] = ""
 
     return ClauseLevelResult(
         review={

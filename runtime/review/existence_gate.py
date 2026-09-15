@@ -44,13 +44,25 @@ from runtime.review.clause_index import ClauseIndex
 STATUS_NONEXISTENT_CLAUSE = "REVIEW_FAILED_NONEXISTENT_CLAUSE"
 STATUS_FAKE_QUOTE = "REVIEW_FAILED_FAKE_QUOTE"
 STATUS_HALLUCINATED_REFERENCE = "REVIEW_FAILED_HALLUCINATED_REFERENCE"
+#: 번호는 실재하지만 그 조항이 finding 과 다른 이야기를 하는 경우(2차 보정 2항).
+STATUS_SEMANTIC_ANCHOR_MISMATCH = "SEMANTIC_ANCHOR_MISMATCH"
 
 #: 조항번호가 실릴 수 있는 표시 필드.
 _REFERENCE_FIELDS = ("issue_title", "clause_title", "display_path")
 #: 본문 성격의 필드. 여기 있는 번호도 담당자에게는 지시로 읽힌다.
+#: 협상포지션이 특히 중요하다 — 담당자가 협상 테이블에 그대로 들고 가는 줄이다.
 _BODY_FIELDS = ("problem", "rewrite_reason", "legal_business_reason",
                 "suggested_rewrite", "proposed_revision", "recommendation_text",
-                "negotiation_position")
+                "negotiation_position", "negotiation_strategy", "worst_case_scenario")
+
+#: 조항번호가 **목록**으로 들어가는 필드(2차 보정 1항).
+#: 실측: 표시 경로를 "제11조 신설" 로 정정하고도 `related_clauses` 에는
+#: ["제12조 제3항"] 이 그대로 남아, UI·DOCX 의 "관련 조항" 칸에 존재하지 않는
+#: 조항이 계속 노출됐다.
+_LIST_REFERENCE_FIELDS = (
+    "clause_ids", "related_clauses", "related_clause_ids", "merged_clause_ids",
+    "also_amend_clause_ids", "user_focus_match_titles",
+)
 
 #: "이 내용이 없으니 넣자" 는 취지의 표지. 이러면 삭제가 아니라 신설로 고친다.
 _RX_ABSENCE_INTENT = re.compile(
@@ -72,17 +84,43 @@ _RX_STATUTE_BEFORE = re.compile(
 )
 
 
+#: 문장 안에서 법령을 가리키는 낱말. "…법", "…법률", "시행령", "시행규칙" 등.
+_RX_STATUTE_WORD = re.compile(
+    r"[가-힣A-Za-z]{2,20}(?:법률|법)(?:상|은|는|이|가|을|를|의|에|과|와)?\b"
+    r"|시행령|시행규칙|「[^」]{2,30}」"
+)
+
+#: 문장 경계. 한국어 계약 서술은 마침표·줄바꿈으로 끊긴다.
+_RX_SENTENCE_BREAK = re.compile(r"[.。\n]")
+
+
+def _is_statute_citation(text: str, at: int, *, sentence_scope: bool) -> bool:
+    """이 위치의 "제N조" 가 **법령** 인용인가.
+
+    `sentence_scope=False` 면 바로 앞에 법률명이 붙은 경우만 인정한다(표시·목록
+    필드용). True 면 같은 문장에서 그 앞쪽에 법률명이 나오면 인용으로 본다.
+    """
+    head = str(text or "")[:at]
+    if _RX_STATUTE_BEFORE.search(head.rstrip()):
+        return True
+    if not sentence_scope:
+        return False
+    # 같은 문장의 앞부분만 본다 — 앞 문장의 법률명까지 끌어오면 너무 넓어진다.
+    breaks = list(_RX_SENTENCE_BREAK.finditer(head))
+    sentence_head = head[breaks[-1].end():] if breaks else head
+    return bool(_RX_STATUTE_WORD.search(sentence_head))
+
+
 def _text_of(cr: dict[str, Any], keys: tuple[str, ...]) -> str:
     return "\n".join(str(cr.get(k) or "") for k in keys)
 
 
-def _contract_article_refs(value: str) -> list[str]:
+def _contract_article_refs(value: str, *, sentence_scope: bool = False) -> list[str]:
     """계약 조항 참조만 추린다(법령 인용 제외)."""
     out: list[str] = []
     text = str(value or "")
     for m in _RX_ARTICLE_REF.finditer(text):
-        before = text[max(0, m.start() - 20): m.start()]
-        if _RX_STATUTE_BEFORE.search(before.rstrip()):
+        if _is_statute_citation(text, m.start(), sentence_scope=sentence_scope):
             continue
         num = str(int(m.group(1)))
         if num not in out:
@@ -172,13 +210,28 @@ def verify_finding(cr: dict[str, Any], index: ClauseIndex) -> list[dict[str, Any
 
     # (1) 조항 존재 — 신설 맥락이 아닌 참조만 본다.
     unknown: list[str] = []
-    for field in (*_REFERENCE_FIELDS, *_BODY_FIELDS):
-        value = str(cr.get(field) or "")
+    # (필드값, 문장범위로 법령을 인정할지) 짝으로 모은다.
+    scan: list[tuple[str, bool]] = [
+        (str(cr.get(f) or ""), False) for f in _REFERENCE_FIELDS
+    ]
+    scan += [(str(cr.get(f) or ""), True) for f in _BODY_FIELDS]
+    for field in _LIST_REFERENCE_FIELDS:
+        value = cr.get(field)
+        if isinstance(value, list):
+            scan.extend((str(x or ""), False) for x in value)
+        elif isinstance(value, str):
+            scan.append((value, False))
+    ri_scan = cr.get("redline_instruction")
+    if isinstance(ri_scan, dict):
+        scan.extend(
+            (str(ri_scan.get(k) or ""), True)
+            for k in ("replacement_text", "final_clause_text", "reason")
+        )
+    for value, sentence_scope in scan:
         if not value:
             continue
         for m in _RX_ARTICLE_REF.finditer(value):
-            before = value[max(0, m.start() - 20): m.start()]
-            if _RX_STATUTE_BEFORE.search(before.rstrip()):
+            if _is_statute_citation(value, m.start(), sentence_scope=sentence_scope):
                 continue
             num = str(int(m.group(1)))
             if index.has_article(num) or _is_new_clause_context(value, m.start()):
@@ -242,6 +295,230 @@ def _strip_bad_refs(value: str, unknown: list[str]) -> str:
     return out.strip(" —-–·|,").strip()
 
 
+def prune_reference_lists(
+    cr: dict[str, Any], unknown: list[str], *, replacement: str = "",
+) -> list[str]:
+    """목록형 참조에서 존재하지 않는 조항 항목을 걷어낸다(2차 보정 1항).
+
+    `replacement` 가 주어지면(신설로 정정된 경우) 그 번호로 대체하고, 아니면
+    항목을 제거한다. 걷어낸 원래 값을 돌려준다.
+    """
+    removed: list[str] = []
+    for field in _LIST_REFERENCE_FIELDS:
+        value = cr.get(field)
+        if not isinstance(value, list) or not value:
+            continue
+        kept: list[Any] = []
+        for entry in value:
+            text = str(entry or "")
+            refs = _contract_article_refs(text)
+            if refs and any(r in unknown for r in refs):
+                removed.append(text)
+                if replacement:
+                    kept.append(f"{replacement} 신설")
+                continue
+            kept.append(entry)
+        # 중복 제거 — 같은 신설 번호가 여러 번 들어가지 않게.
+        deduped: list[Any] = []
+        for entry in kept:
+            if entry not in deduped:
+                deduped.append(entry)
+        cr[field] = deduped
+    if removed:
+        cr["pruned_clause_references"] = sorted(set(removed))
+    return removed
+
+
+#: finding 이 어느 조항에 걸려 있는지 읽어낼 때 쓰는 표시 필드(우선순위 순).
+_ANCHOR_FIELDS = ("article_number", "display_path", "clause_title", "clause_id")
+
+_RX_ANCHOR_IN_ID = re.compile(r"KR-(\d{1,3})")
+
+
+def anchored_article(cr: dict[str, Any]) -> str:
+    """이 finding 이 '기존 조항' 으로 걸어 둔 조 번호. 없으면 빈 문자열."""
+    raw = str(cr.get("article_number") or "").strip()
+    if raw.isdigit():
+        return str(int(raw))
+    for field in ("display_path", "clause_title"):
+        value = str(cr.get(field) or "")
+        if "신설" in value:
+            return ""
+        refs = _contract_article_refs(value)
+        if len(refs) == 1:
+            return refs[0]
+    m = _RX_ANCHOR_IN_ID.search(str(cr.get("clause_id") or ""))
+    return m.group(1) if m else ""
+
+
+def enforce_semantic_anchor(
+    clause_results: list[dict[str, Any]],
+    index: ClauseIndex,
+) -> dict[str, Any]:
+    """번호는 실재하지만 그 조항이 finding 과 다른 이야기를 하면 연결을 끊는다.
+
+    2026-09-15 지시 2항 —
+      "조항번호가 실제로 존재하더라도, 해당 조항의 legal effect 가 finding 과
+       다르면 SEMANTIC_ANCHOR_MISMATCH 로 결과 생성 금지."
+    3항 —
+      "적절한 기존 조항이 없으면 억지로 아무 조항에 연결하지 말고 '해당 조항
+       없음 — 신설 필요' 로만 처리."
+
+    **다른 조항으로 갈아 끼우지 않는다.** 비슷한 제목·효과의 조항을 찾아
+    옮겨 붙이는 것은 근거 없는 추측이고, 1차 지시 항목 9 가 금지한 행위다.
+    연결만 끊고, 부재를 지적하는 항목이면 신설로 돌린다.
+
+    과차단을 막는 안전장치 세 가지
+      · 양쪽 모두 법률효과 태그가 **붙었을 때만** 비교한다(태그 없음 = 의견 없음).
+      · finding 이 그 조항의 문언을 실제로 인용하고 있으면 연결이 옳은 것이므로
+        태그가 어긋나도 건드리지 않는다.
+      · 구조 미확정(`structure_uncertain`)이면 아무것도 판단하지 않는다.
+    """
+    from runtime.review.clause_topic import (
+        TOPIC_OTHER,
+        classify_clause_topic,
+        is_topic_compatible,
+    )
+    from runtime.review.legal_effect_taxonomy import (
+        effects_overlap,
+        infer_legal_effects,
+    )
+
+    report: dict[str, Any] = {"status": "", "detail": "", "mismatches": []}
+    if index.structure_uncertain:
+        return report
+
+    for cr in clause_results:
+        if not isinstance(cr, dict) or bool(cr.get("dedup_suppressed")):
+            continue
+        if bool(cr.get("is_new_clause")) or bool(cr.get("clause_reference_unresolved")):
+            continue
+        number = anchored_article(cr)
+        if not number or not index.has_article(number):
+            continue
+        article = index.articles[number]
+        clause_effects = infer_legal_effects(article.exact_text)
+        finding_text = "\n".join(
+            str(cr.get(k) or "")
+            for k in ("issue_title", "problem", "rewrite_reason", "suggested_rewrite")
+        )
+        finding_effects = infer_legal_effects(finding_text)
+
+        if clause_effects and finding_effects:
+            if effects_overlap(clause_effects, finding_effects):
+                continue
+            axis = "legal_effect"
+        else:
+            # 한쪽이라도 효과 태그가 비면 주제 축으로 본다. 조항 전문과 지적
+            # 전문을 비교하는 것이므로 `classify_clause_topic` 의 본래 용도에
+            # 맞는다. 둘 다 판정이 서고 서로 맞지 않을 때만 어긋난 것으로 본다.
+            clause_topic = classify_clause_topic(
+                title=article.title, text=article.exact_text,
+            )
+            finding_topic = classify_clause_topic(title=None, text=finding_text)
+            if clause_topic == TOPIC_OTHER or finding_topic == TOPIC_OTHER:
+                continue
+            if is_topic_compatible(
+                clause_topic=clause_topic, rewrite_topics={finding_topic},
+            ):
+                continue
+            axis = "clause_topic"
+            clause_effects = clause_effects or [clause_topic]
+            finding_effects = finding_effects or [finding_topic]
+
+        # 그 조항의 문언을 실제로 인용하고 있으면 연결은 옳다.
+        quote = str(cr.get("original_text") or "").strip()
+        if quote and _is_quote_claim(quote):
+            from runtime.review.clause_index import _norm as _norm_quote
+            if _norm_quote(quote) and _norm_quote(quote) in _norm_quote(article.exact_text):
+                continue
+
+        entry = {
+            "clause_id": str(cr.get("clause_id") or ""),
+            "anchored_article": f"제{number}조",
+            "anchored_title": article.title,
+            "clause_effects": clause_effects,
+            "finding_effects": finding_effects,
+            "axis": axis,
+            "issue_title": str(cr.get("issue_title") or "")[:90],
+        }
+        report["mismatches"].append(entry)
+
+        # **신설로 돌리지 않는다.** 여기서 확인된 사실은 "이 연결이 틀렸다" 뿐이다.
+        # 그 내용을 규정한 조항이 계약 어딘가에 실재할 수 있고(이 계약의 조 번호는
+        # 전부 실재한다), 그것을 확인하지 않은 채 새 조항을 만들라고 하면 있는
+        # 조항을 두고 중복 조항을 넣으라는 지시가 된다. 실측: 영문 라이선스 계약의
+        # 지연이자 지적이 Article 1(License)에 잘못 걸려 있었는데, 신설로 돌리자
+        # 대금 조항이 실재하는데도 "제10조 신설" 을 권고하게 됐다.
+        # 신설 처리는 **조항 자체가 없을 때**(존재 검증 게이트)의 몫이다.
+        #
+        # **표시 경로와 목록만** 손댄다. 본문(problem/이유/문안)은 건드리지 않는다 —
+        # 그 번호는 실재하는 조항이므로 본문에서 언급하는 것 자체는 날조가 아니고,
+        # 여기서 본문을 고치면 다른 게이트의 판단 근거가 흔들린다(실측: 본문을
+        # 수정하자 "제안 문안이 원문 사본인가" 판정이 깨져 정상 finding 이
+        # 정합성 게이트에서 삭제됐다). 제거해야 하는 것은 **연결**이다.
+        for field in _REFERENCE_FIELDS:
+            value = str(cr.get(field) or "")
+            if value:
+                cr[field] = _strip_bad_refs(value, [number])
+        prune_reference_lists(cr, [number])
+        cr["article_number"] = None
+        cr["clause_title"] = "조항 위치 확인 필요"
+        cr["display_path"] = "조항 위치 확인 필요"
+        cr["clause_reference_unresolved"] = True
+        cr["semantic_anchor_mismatch"] = entry
+        cr["clause_reference_unresolved_reason"] = (
+            f"이 지적이 걸려 있던 제{number}조({article.title})는 다른 내용을 규정하고 "
+            f"있습니다(그 조항의 법률효과: {', '.join(clause_effects)} / 이 지적: "
+            f"{', '.join(finding_effects)}). 맞는 조항을 임의로 추정하지 않고 연결만 "
+            "해제했습니다 — 해당 내용을 규정한 조항을 확인한 뒤 적용하십시오."
+        )
+        entry["remediation"] = "anchor_detached"
+
+    if report["mismatches"]:
+        report["status"] = STATUS_SEMANTIC_ANCHOR_MISMATCH
+        report["detail"] = (
+            f"조항의 법률효과와 맞지 않는 연결 {len(report['mismatches'])}건을 해제했습니다: "
+            + ", ".join(
+                f"{m['clause_id']}({m['anchored_article']})"
+                for m in report["mismatches"][:6]
+            )
+        )
+    return report
+
+
+def scrub_meta_references(meta: dict[str, Any], index: ClauseIndex) -> list[str]:
+    """meta 의 조항 매핑 표에서도 존재하지 않는 조항을 걷어낸다(2차 보정 1항).
+
+    사용자 요청 매핑·필수 검토 대상은 UI 가 그대로 표로 그리므로, 여기 남은
+    번호는 화면에 '기존 조항' 처럼 보인다.
+    """
+    if index.structure_uncertain or not isinstance(meta, dict):
+        return []
+    removed: list[str] = []
+
+    def _clean(value: Any) -> Any:
+        if isinstance(value, str):
+            bad = [n for n in _contract_article_refs(value) if not index.has_article(n)]
+            if not bad:
+                return value
+            removed.append(value[:80])
+            return _strip_bad_refs(value, bad)
+        if isinstance(value, list):
+            return [_clean(v) for v in value]
+        if isinstance(value, dict):
+            return {k: _clean(v) for k, v in value.items()}
+        return value
+
+    for key in (
+        "user_focus_mapping_table", "user_focus_clause_ids", "user_focus_mapping_debug",
+        "mandatory_review_targets",
+    ):
+        if key in meta:
+            meta[key] = _clean(meta[key])
+    return sorted(set(removed))
+
+
 def _renumber_to_new_clause(
     cr: dict[str, Any], index: ClauseIndex, unknown: list[str], new_number: str,
 ) -> None:
@@ -252,12 +529,24 @@ def _renumber_to_new_clause(
         value = str(cr.get(field) or "")
         if value:
             cr[field] = _strip_bad_refs(value, unknown)
+    prune_reference_lists(cr, unknown, replacement=label)
 
     title = _strip_bad_refs(str(cr.get("issue_title") or ""), unknown)
     cr["issue_title"] = f"[신설 {label}] {title}" if title else f"[신설 {label}] 조항 신설 필요"
     cr["clause_title"] = f"해당 조항 없음 — {label} 신설 필요"
     cr["display_path"] = f"{label} 신설"
     # 존재하지 않는 조항에는 원문이 없다. 지어낸 문장을 남겨두지 않는다.
+    # 신설로 돌리기 전에, 권고 칸이 **원래 조항 원문의 메아리**면 함께 비운다.
+    # 일부 경로는 recommendation_text 에 대상 조항 전문을 그대로 담는다. 연결을
+    # 끊은 뒤에도 그 문장이 남아 있으면 이후 게이트가 그것을 "제안 문안" 으로
+    # 읽고, 원문이 사라진 탓에 사본 판정도 못 해 정상 finding 을 지운다
+    # (실측: 영문 라이선스 계약의 지연이자 지적이 이 경로로 삭제됐다).
+    _prev_original = "".join(str(cr.get("original_text") or "").split())
+    if len(_prev_original) >= 40:
+        for _key in ("recommendation_text", "proposed_revision"):
+            _val = "".join(str(cr.get(_key) or "").split())
+            if len(_val) >= 40 and (_val in _prev_original or _prev_original in _val):
+                cr[_key] = None
     cr["original_text"] = ABSENT_CLAUSE_MARKER
     cr["original_text_absent_reason"] = "계약에 해당 조항이 없어 인용할 원문이 없습니다."
     cr["is_new_clause"] = True
@@ -465,6 +754,10 @@ def enforce_title_consistency(
             value = str(cr.get(field) or "")
             if value:
                 cr[field] = _strip_bad_refs(value, wrong)
+        # [2026-09-15 2차 보정 1항] 표시 경로만 고치면 UI·DOCX 의 "관련 조항" 칸에
+        # 그 번호가 그대로 남는다(실측: CP-004 의 related_clauses=["제9조"]).
+        prune_reference_lists(cr, wrong)
+        cr["article_number"] = None
         cr["clause_title"] = "조항 위치 확인 필요"
         cr["display_path"] = "조항 위치 확인 필요"
         cr["clause_reference_unresolved"] = True
