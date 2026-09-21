@@ -3566,6 +3566,13 @@ def create_handler(service: RuleQueryService):
                             "success": True,
                             "method": extraction.method,
                             "text_length": len(extraction.text),
+                            # 오른쪽 여백에서 떼어낸 검토 메모 — 사업부가 1차
+                            # 수정하며 남긴 근거다. 검토가 "이미 고친 것을 또
+                            # 고치지" 않도록 세션에 함께 싣는다
+                            # (2026-09-21 3차 지시 1항).
+                            "margin_annotations": list(
+                                ((extraction.meta or {}).get("margin_annotations") or [])
+                            ),
                         },
                         text=extraction.text,
                         classification={
@@ -3774,6 +3781,13 @@ def create_handler(service: RuleQueryService):
                             "success": True,
                             "method": extraction.method,
                             "text_length": len(extraction.text),
+                            # 오른쪽 여백에서 떼어낸 검토 메모 — 사업부가 1차
+                            # 수정하며 남긴 근거다. 검토가 "이미 고친 것을 또
+                            # 고치지" 않도록 세션에 함께 싣는다
+                            # (2026-09-21 3차 지시 1항).
+                            "margin_annotations": list(
+                                ((extraction.meta or {}).get("margin_annotations") or [])
+                            ),
                         },
                         text=extraction.text,
                         classification={

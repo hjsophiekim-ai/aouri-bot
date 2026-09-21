@@ -3479,6 +3479,9 @@ def build_clause_level_result(
     # 9항)가 "사전질문이 해당 유형에 맞는가" 를 확인하는 데 쓴다. 넘어오지
     # 않으면 그 축은 판정하지 않는다 — 모르는 것을 실패로 세지 않는다.
     asked_questions: list[Any] | None = None,
+    # 사업부가 1차 수정하며 남긴 여백 메모(워드 주석). 있으면 "이미 고친
+    # 조항" 을 알아보는 근거가 된다 (2026-09-21 3차 지시 1항).
+    margin_annotations: list[str] | None = None,
     law_service: LawSearchService | None,
     ai_provider: AIProvider | None,
     ai_model: str | None,
@@ -7883,6 +7886,74 @@ def build_clause_level_result(
             )
             meta["construction_role_unsettled"] = True
 
+    # ── [이미 수정된 안 — KEEP 우선] (2026-09-21 3차 지시 1·3항) ───────────
+    # "사업부가 1차로 수정한 부분에 대해서 무조건 검토하지 말고 맞는지 틀린지
+    #  판단하고, 검토한 부분이 맞으면 또 똑같이 수정하지 않는 로직."
+    #
+    # 수정본에는 수정한 사람이 남긴 메모가 달려 있다(워드 주석 → PDF 여백
+    # 말풍선). 그 메모가 말하는 쟁점을 그 조항이 실제로 담고 있으면 KEEP
+    # 한다. 메모만으로 통과시키지는 않는다 — 메모는 "고쳤다" 는 주장이다.
+    try:
+        from runtime.review.prior_revision_state import (
+            apply_prior_revision_keep as _apply_prior_keep,
+            build_prior_revision_state as _build_prior_revision,
+        )
+        _prior_revision = _build_prior_revision(
+            margin_annotations=margin_annotations,
+            user_description=str(review_focus or ""),
+            filename=str(filename or ""),
+        )
+        meta["prior_revision_state"] = _prior_revision.to_dict()
+        _prior_keep = _apply_prior_keep(
+            clause_results, _prior_revision, clauses=clauses,
+        )
+        meta["prior_revision_keep"] = {
+            "checked": _prior_keep.checked,
+            "kept": _prior_keep.kept,
+        }
+        if _prior_keep.kept:
+            logger.info("prior revision keep: %s", _prior_keep.detail)
+    except Exception as exc:  # noqa: BLE001 - 판단 실패가 검토를 막지 않는다
+        logger.warning("prior revision keep failed: %s", exc)
+
+    # ── [과수정 방지] (2026-09-21 3차 지시 4·13항) ─────────────────────────
+    # 제안 문구가 현재 문구보다 우리 회사의 의무를 넓히거나 활용 자유를
+    # 좁히면 제안을 거둔다. 체크리스트는 "가장 빡빡한 문구" 를 표준 해답으로
+    # 들고 있어, 정보를 받아 쓰는 쪽인 우리에게는 족쇄가 되기 쉽다.
+    try:
+        from runtime.review.overcorrection_guard import (
+            guard_overcorrection as _guard_overcorrection,
+        )
+        _overcorrection = _guard_overcorrection(
+            clause_results,
+            our_role_direction=str(_canonical_state.party_role_direction or ""),
+        )
+        meta["overcorrection_guard"] = {
+            "checked": _overcorrection.checked,
+            "withdrawn": _overcorrection.withdrawn,
+        }
+        if _overcorrection.withdrawn:
+            logger.info("overcorrection guard: %s", _overcorrection.detail)
+    except Exception as exc:  # noqa: BLE001 - 판단 실패가 검토를 막지 않는다
+        logger.warning("overcorrection guard failed: %s", exc)
+
+    # 두 게이트가 등급을 내렸으면 UI/DOCX 공유 원본을 다시 만든다 — 다시
+    # 만들지 않으면 화면에는 없는 항목이 문서에는 남는다(실측: 광고 파이프라인
+    # 회귀 테스트가 "최종 결과에 있는데 clause_results 에 없는 finding" 으로
+    # 잡아냈다).
+    if (meta.get("prior_revision_keep") or {}).get("kept") or (
+        meta.get("overcorrection_guard") or {}
+    ).get("withdrawn"):
+        try:
+            from runtime.review.output_filter import build_final_findings as _bff_keep2
+            meta["final_findings"] = _bff_keep2(
+                clause_results,
+                contract_type_code=str(_canonical_profile.contract_type or ""),
+                include_low=False,
+            )
+        except Exception:  # noqa: BLE001 - 재구성 실패가 검토를 막지 않는다
+            logger.warning("final_findings rebuild after KEEP gates failed")
+
     # ── [Applicable Law canonical state] (2026-09-21 2차 지시 7항) ──────────
     # 법률마다 결론은 하나다. 적용요건 판단(우리 업 도메인 + 확정된 당사자
     # 지위)이 canonical 이고, AI 적용가능성 분석은 그 아래로 맞춘다. 실측:
@@ -8107,6 +8178,32 @@ def build_clause_level_result(
                 logger.warning("final_findings rebuild after priority order failed")
     except Exception as exc:  # noqa: BLE001 - 정렬 실패가 검토를 막지 않는다
         logger.warning("high priority order failed: %s", exc)
+
+    # ── [요청사항별 직접 답변] (2026-09-21 3차 지시 5항) ───────────────────
+    # "사용자가 8개 질문을 했다면 각각 반드시 직접 답하세요." 자유서술 파서는
+    # 문장·쉼표로 잘라 13조각을 만들었고("Ltd.와 수면센서", "요청사항:"),
+    # 정작 8번 질문에 대한 답은 리포트에 없었다. 번호 목록은 번호로 나눈다.
+    #
+    # 고칠 것이 없으면 KEEP 이 답이다 — 답을 비워 두지 않는다.
+    try:
+        from runtime.review.user_request_answers import (
+            answer_requests as _answer_requests,
+        )
+        _request_answers = _answer_requests(
+            review_focus=str(review_focus or ""),
+            clauses=clauses,
+            clause_results=clause_results,
+            contract_type_code=str(_canonical_state.contract_type or ""),
+        )
+        if _request_answers:
+            meta["user_request_answers"] = [a.to_dict() for a in _request_answers]
+            logger.info(
+                "answered %d numbered review requests (KEEP=%d)",
+                len(_request_answers),
+                sum(1 for a in _request_answers if a.verdict == "KEEP"),
+            )
+    except Exception as exc:  # noqa: BLE001 - 답변 생성 실패가 검토를 막지 않는다
+        logger.warning("user request answers failed: %s", exc)
 
     _keep_demoted = _enforce_keep_removal(clause_results)
     meta["keep_verdict_removed"] = _keep_demoted

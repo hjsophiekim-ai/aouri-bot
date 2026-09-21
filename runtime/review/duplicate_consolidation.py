@@ -67,6 +67,15 @@ def _concept_key(cr: dict[str, Any]) -> str:
     return best
 
 
+def _remedy_kind(cr: dict[str, Any]) -> str:
+    """이 지적이 요구하는 처방 — 신설인가, 기존 조항 수정인가."""
+    from runtime.review.absence_verification import claims_absence
+
+    if bool(cr.get("is_new_clause")) or "신설" in _norm(cr.get("display_path")):
+        return "new_clause"
+    return "new_clause" if claims_absence(cr) else "amend"
+
+
 def _completeness(cr: dict[str, Any]) -> tuple[int, int, int, int]:
     """어느 항목을 대표로 남길지 정하는 점수(클수록 대표)."""
     tier_rank = {"CRITICAL": 3, "HIGH": 3, "MEDIUM": 2}.get(_tier(cr), 1)
@@ -136,7 +145,12 @@ def consolidate_duplicate_findings(
         concept = _concept_key(cr)
         if not concept:
             continue
-        groups.setdefault(concept, []).append(cr)
+        # 같은 개념이라도 **처방이 다르면** 다른 지적이다. "조항이 없으니
+        # 신설하라" 와 "있는 조항이 불리하니 고치라" 는 담당자가 해야 할 일이
+        # 다르므로, 하나로 접으면 그중 하나가 사라진다. 실측: 개선 IP 귀속
+        # 조항 지적(제8조 제3항 수정)에 Foreground IP 유보 신설 지적이
+        # 접혀 골든 항목 하나가 결과에서 빠졌다.
+        groups.setdefault(f"{concept}|{_remedy_kind(cr)}", []).append(cr)
 
     for concept, rows in groups.items():
         if len(rows) < 2:
@@ -169,7 +183,7 @@ def consolidate_duplicate_findings(
             str(o.get("clause_id") or "") for o in others
         ]
         report.merged.append({
-            "concept": concept,
+            "concept": concept.split("|")[0],
             "primary": str(primary.get("clause_id") or ""),
             "display_path": _norm(primary.get("display_path")),
             "folded": [str(o.get("clause_id") or "") for o in others],

@@ -233,7 +233,15 @@ def check_model_coherence(model: ContractModel) -> list[str]:
                 f"우리 회사와 상대방이 같은 쪽입니다 "
                 f"(우리={model.our_role_direction}, 상대방={model.counterparty_role})."
             )
-    if model.payment_direction == PAYMENT_UNKNOWN and model.our_role_direction:
+    # 상호 NDA 처럼 급부 교환이 없는 계약에는 대금 지급방향이 없다 —
+    # 없는 것을 미확정이라고 부르면 그것이 오히려 자기모순이다
+    # (2026-09-21 3차 지시, 오킨 NDA 실측).
+    if (
+        model.payment_direction == PAYMENT_UNKNOWN
+        and model.our_role_direction
+        and model.our_role_direction != "mutual"
+        and model.contract_type not in ("nda_confidentiality",)
+    ):
         problems.append("지위는 확정됐는데 대금 지급방향이 서지 않았습니다.")
     if model.ip_role == IP_ROLE_PRIMARY and model.contract_type in IP_ANCILLARY_TYPES:
         problems.append(

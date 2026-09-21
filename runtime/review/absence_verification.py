@@ -67,6 +67,8 @@ _ABSENCE_MARKERS: tuple[str, ...] = (
     "명시되어 있지 않",
     "규정되어 있지 않",
     "규정되지 않",
+    "유보되어 있지 않",
+    "유보하지 않",
     "정하지 않",
     "정해져 있지 않",
     "마련되어 있지 않",
@@ -180,6 +182,75 @@ PROTECTIVE_DEVICES: tuple[ProtectiveDeviceCheck, ...] = (
             r"|검사[^.\n]{0,60}(?:합격|보완\s*요구)[^.\n]{0,60}통지"
         ),
     ),
+    # ── NDA 단계에서 사업부가 이미 넣어 둔 보호장치 (2026-09-21 3차 지시 2항)
+    ProtectiveDeviceCheck(
+        key="foreground_ip_reservation",
+        label="공동·신규 개발성과의 귀속 유보",
+        claim_rx=_rx(
+            r"(?:개발\s*성과|개발성과|개발\s*결과|foreground)[^.\n]{0,80}"
+            r"(?:유보되어 있지 않|유보하지 않|없|정해져 있지 않|규정되어 있지 않)"
+            r"|(?:귀속)[^.\n]{0,40}(?:유보되어 있지 않|유보하지 않)"
+        ),
+        presence_rx=_rx(
+            r"(?:개발\s*성과|개발성과|개발\s*결과|결과물|성과)[^.\n]{0,160}"
+            r"(?:별도(?:의)?\s*(?:개발\s*)?계약|별도(?:의)?\s*서면\s*합의|후속\s*계약)"
+            r"[^.\n]{0,40}(?:정한다|따른다|협의)"
+            r"|별도(?:의)?\s*개발계약[^.\n]{0,60}(?:정한다|협의)"
+        ),
+    ),
+    ProtectiveDeviceCheck(
+        key="background_ip",
+        label="기존 보유기술(Background IP) 귀속",
+        claim_rx=_rx(
+            r"(?:기존\s*보유|보유\s*기술|background)[^.\n]{0,60}"
+            r"(?:없|부재|규정되어 있지 않|명시되어 있지 않)"
+        ),
+        presence_rx=_rx(
+            r"(?:체결\s*전부터\s*보유|협력\s*이전부터\s*보유|기존에?\s*보유)"
+            r"[^.\n]{0,160}(?:귀속|유지)"
+        ),
+    ),
+    ProtectiveDeviceCheck(
+        key="independent_development",
+        label="독자개발·제3자 협업의 자유",
+        claim_rx=_rx(
+            r"(?:독자\s*개발|독자개발|제3자와의?\s*협업)[^.\n]{0,60}"
+            r"(?:없|부재|제한|보호되지|규정되어 있지 않)"
+        ),
+        presence_rx=_rx(
+            r"독자(?:적으로)?\s*(?:개발|연구)[^.\n]{0,80}"
+            r"(?:제한되지\s*(?:않|아니)|할\s*수\s*있다)"
+            r"|비밀정보를\s*사용하지\s*(?:않|아니)[^.\n]{0,60}"
+            r"(?:독자|제3자와\s*협력)"
+        ),
+    ),
+    ProtectiveDeviceCheck(
+        key="subsequent_agreement_priority",
+        label="후속 계약과의 우선순위",
+        claim_rx=_rx(
+            r"(?:후속|별도)\s*계약[^.\n]{0,60}우선(?:순위)?[^.\n]{0,30}"
+            r"(?:없|정해져 있지 않|규정되어 있지 않)"
+            r"|우선순위[^.\n]{0,30}(?:없|정해져 있지 않)"
+        ),
+        presence_rx=_rx(
+            r"(?:상무계약|개발계약|별도(?:의)?\s*계약)[^.\n]{0,80}"
+            r"(?:달리\s*정한|우선)[^.\n]{0,30}(?:한다|적용)"
+        ),
+    ),
+    ProtectiveDeviceCheck(
+        key="data_processing_agreement",
+        label="개인정보·데이터 별도 처리계약",
+        claim_rx=_rx(
+            r"(?:개인정보|데이터)[^.\n]{0,60}"
+            r"(?:별도\s*계약|처리계약|DPA)?[^.\n]{0,30}"
+            r"(?:없|부재|규정되어 있지 않|근거가 없)"
+        ),
+        presence_rx=_rx(
+            r"(?:별도(?:의)?\s*)?(?:데이터\s*처리계약|기술계약|DPA)"
+            r"[^.\n]{0,60}(?:체결|정한다)"
+            r"|개인정보[^.\n]{0,80}(?:법령을\s*준수|정보주체의?\s*(?:승인|동의))"
+        ),
+    ),
     ProtectiveDeviceCheck(
         key="first_contract_relation",
         label="1차 계약과 본계약의 관계",
@@ -259,6 +330,32 @@ CONCEPTS: tuple[ConceptSpec, ...] = (
         key="time_extension", label="공기연장",
         claim_terms=("공기연장", "공사기간의 연장", "공기 연장", "기간 연장", "공기만회"),
         document_terms=("공사기간의 연장", "공기연장", "연장을 신청", "연장 일수"),
+    ),
+    ConceptSpec(
+        key="foreground_ip", label="공동·신규 개발성과의 귀속 유보",
+        claim_terms=("개발성과", "개발 성과", "개발 결과", "foreground", "귀속 유보"),
+        document_terms=("별도의 개발계약", "별도 개발계약", "개발계약 또는 서면 합의",
+                        "별도의 서면 합의", "후속 계약"),
+    ),
+    ConceptSpec(
+        key="background_ip", label="기존 보유기술 귀속",
+        claim_terms=("기존 보유기술", "보유 기술", "background"),
+        document_terms=("체결 전부터 보유", "협력 이전부터 보유", "해당 당사자에게 귀속"),
+    ),
+    ConceptSpec(
+        key="confidentiality_term", label="비밀유지기간",
+        claim_terms=("비밀유지기간", "비밀유지 기간", "존속기간", "보호기간"),
+        document_terms=("비밀유지의무는", "년간 유지", "영업비밀성을 유지"),
+    ),
+    ConceptSpec(
+        key="governing_law_arbitration", label="준거법·중재",
+        claim_terms=("준거법", "중재", "분쟁 해결", "관할"),
+        document_terms=("준거법", "중재", "대한상사중재원", "관할"),
+    ),
+    ConceptSpec(
+        key="prevailing_language", label="우선 언어",
+        claim_terms=("우선언어", "우선 언어", "언어본", "영문본", "번역본"),
+        document_terms=("영문본을 기준", "우선한다", "언어", "버전"),
     ),
     ConceptSpec(
         key="first_contract_relation", label="1차 계약과의 관계",

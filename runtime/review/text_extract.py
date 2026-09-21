@@ -4,7 +4,7 @@ import re
 import struct
 import zipfile
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -214,7 +214,14 @@ def extract_text_from_file(file_path: Path) -> TextExtractionResult:
                     f"extraction quality low: {', '.join(extraction.quality.reasons)}",
                     quality=extraction.quality,
                 )
-            return TextExtractionResult(True, text, method_label, None, quality=extraction.quality)
+            return TextExtractionResult(
+                True, text, method_label, None, quality=extraction.quality,
+                # 여백에서 떼어낸 검토 메모. 사업부가 1차 수정하며 남긴
+                # 근거이므로, 검토가 "이미 고친 것을 또 고치지" 않도록
+                # 파이프라인으로 넘긴다(2026-09-21 3차 지시 1항).
+                meta={"margin_annotations": list(extraction.margin_annotations)}
+                if extraction.margin_annotations else None,
+            )
         except Exception as exc:
             return TextExtractionResult(False, "", "pdf_reader", str(exc))
 
@@ -604,6 +611,70 @@ def _extract_page_text_column_aware(page) -> str:
     return (left_text + "\n" + right_text).strip()
 
 
+# ── 여백 주석(워드 메모) 분리 ────────────────────────────────────────────
+# (2026-09-21 3차 지시 — 사업부가 1차 수정하면서 남긴 메모가 달린 계약서)
+#
+# 워드 문서를 PDF 로 인쇄하면 검토 메모가 오른쪽 여백의 말풍선으로 찍힌다.
+# 그 글자들은 본문과 같은 높이에 있으므로, 줄 단위로 읽으면 본문 문장
+# 한가운데에 끼어든다. 실측(오킨 수정안_한국어.pdf 제5조):
+#
+#     "… 제3자에게 공개, 양도 또는 제공하거나 제3자가 사용하도록 허용하여서는
+#      아니 된다. 메모 포함[ILOOM2]: 제3자 제공 제한은 유지하되, 본 3. 수령자는 …"
+#
+# 이 상태로 조항을 나누면 인용문에 메모가 섞이고, 조 제목이 메모 문장이
+# 되기도 한다. 일반 2단 편집 감지기(`_extract_page_text_column_aware`)는
+# 가운데 여백만 보므로 이 말풍선 띠를 잡지 못한다(실측: 간격 21pt,
+# 임계값 24pt 로 아깝게 미달).
+#
+# 메모 말풍선은 **표지가 분명하다** — "메모 포함[", "Commented [" 로 시작한다.
+# 그 표지가 있는 오른쪽 띠만 본문에서 떼어내고, 떼어낸 내용은 따로 돌려준다.
+# 표지가 없으면 아무것도 하지 않는다.
+#: pdfplumber 는 "메모 포함[ILOOM1]:" 을 "메모" / "포함[ILOOM1]:" 두 낱말로
+#: 끊어 준다. 그래서 **낱말 하나** 기준으로 본다.
+_RX_MARGIN_COMMENT_MARKER = re.compile(
+    r"^메모$|포함\s*\[|^Commented$|Commented\s*\[|주석\s*\[|^Comment$",
+    re.IGNORECASE,
+)
+
+#: 말풍선 띠는 페이지 오른쪽에 있다. 본문 오른쪽 끝을 여기보다 왼쪽으로
+#: 보지 않는다 — 본문 문단을 잘라내면 계약 내용이 사라진다.
+_MARGIN_BAND_MIN_RATIO = 0.60
+
+
+def split_margin_annotations(page) -> tuple[str, str]:
+    """(본문, 여백 주석). 주석 띠가 없으면 (기존 추출 결과, "")."""
+    body = _extract_page_text_column_aware(page)
+    try:
+        words = page.extract_words()
+    except Exception:
+        return body, ""
+    if not words:
+        return body, ""
+    marker_x = [
+        float(w["x0"]) for w in words
+        if _RX_MARGIN_COMMENT_MARKER.search(str(w.get("text") or ""))
+    ]
+    if not marker_x:
+        return body, ""
+    width = float(page.width or 0)
+    band_start = min(marker_x)
+    if width <= 0 or band_start < width * _MARGIN_BAND_MIN_RATIO:
+        return body, ""
+    # 본문 쪽에서 이 띠보다 왼쪽에 있는 글자만 남긴다. 띠 시작 직전까지를
+    # 본문으로 보되, 띠 안으로 들어간 본문 글자가 없도록 약간 물린다.
+    cut = band_start - 2.0
+    try:
+        left = page.within_bbox((0, 0, max(1.0, cut), page.height))
+        right = page.within_bbox((max(1.0, cut), 0, width, page.height))
+        left_text = (left.extract_text() or "").strip()
+        right_text = (right.extract_text() or "").strip()
+    except Exception:
+        return body, ""
+    if not left_text:
+        return body, ""
+    return left_text, right_text
+
+
 def extract_text_from_pdf(file_path: Path) -> str:
     """하위 호환용 단순 wrapper — 품질 정보 없이 텍스트만 필요한 기존
     호출부를 위해 남겨둔다. 새 코드는 extract_pdf_text_with_quality()를
@@ -618,6 +689,8 @@ class PdfExtractionResult:
     method: str  # "pdfplumber" | "pymupdf" | "ocr_tesseract"
     quality: TextQualityAssessment
     attempts: list[dict[str, object]]
+    #: 오른쪽 여백에서 떼어낸 검토 메모(워드 주석). 본문에서는 제거됐다.
+    margin_annotations: list[str] = dc_field(default_factory=list)
 
 
 def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
@@ -632,6 +705,7 @@ def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
     from_file)가 REVIEW_FAILED_TEXT_EXTRACTION으로 이어질 신호를 받도록
     한다 — 텍스트가 있어 보인다는 이유로 조용히 통과시키지 않는다."""
     attempts: list[dict[str, object]] = []
+    margin_annotations: list[str] = []
 
     def _try(method: str, fn) -> tuple[str, TextQualityAssessment] | None:
         try:
@@ -649,9 +723,12 @@ def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
     def _pdfplumber() -> str:
         import pdfplumber
         texts: list[str] = []
+        margin_annotations.clear()
         with pdfplumber.open(str(file_path)) as pdf:
             for page_num, page in enumerate(pdf.pages, 1):
-                t = _extract_page_text_column_aware(page)
+                t, note = split_margin_annotations(page)
+                if note and note.strip():
+                    margin_annotations.append(note.strip())
                 if t and t.strip():
                     texts.append(f"[페이지 {page_num}]\n{t.strip()}")
         return "\n\n".join(texts)
@@ -679,7 +756,8 @@ def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
             continue
         text, q = r
         if q.verdict == "ok":
-            return PdfExtractionResult(text=text, method=method, quality=q, attempts=attempts)
+            return PdfExtractionResult(text=text, method=method, quality=q, attempts=attempts,
+                                       margin_annotations=list(margin_annotations))
         if best is None or q.total_chars > best[2].total_chars:
             best = (text, method, q)
 
@@ -689,11 +767,13 @@ def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
     if r is not None:
         text, q = r
         if q.verdict == "ok" or best is None or q.total_chars > best[2].total_chars:
-            return PdfExtractionResult(text=text, method="ocr_tesseract", quality=q, attempts=attempts)
+            return PdfExtractionResult(text=text, method="ocr_tesseract", quality=q, attempts=attempts,
+                                       margin_annotations=list(margin_annotations))
 
     if best is not None:
         text, method, q = best
-        return PdfExtractionResult(text=text, method=method, quality=q, attempts=attempts)
+        return PdfExtractionResult(text=text, method=method, quality=q, attempts=attempts,
+                                       margin_annotations=list(margin_annotations))
 
     empty_q = assess_text_quality("")
     return PdfExtractionResult(text="", method="none", quality=empty_q, attempts=attempts)
