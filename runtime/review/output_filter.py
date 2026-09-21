@@ -65,6 +65,13 @@ class ReviewIssue:
     # 결과에서 통째로 사라졌다.
     is_counsel_agent: bool = False
     counsel_axis: str = ""
+    # 건설계약의 지위별 체크리스트(construction_works.py)가 올린 항목인지
+    # (2026-09-18 지시 3·4·5항). 각 항목은 "이 지위에서 반드시 볼 축" 하나씩을
+    # 담당하므로, 같은 조항에 여러 축이 걸려도 서로 다른 판단이다 — 에이전트
+    # 논점과 같은 이유로 조항 동일성 기준 병합의 대상이 아니다. 실측: 계약이
+    # 설계변경과 설계도서 해석을 한 조에 담고 있어 "계약금액 조정 절차 부재"
+    # 와 "설계도서 우선순위 부재" 중 하나가 흡수돼 사라졌다.
+    is_construction_checklist: bool = False
     # Senior In-house Counsel 판단 레이어(2026-09-04 지시) — "법적으로
     # 문제인가"(legal_risk/business_exposure)와 "지금 협상 테이블에 올릴
     # 가치가 있는가"(negotiation_priority)를 분리한 필드. legal_risk==HIGH여도
@@ -118,6 +125,7 @@ class ReviewIssue:
             "is_common_legal_risk": self.is_common_legal_risk,
             "is_counsel_agent": self.is_counsel_agent,
             "counsel_axis": self.counsel_axis,
+            "is_construction_checklist": self.is_construction_checklist,
             "legal_risk": self.legal_risk or self.severity,
             "business_exposure": self.business_exposure,
             "negotiation_priority": self.negotiation_priority,
@@ -292,7 +300,7 @@ def _merge_same_clause_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
         # 제2항의 부가가치세 과세표준(세무) 논점이 같은 항의 정산문구 지적에
         # 흡수돼, 이번 검토에서 유일한 세무 논점 2건이 최종 결과에서 통째로
         # 사라졌다.
-        if issue.is_counsel_agent:
+        if issue.is_counsel_agent or issue.is_construction_checklist:
             standalone.append(issue)
             continue
         key = _clause_identity_key(issue)
@@ -598,6 +606,7 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             is_common_legal_risk=bool(cr.get("is_common_legal_risk")),
             is_counsel_agent=bool(cr.get("is_counsel_agent")),
             counsel_axis=str(cr.get("counsel_axis") or "").strip(),
+            is_construction_checklist=bool(cr.get("is_construction_checklist")),
             legal_risk=str(cr.get("legal_risk") or "").strip(),
             business_exposure=str(cr.get("business_exposure") or cr.get("exposure_category") or "").strip(),
             negotiation_priority=str(cr.get("negotiation_priority") or "").strip(),

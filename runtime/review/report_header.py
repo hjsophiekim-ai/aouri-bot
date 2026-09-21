@@ -28,6 +28,7 @@ _ROLE_LABELS: dict[str, str] = {
     "contractor": "수급인",
     "ordering_party": "도급인/발주자",
     "도급인/발주자/콘텐츠 사용권자": "도급인/발주자/콘텐츠 사용권자",
+    "광고주(매체 이용자)": "광고주(매체 이용자)",
     "rental_provider": "렌탈업자",
     "principal": "위탁자",
     "client": "의뢰인",
@@ -37,6 +38,7 @@ _ROLE_LABELS: dict[str, str] = {
 #: contract_type 코드 → 사람이 읽는 계약유형명.
 _CONTRACT_TYPE_LABELS: dict[str, str] = {
     "advertising_content_production": "제품 광고 콘텐츠 제작 대행 계약",
+    "advertising_media_placement": "광고매체 집행 계약 (상대방은 송출·게재만 수행)",
     "content_production_service": "콘텐츠 제작 용역 계약",
     "creative_agency_service": "광고 대행 용역 계약",
     "consignment_sales_agency": "위탁판매 대리점 계약 / 고객 직접계약형 판매지원 구조",

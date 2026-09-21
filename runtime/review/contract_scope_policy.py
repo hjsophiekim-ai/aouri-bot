@@ -103,6 +103,25 @@ _BLOCKED_DOMAIN_PATTERNS: dict[str, re.Pattern[str]] = {
 # 계약유형별로 원천 차단할 영역. 표에 없는 계약유형은 아무 것도 차단하지 않는다.
 CONTRACT_TYPE_HARD_BLOCKED_DOMAINS: dict[str, frozenset[str]] = {
     "nda_confidentiality": frozenset(_BLOCKED_DOMAIN_PATTERNS.keys()),
+    # ── 광고매체 집행형 (2026-09-16 지시 3항) ───────────────────────────────
+    # 상대방은 우리가 준 광고물을 송출·게재만 한다. 상대방이 만드는 것이
+    # 없으므로 아래 영역은 **근거 자체가 없다**.
+    #
+    # `ad_transaction_model.deactivate_production_only_findings()` 이 같은
+    # 일을 거래모델 기준으로 하지만, 그쪽은 모델이 `confident` 일 때만 돈다.
+    # 이 표는 canonical 계약유형이 집행형으로 확정된 모든 검토에 적용된다 —
+    # 한 축이 쉬어도 다른 축이 잡도록 두 겹으로 둔다.
+    #
+    # `advertising_media_license`(광고 매체·게재·집행)는 **차단하지 않는다**.
+    # 그것이 이 계약의 본체다. `payment_terms`·`delivery_and_acceptance` 등
+    # 거래 일반 영역도 차단하지 않는다 — 광고료 지급조건은 핵심 검토축이다.
+    "advertising_media_placement": frozenset({
+        "content_production_inspection",
+        "portrait_or_location_release",
+        "music_and_sound_assets",
+        "portfolio_usage",
+        "copyright_transfer_to_client",
+    }),
 }
 
 # ── 항목 1: Current Contract vs Future Transaction ──────────────────────────
@@ -203,9 +222,16 @@ def enforce_contract_scope(
     제거됐는지 리포트로 돌려준다(meta.contract_scope_policy).
     """
     code = (contract_type_code or "").strip()
+    # HARD BLOCK 표만 있고 allowlist 가 없는 계약유형도 정책 대상이다.
+    # allowlist 는 "이것만 검토하라"는 강한 제약이라 NDA 처럼 검토 영역이
+    # 좁은 유형에만 쓴다. 광고매체 집행형은 검토할 영역이 넓고 **성립하지
+    # 않는 영역만** 막으면 되므로 차단표만 둔다(2026-09-16 지시 3항).
     report: dict[str, Any] = {
         "contract_type_code": code,
-        "policy_applied": bool(CONTRACT_TYPE_DOMAIN_WHITELIST.get(code)),
+        "policy_applied": bool(
+            CONTRACT_TYPE_DOMAIN_WHITELIST.get(code)
+            or CONTRACT_TYPE_HARD_BLOCKED_DOMAINS.get(code)
+        ),
         "allowed_domains": list(CONTRACT_TYPE_DOMAIN_WHITELIST.get(code, ())),
         "blocked": [],
         "future_transaction_blocked": [],
@@ -216,6 +242,15 @@ def enforce_contract_scope(
     kept: list[dict[str, Any]] = []
     for cr in clause_results:
         if not isinstance(cr, dict):
+            kept.append(cr)
+            continue
+        # 거래모델 체크리스트가 스스로 만든 항목은 이 표의 대상이 아니다.
+        # 그 항목들은 이미 "이 거래구조에서 무엇을 봐야 하는가" 를 답으로
+        # 들고 있다. 실측(v11): 집행형 면책 carve-out 문안이 "제3자의
+        # 지식재산권·초상권을 침해" 라는 한 구절 때문에
+        # portrait_or_location_release 로 태깅돼 통째로 사라졌다 —
+        # 지시가 가장 강조한 축(제공 콘텐츠 책임 범위)이 없어진 것이다.
+        if bool(cr.get("is_ad_media_checklist")) or bool(cr.get("is_common_legal_risk")):
             kept.append(cr)
             continue
         blob = _finding_text(cr)

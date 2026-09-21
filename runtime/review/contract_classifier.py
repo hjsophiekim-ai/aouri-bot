@@ -107,6 +107,7 @@ def detect_our_party_from_text(text: str, hint_entity: str = "") -> str | None:
 #   unknown                — could not be determined; do not fire role-specific rules
 _TYPE_TO_ROLE_BUCKET: dict[str, tuple[str, str]] = {
     "advertising_content_production": ("service_recipient", "service_provider"),
+    "advertising_media_placement": ("service_recipient", "service_provider"),
     "content_production_service": ("service_recipient", "service_provider"),
     "creative_agency_service": ("service_recipient", "service_provider"),
     "consignment_sales_agency": ("supplier", "dealer"),
@@ -420,6 +421,25 @@ def _classify_type_code(
     # Key differentiators vs ai_search_marketing:
     #   content_production: 콘텐츠 제작, 촬영, 편집, 시안, 콘티, 결과물, 저작권, 소유권 이전
     #   ai_search_marketing: AI 검색, 검색 노출, SEO, GEO, AEO, LLM, 생성형 AI 검색
+
+    # ── Step 0 앞: 광고는 **거래모델**이 유형을 정한다 (2026-09-16 지시 1항) ──
+    # 아래 Step 0 의 낱말 표는 "누가 만드는가" 를 구분하지 못한다. 실측(디지털
+    # 사이니지 광고 계약): 광고주가 "광고시안을 제작하여 매체사에게 전달" 한다는
+    # 조항의 "시안" 하나와 "이미지" 하나로 advertising_content_production 이
+    # 됐다 — 만드는 쪽은 우리인데 상대방이 만드는 계약으로 분류된 것이다.
+    # 그래서 광고 거래는 `ad_transaction_model` 의 판정을 그대로 쓴다. 판정
+    # 로직을 여기서 다시 쓰지 않는다(두 곳에서 정하면 반드시 갈라진다).
+    try:
+        from runtime.review.ad_transaction_model import (
+            AD_MEDIA_PLACEMENT_TYPE_CODE,
+            classify_ad_transaction_model as _classify_ad,
+        )
+        _ad = _classify_ad(contract_text=text or "", contract_type_code=contract_type or "")
+        if _ad.is_media_placement and _ad.confident:
+            reasons.append("advertising_media_placement_transaction_model")
+            return AD_MEDIA_PLACEMENT_TYPE_CODE, reasons
+    except Exception:  # noqa: BLE001 - 분류가 실패해도 아래 경로로 계속 간다
+        pass
 
     has_production_core = has(
         "콘텐츠 제작", "광고 콘텐츠", "제품 광고", "콘텐츠 제작 대행",
@@ -739,6 +759,11 @@ def _infer_legal_roles(
         if _explicit == "buyer":
             return "buyer", "seller_or_supplier"
 
+    if type_code == "advertising_media_placement":
+        # 우리는 완성된 광고물을 주고 자리를 사는 쪽이다. 발주자·도급인이
+        # 아니다 — 상대방이 만드는 것이 없으므로 도급 어휘를 쓰면 검수·납품·
+        # 산출물 논점이 그 라벨을 따라 들어온다(2026-09-16 지시 3항).
+        return "광고주(매체 이용자)", "광고매체 운영자(송출·게재 수행)"
     if type_code in ("advertising_content_production", "content_production_service", "creative_agency_service"):
         return "도급인/발주자/콘텐츠 사용권자", "콘텐츠 제작 수탁자"
     if type_code == "consignment_sales_agency":
@@ -906,6 +931,9 @@ def _compute_confidence(type_code: str, reasons: list[str], text: str) -> float:
         "construction",
         "store_operation_outsourcing",
         "testing_inspection_service",
+        # 거래모델 판정(누가 만드는가)으로 확정된 유형이다 — 낱말 하나에
+        # 기대는 분류가 아니므로 강한 신호로 다룬다(2026-09-16 지시 1항).
+        "advertising_media_placement",
     }
     if "no_strong_signal" in reasons:
         return 0.40

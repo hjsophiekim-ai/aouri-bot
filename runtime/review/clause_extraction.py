@@ -77,6 +77,71 @@ _RX_PAGE_MARKER_LINE = re.compile(r"^\[\s*페이지\s*\d+\s*\]$")
 
 _RX_KR_ARTICLE_HEAD = re.compile(r"^(제\s*\d+(?:\s*의\s*\d+)?\s*조)\s*(?:\(([^)]{1,80})\))?\s*(.*)$")
 
+# ── 줄머리 상호참조를 조 제목으로 오인하지 않기 위한 판별 ──────────────────
+# (2026-09-21 지시 4항 — "제15조에 9항까지만 있는데 제12항 신설", "제8조 원문을
+#  제26조 원문처럼 표시" 의 실제 원인)
+#
+# PDF 는 문장을 줄 폭에서 끊는다. 그래서 본문 한가운데의 상호참조가 줄머리로
+# 밀려나온다. 실측(인테리어 2차 본계약, 2026-09-21):
+#
+#     제5조  …"이동가구 제외"의 기재는
+#     제14조 제3항 제1목 제2호의 2차 견적에 적용되었던 조건으로서, …
+#     제8조  …권리의 귀속은 (1차) 계약에서 정한 바에 따르며,
+#     제26조 제4항의 추가 설계용역에 따라 작성된 결과물에 대하여도 같다.
+#     제14조 …도급인의 회계처리를 위한 것으로서,
+#     제15조의 대금 지급 회차 구성과 무관하며, 수급인의 …
+#
+# 이 세 줄이 전부 새 조(條)로 승격돼, 제5조·제8조·제14조의 남은 본문이 각각
+# 제14조·제26조·제15조의 원문으로 둔갑했다. 인용은 진짜였지만 조항번호가
+# 가짜였으므로 존재검증 게이트도 이를 잡지 못한다 — 색인 자체가 틀렸기
+# 때문이다. 판별은 두 가지로 한다.
+#
+#  (1) 괄호 제목이 없고 뒤따르는 글자가 참조 연결어(제N항/제N호/의/에/와 …)면
+#      조 제목이 아니다. 조 제목은 "제3조 계약문서 및 우선순위" 처럼 명사로
+#      시작한다.
+#  (2) 같은 번호의 조가 문서 어딘가에서 괄호 제목을 달고 등장하면, 괄호 없는
+#      쪽은 참조다. 이 규칙이 종전의 `.D2` 중복 조 id 를 없앤다.
+_RX_KR_ARTICLE_REF_TAIL = re.compile(
+    r"^(?:"
+    r"제?\s*\d+\s*(?:항|호|목|조)"          # "제3항 …", "제1목 …", "2호 …"
+    r"|(?:의|에|와|과|을|를|은|는|이|가|도|만|부터|까지|에서|에게|에도|에는|으로|로|및|또는|내지|단서|본문)(?=[\s,.·)]|$)"
+    r")"
+)
+
+
+def _is_kr_article_heading(match: "re.Match[str]") -> bool:
+    """괄호 제목이 있으면 조 제목, 없으면 뒤따르는 글자로 판별한다."""
+    if (match.group(2) or "").strip():
+        return True
+    rest = (match.group(3) or "").strip()
+    if not rest:
+        return True
+    return not _RX_KR_ARTICLE_REF_TAIL.match(rest)
+
+
+def _article_number_key(head: str) -> str:
+    return re.sub(r"[^\d의]", "", head or "")
+
+
+def _kr_article_heading_indexes(lines: list[str]) -> set[int]:
+    """조 제목 줄의 인덱스 집합. 규칙 (1) 로 1차 선별하고, 규칙 (2) 로
+    같은 번호에 괄호 제목 줄이 따로 있는 괄호 없는 줄을 제거한다."""
+    titled: set[str] = set()
+    cand: list[tuple[int, str, bool]] = []
+    for i, line in enumerate(lines):
+        l = (line or "").strip()
+        if not l:
+            continue
+        m = _RX_KR_ARTICLE_HEAD.match(l)
+        if not m or not _is_kr_article_heading(m):
+            continue
+        key = _article_number_key(m.group(1) or "")
+        has_title = bool((m.group(2) or "").strip())
+        if has_title:
+            titled.add(key)
+        cand.append((i, key, has_title))
+    return {i for i, key, has_title in cand if has_title or key not in titled}
+
 
 def _strip_zero_width_and_ctrl(text: str) -> str:
     if not text:
@@ -208,7 +273,7 @@ def _split_inline_paragraph_from_article_heading(lines: list[str]) -> list[str]:
         raw = line or ""
         s = raw.strip()
         m = _RX_KR_ARTICLE_HEAD.match(s)
-        if m:
+        if m and _is_kr_article_heading(m):
             rest = (m.group(3) or "").strip()
             if rest and _parse_paragraph_start(rest) is not None:
                 head = m.group(1) + (f"({m.group(2)})" if m.group(2) else "")
@@ -217,6 +282,77 @@ def _split_inline_paragraph_from_article_heading(lines: list[str]) -> list[str]:
                 continue
         out.append(raw)
     return out
+
+
+# ── 조문별 번호 체계(사다리) 판별 ────────────────────────────────────────
+# (2026-09-21 지시 4항)
+#
+# 기본 가정은 "①=항, 1.=호, 가.=목" 이다. 대부분의 국내 계약이 그렇다.
+# 그런데 실측한 인테리어 2차 본계약은 조문마다 다른 사다리를 쓴다:
+#
+#     제12조 :  1. = 항,  ① = 호
+#     제15조 :  1. = 항,  1) = 호,  ① = 목
+#
+# 기본 가정대로 읽으면 제15조 제1항이 "제16조 제1호의 계약이행보증보험증권의
+# 제출"(실제로는 제1항 제2호 제1목) 이 되고, 항 번호가 11까지 부풀어
+# "제15조 제11항" 같은 존재하지 않는 위치가 만들어진다. 실제 제15조는
+# 제9항까지다.
+#
+# 그래서 **조문 안에서 각 표기 스타일이 처음 나타난 순서**로 사다리를 세운다
+# (첫 번째 = 항, 두 번째 = 호, 세 번째 = 목). 다만 종전 판정을 뒤집는 범위를
+# 최소화하기 위해, 원숫자(①)가 있고 그보다 **앞서** 숫자 표기가 나온
+# 조문에서만 이 사다리를 쓴다. 원숫자가 아예 없는 조문("다음 각 호" 뒤에
+# 1. 2. 3. 이 오는 제16조 같은 경우)에서 1. 은 항이 아니라 호이므로,
+# 그런 조문은 종전대로 둔다 — 원숫자 하위 목록의 유무가 곧 숫자 표기가
+# 항인지 호인지를 가르는 신호다.
+_RX_STYLE_DIGIT_DOT = re.compile(r"^(\d{1,3})\.\s*(.+)$")
+_RX_STYLE_DIGIT_PAREN = re.compile(r"^\(?(\d{1,3})\)\s*(.+)$")
+_RX_STYLE_HANGUL = re.compile(r"^\(?([가-하])\)?\s*(?:목|[.)])\s*(.+)$")
+
+
+def _detect_marker_style(line: str) -> tuple[str, str, str] | None:
+    """줄머리 번호 표기의 (스타일, 번호, 나머지). 없으면 None."""
+    l = (line or "").strip()
+    if not l:
+        return None
+    if l[0] in _CIRCLED_NUMS:
+        n = _circled_to_int(l[0])
+        if n:
+            return "circled", n, _strip_prefix(l, 1)
+        return None
+    m = _RX_STYLE_DIGIT_DOT.match(l)
+    if m and not re.match(r"^[.\s]*$", m.group(2) or ""):
+        return "digit_dot", str(int(m.group(1))), (m.group(2) or "").strip()
+    m = _RX_STYLE_DIGIT_PAREN.match(l)
+    if m:
+        return "digit_paren", str(int(m.group(1))), (m.group(2) or "").strip()
+    m = _RX_STYLE_HANGUL.match(l)
+    if m:
+        return "hangul", (m.group(1) or "").strip(), (m.group(2) or "").strip()
+    return None
+
+
+def _marker_ladder(lines: list[str]) -> list[str] | None:
+    """조문 본문의 표기 스타일 사다리. 기본 가정을 그대로 두어도 되는
+    조문에서는 None 을 돌려준다."""
+    order: list[str] = []
+    for line in lines:
+        st = _detect_marker_style(line)
+        if st and st[0] not in order:
+            order.append(st[0])
+    if "circled" not in order or order.index("circled") == 0:
+        return None
+    return order
+
+
+def _style_parser(style: str):
+    def _fn(line: str) -> tuple[str, str] | None:
+        st = _detect_marker_style(line)
+        if st and st[0] == style:
+            return st[1], st[2]
+        return None
+
+    return _fn
 
 
 def _parse_item_start(line: str) -> tuple[str, str] | None:
@@ -271,6 +407,7 @@ def _split_blocks(lines: list[str], is_start) -> list[tuple[tuple[str, str], lis
 
 def _merge_paragraphs_with_non_leading_items(
     para_blocks: list[tuple[tuple[str, str], list[str]]],
+    item_start_fn=None,
 ) -> list[tuple[tuple[str, str], list[str]]]:
     """A genuine 항(paragraph)'s own 호(item) list always starts at item 1 —
     Korean legal drafting never begins an item list at item 2 or later. A
@@ -301,7 +438,7 @@ def _merge_paragraphs_with_non_leading_items(
     out: list[tuple[tuple[str, str], list[str]]] = [para_blocks[0]]
     for (pn, first_line), body in para_blocks[1:]:
         candidate_lines = [x for x in ([first_line] + body) if (x or "").strip()]
-        items = _split_blocks(candidate_lines, _parse_item_start)
+        items = _split_blocks(candidate_lines, item_start_fn or _parse_item_start)
         first_item_num = items[0][0][0] if items else None
         if first_item_num is not None and first_item_num != "1":
             prev_pn, prev_first = out[-1][0]
@@ -436,10 +573,26 @@ def _parse_kr_article_hierarchy(
     body_lines: list[str],
 ) -> list[ClauseChunk]:
     lines = [x for x in body_lines if (x or "").strip()]
-    has_circled_paragraph_marker = any((l.strip()[:1] in _CIRCLED_NUMS) for l in lines if l.strip())
-    para_start_fn = _parse_paragraph_start_circled_only if has_circled_paragraph_marker else _parse_paragraph_start
+    ladder = _marker_ladder(lines)
+    if ladder:
+        para_start_fn = _style_parser(ladder[0])
+        item_start_fn = _style_parser(ladder[1]) if len(ladder) > 1 else _parse_item_start
+        subitem_start_fn = _style_parser(ladder[2]) if len(ladder) > 2 else _parse_subitem_start
+    else:
+        has_circled_paragraph_marker = any((l.strip()[:1] in _CIRCLED_NUMS) for l in lines if l.strip())
+        para_start_fn = _parse_paragraph_start_circled_only if has_circled_paragraph_marker else _parse_paragraph_start
+        item_start_fn = _parse_item_start
+        subitem_start_fn = _parse_subitem_start
+    # 원숫자가 항 마커가 아닌 사다리에서는 "떠도는 원숫자 꼬리 잘라내기" 를
+    # 하지 않는다 — 그 원숫자는 하위 목록(호/목)의 정상 마커이므로, 잘라내면
+    # 제14조 제4항의 건물별 금액 ①②③④ 처럼 본문이 통째로 사라진다.
+    _strip_tail = (
+        (lambda s: s)
+        if (ladder and ladder[0] != "circled")
+        else _strip_stray_circled_number_tail
+    )
     para_blocks = _split_blocks(lines, para_start_fn)
-    para_blocks = _merge_paragraphs_with_non_leading_items(para_blocks)
+    para_blocks = _merge_paragraphs_with_non_leading_items(para_blocks, item_start_fn)
     para_blocks = _renumber_duplicate_paragraph_markers(para_blocks)
     if not para_blocks:
         full = _norm_text("\n".join(lines))
@@ -462,7 +615,7 @@ def _parse_kr_article_hierarchy(
 
     first_para_idx = None
     for i, line in enumerate(lines):
-        if _parse_paragraph_start(line):
+        if para_start_fn(line):
             first_para_idx = i
             break
     article_intro = _norm_text("\n".join(lines[: first_para_idx or 0])) if first_para_idx is not None else ""
@@ -473,13 +626,13 @@ def _parse_kr_article_hierarchy(
     for (pn, para_first), para_body in para_blocks:
         para_lines = [para_first] + para_body
         para_lines = [x for x in para_lines if (x or "").strip()]
-        items = _split_blocks(para_lines, _parse_item_start)
+        items = _split_blocks(para_lines, item_start_fn)
 
         para_path = _display_path(article=article_number, paragraph=pn, item=None, subitem=None)
         para_parent_id = f"{base_clause_id}-p{pn}"
 
         if not items:
-            para_text = _strip_stray_circled_number_tail(_norm_text("\n".join(para_lines)))
+            para_text = _strip_tail(_norm_text("\n".join(para_lines)))
             ctx = "\n".join([x for x in [article_head, article_intro] if x])
             out.append(
                 ClauseChunk(
@@ -499,7 +652,7 @@ def _parse_kr_article_hierarchy(
 
         item_start_positions: list[int] = []
         for i, line in enumerate(para_lines):
-            if _parse_item_start(line):
+            if item_start_fn(line):
                 item_start_positions.append(i)
         first_item_idx = item_start_positions[0] if item_start_positions else None
         para_intro = _norm_text("\n".join(para_lines[: first_item_idx or 0])) if first_item_idx is not None else ""
@@ -507,7 +660,7 @@ def _parse_kr_article_hierarchy(
         for (inm, item_first), item_body in items:
             item_lines = [item_first] + item_body
             item_lines = [x for x in item_lines if (x or "").strip()]
-            subitems = _split_blocks(item_lines, _parse_subitem_start)
+            subitems = _split_blocks(item_lines, subitem_start_fn)
 
             item_path = _display_path(article=article_number, paragraph=pn, item=inm, subitem=None)
             item_id = f"{base_clause_id}-p{pn}-i{inm}"
@@ -525,14 +678,14 @@ def _parse_kr_article_hierarchy(
                         parent_clause_id=para_parent_id,
                         context_text=_norm_text(base_ctx) if base_ctx else None,
                         title=title,
-                        text=_strip_stray_circled_number_tail(_norm_text("\n".join(item_lines))),
+                        text=_strip_tail(_norm_text("\n".join(item_lines))),
                     )
                 )
                 continue
 
             sub_start_positions: list[int] = []
             for i, line in enumerate(item_lines):
-                if _parse_subitem_start(line):
+                if subitem_start_fn(line):
                     sub_start_positions.append(i)
             first_sub_idx = sub_start_positions[0] if sub_start_positions else None
             item_intro = _norm_text("\n".join(item_lines[: first_sub_idx or 0])) if first_sub_idx is not None else ""
@@ -553,7 +706,7 @@ def _parse_kr_article_hierarchy(
                         parent_clause_id=item_id,
                         context_text=_norm_text(ctx) if ctx else None,
                         title=title,
-                        text=_strip_stray_circled_number_tail(_norm_text("\n".join(sub_lines))),
+                        text=_strip_tail(_norm_text("\n".join(sub_lines))),
                     )
                 )
     return out
@@ -682,6 +835,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
     idxs: list[int] = []
     titles: dict[int, str] = {}
     ids: dict[int, str] = {}
+    kr_heading_idxs = _kr_article_heading_indexes(lines)
 
     for i, line in enumerate(lines):
         l = (line or "").strip()
@@ -689,7 +843,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             continue
 
         m = _RX_KR_ARTICLE_HEAD.match(l)
-        if m:
+        if m and i in kr_heading_idxs:
             idxs.append(i)
             head = (m.group(1) or "").strip()
             name = (m.group(2) or "").strip()

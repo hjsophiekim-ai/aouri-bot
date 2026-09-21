@@ -70,6 +70,10 @@ FAMILY_OF: dict[str, str] = {
     "advisory_service": "development_service",
     "content_production_service": "development_service",
     "advertising_content_production": "development_service",
+    # 광고매체 집행형은 제작·납품 계열이 아니다. 매체라는 자리를 기간
+    # 단위로 이용하는 구조이므로 계열을 따로 둔다 — development_service
+    # 로 묶으면 검수·납품·산출물 축이 계열 단위로 따라 들어온다.
+    "advertising_media_placement": "advertising_media_placement",
     "creative_agency_service": "development_service",
     "ai_search_marketing": "development_service",
     "testing_inspection_service": "development_service",

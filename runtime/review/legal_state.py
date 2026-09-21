@@ -73,6 +73,7 @@ ARCHETYPE_OF_TYPE_CODE: dict[str, str] = {
     "software_app_development": ARCHETYPE_SERVICE,
     "testing_inspection_service": ARCHETYPE_SERVICE,
     "advertising_content_production": ARCHETYPE_SERVICE,
+    "advertising_media_placement": ARCHETYPE_SERVICE,
     "content_production_service": ARCHETYPE_SERVICE,
     "creative_agency_service": ARCHETYPE_SERVICE,
     "ai_search_marketing": ARCHETYPE_SERVICE,
@@ -204,6 +205,7 @@ def reconcile_contract_type(
     detailed_code: str,
     detailed_family: str,
     profile: ContractEffectProfile,
+    locked_reason: str = "",
 ) -> tuple[str, str, bool, str]:
     """효과 프로파일이 말하는 원형과 enum 분류를 맞춘다.
 
@@ -217,6 +219,21 @@ def reconcile_contract_type(
     code = str(detailed_code or "").strip()
     family = str(detailed_family or "").strip()
 
+    # ── 확정된 계약유형은 여기서 다시 뒤집지 않는다 (2026-09-21 지시 1항) ──
+    # "계약 전체의 주된 법률효과가 건설공사인데 일부 IP 조항이 있다는 이유로
+    #  IP/콘텐츠 계약으로 재분류하는 것을 금지합니다."
+    #
+    # 실측(인테리어 2차 본계약, 2026-09-21): 거래구조 판정은 건설공사(수급인)
+    # 로 확정했는데, 효과 프로파일이 설계·시공상세도·검토승인 같은 용역 신호를
+    # 더 세어 원형을 '용역'으로 읽었고, 그 결과 canonical_state 가
+    #     contract_type      = advisory_service   ("자문/용역 계약")
+    #     contract_type_family = construction_contract
+    # 라는 자기모순 상태가 됐다. 리포트 상단과 본문이 서로 다른 계약을
+    # 말하게 되는 바로 그 사고다. 거래구조 판정이 확신을 가지고 유형을
+    # 세웠으면 그 값이 canonical 이고, 원형 판정은 보조 신호로만 남긴다.
+    if locked_reason:
+        return code, family, False, f"계약유형이 이미 확정되어 유지했습니다({locked_reason})."
+
     if profile.archetype == ARCHETYPE_UNKNOWN:
         return code, family, False, "거래 원형을 특정하지 못해 기존 분류를 유지했습니다."
 
@@ -228,12 +245,18 @@ def reconcile_contract_type(
     if not target:
         return code, family, False, "거래 원형에 대응하는 계약유형 코드가 없습니다."
 
+    # 코드를 바꾸면 계열도 그 코드의 계열로 바꾼다. 예전에는 옛 계열을 그대로
+    # 들고 나가서 contract_type=advisory_service 인데 family=construction_contract
+    # 인 자기모순 상태가 만들어졌다 (2026-09-21 실측).
+    from runtime.review.canonical_state import family_of as _family_of
+    target_family = _family_of(target) or profile.archetype
+
     if not implied:
         # enum 코드가 원형을 함의하지 않는다(general/unknown/미매핑).
         # 충돌이 아니라 미분류의 보완이다.
         return (
             target,
-            family or profile.archetype,
+            target_family,
             True,
             (
                 f"기존 분류('{code or '미분류'}')는 거래 원형을 특정하지 않아, "
@@ -244,7 +267,7 @@ def reconcile_contract_type(
 
     return (
         target,
-        family or profile.archetype,
+        target_family,
         True,
         (
             f"기존 분류는 '{code}'({ARCHETYPE_LABELS.get(implied, implied)})였으나 "
@@ -271,11 +294,13 @@ def build_legal_state(
     document_hierarchy: dict[str, Any] | None = None,
     applicable_law_candidates: list[dict[str, Any]] | None = None,
     user_review_scope: list[dict[str, Any]] | None = None,
+    contract_type_locked_reason: str = "",
 ) -> CanonicalLegalState:
     """검토 시작 시 **한 번만** 호출한다."""
     profile = build_effect_profile(text=str(text or ""), clauses=clauses)
     code, family, reconciled, reason = reconcile_contract_type(
         detailed_code=detailed_code, detailed_family=detailed_family, profile=profile,
+        locked_reason=str(contract_type_locked_reason or ""),
     )
 
     label = detailed_label

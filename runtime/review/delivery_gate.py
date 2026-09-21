@@ -92,6 +92,16 @@ REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     "SEMANTIC_ANCHOR_MISMATCH",
     # [2026-09-15] 거래구조에 맞지 않는 논점을 제거하는 것으로 결함이 해소된다.
     "REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH",
+    # [2026-09-16] 계약에 없는 산출물을 전제한 항목은 제거로 해소된다.
+    "REVIEW_FAILED_FABRICATED_ARTIFACT",
+    # [2026-09-21 지시 6~8·12항] 네 가지 모두 **제거·해제로 결함이 실제로
+    # 해소되는** 상태다. 근거 없는 부재 주장은 삭제했고, 타 유형 문언은
+    # 걷어냈으며, 어긋난 질문·조항 연결은 끊었다. 남은 결과는 쓸 수 있으므로
+    # 전달을 막지 않고 사유만 문서에 싣는다.
+    "REVIEW_FAILED_SOURCE_CONTRADICTION",
+    "REVIEW_FAILED_CROSS_CONTRACT_CONTAMINATION",
+    "REVIEW_FAILED_QUESTION_MODEL_MISMATCH",
+    "REVIEW_FAILED_USER_REQUEST_MAPPING_MISMATCH",
 })
 
 #: 제거·중화가 불가능해 다운로드를 실제로 막아야 하는 상태.
@@ -102,6 +112,11 @@ NON_REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     # 정의해 두었는데 판정이 그 반대인 경우. 제거할 결함이 따로 있는 것이
     # 아니라 검토서 전체가 반대로 서 있으므로 중화가 불가능하다.
     "REVIEW_BLOCKED_ROLE_STRUCTURE_MISMATCH",
+    # [2026-09-18 지시 9항] 건설계약에서 도급인/수급인/재하도급인 중 어느
+    # 지위인지 확정하지 못한 경우. 같은 조문이 지위에 따라 정반대의 위험이
+    # 되므로, 제거할 결함이 따로 있는 것이 아니라 검토서 전체가 어느 방향으로
+    # 서 있는지 모르는 상태다 — 중화가 불가능하다.
+    "REVIEW_BLOCKED_CONSTRUCTION_ROLE_UNSETTLED",
 })
 
 #: 사용자에게 보여줄 한국어 사유. 없는 코드는 코드 그대로 노출한다.
@@ -141,7 +156,13 @@ STATUS_LABELS: dict[str, str] = {
     "CLAUSE_STRUCTURE_UNCERTAIN": "조항 구조를 확정하지 못해 조항 존재 검증을 보류함 — 원문 구조 확인 필요",
     "REVIEW_FAILED_INCOMPLETE_REWRITE": "일부 항목에 그대로 삽입 가능한 완성 문구가 없어 담당자 확정이 필요함",
     "SEMANTIC_ANCHOR_MISMATCH": "지적 내용과 맞지 않는 조항에 연결되어 있어 연결을 해제함 — 해당 조항 확인 필요",
-    "REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH": "거래구조(광고매체 집행형)에 맞지 않는 콘텐츠 제작계약용 논점을 제거함",
+    "REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH": "확정된 거래구조에 맞지 않는 타 계약유형의 논점을 제거함",
+    "REVIEW_BLOCKED_CONSTRUCTION_ROLE_UNSETTLED": "건설공사 계약의 당사자 지위(도급인/수급인/수급인+재하도급인)를 확정하지 못해 결과를 생성하지 않음 — 당사자 정의를 확인한 뒤 재검토 필요",
+    "REVIEW_FAILED_FABRICATED_ARTIFACT": "계약서에 없는 산출물·의무를 전제한 검토의견을 제거함",
+    "REVIEW_FAILED_SOURCE_CONTRADICTION": "계약에 실재하는 보호조항을 '없음'으로 판단한 항목을 제거함 — 해당 조항을 확인할 것",
+    "REVIEW_FAILED_CROSS_CONTRACT_CONTAMINATION": "확정된 계약유형과 다른 계약의 쟁점·문구가 섞여 제거함",
+    "REVIEW_FAILED_QUESTION_MODEL_MISMATCH": "확정된 계약유형에 맞지 않는 사전질문이 담당자에게 나갔음",
+    "REVIEW_FAILED_USER_REQUEST_MAPPING_MISMATCH": "담당자 질문과 다른 내용의 조항이 연결되어 있어 연결을 해제함",
 }
 
 #: 수정문안이 걷어내진 finding 에 남기는 표시. DOCX/PDF 작성기와

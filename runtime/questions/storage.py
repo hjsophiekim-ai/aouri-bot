@@ -327,6 +327,9 @@ def run_review_with_session(
         filename=str(filename) if isinstance(filename, str) else None,
         answers=answers if isinstance(answers, dict) else None,
         review_focus=review_focus if isinstance(review_focus, str) else None,
+        # 이 세션에서 담당자에게 실제로 나간 질문 — Final Consistency Gate 가
+        # "사전질문이 해당 거래구조에 맞는가" 를 확인한다(2026-09-16 지시 9항).
+        asked_questions=doc.get("questions") if isinstance(doc.get("questions"), list) else None,
         law_service=law_service,
         ai_provider=ai_provider,
         ai_model=cfg.model if ai_provider else None,
@@ -419,6 +422,9 @@ def run_review_with_session_fast(
         filename=str(filename) if isinstance(filename, str) else None,
         answers=answers if isinstance(answers, dict) else None,
         review_focus=review_focus if isinstance(review_focus, str) else None,
+        # 이 세션에서 담당자에게 실제로 나간 질문 — Final Consistency Gate 가
+        # "사전질문이 해당 거래구조에 맞는가" 를 확인한다(2026-09-16 지시 9항).
+        asked_questions=doc.get("questions") if isinstance(doc.get("questions"), list) else None,
         law_service=None,
         ai_provider=None,
         ai_model=None,

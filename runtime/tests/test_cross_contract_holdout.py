@@ -113,7 +113,12 @@ CASES: tuple[HoldoutCase, ...] = (
         fixture="barter_content_furniture.txt",
         entity="퍼시스",
         contract_type="콘텐츠 제작 바터거래 계약서",
+        # 이 계약의 유형 코드는 종전에도 `barter_exchange` 였다. 달라진 것은
+        # **계열**이다 — 코드를 바터로 고치면서 계열은 옛 값(development_service)
+        # 을 그대로 들고 나가던 것을, 코드에 맞는 계열로 바로잡았다
+        # (2026-09-21 지시 1항: 한 객체 안에서 유형과 계열이 갈라지지 않는다).
         expect_families=(
+            "barter_exchange", "non_monetary_exchange",
             "development_service", "advertising_content_production",
             "content_production_service",
         ),

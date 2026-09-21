@@ -128,6 +128,7 @@ _DOMAIN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 #: 추론보다 우선한다.
 _TYPE_CODE_DOMAIN: dict[str, str] = {
     "advertising_content_production": "content_production",
+    "advertising_media_placement": "advertising_marketing",
     "content_production": "content_production",
     "marketing_ai_search": "advertising_marketing",
     "software_dev": "software_development",
@@ -222,11 +223,28 @@ SUBCONTRACT_ACT_TOPICS: tuple[str, ...] = (
 )
 
 
+def _settled_construction(model: Any) -> bool:
+    """이 판단을 건설 거래구조 모델에 맡겨도 되는가.
+
+    **확신**할 때만 맡긴다. 건설 신호가 조금 보이는 정도(전략적 제휴계약이
+    "시공" 을 여러 번 쓰는 경우 등)에서 건설 전용 판단으로 넘기면, 예전에
+    고쳐 둔 오판이 되살아난다 — 실측: 전략적 제휴계약이 "시공" 16회만으로
+    건설산업기본법 적용으로 판정됐다(v9). 확신하지 못하면 아래의 일반
+    로직(업 기준·신호 개수)이 그대로 판단한다.
+    """
+    return bool(
+        model is not None
+        and getattr(model, "is_construction", False)
+        and getattr(model, "construction_confident", False)
+    )
+
+
 def assess_subcontract_act(
     *,
     entity: str,
     text: str,
     contract_type_code: str = "",
+    construction_model: Any = None,
 ) -> StatuteDecision:
     """하도급법 적용요건(법 제2조)을 선결적으로 판단한다.
 
@@ -235,8 +253,62 @@ def assess_subcontract_act(
     용역수행행위의 전부 또는 일부를 위탁" 하거나 "위탁받은 용역을 재위탁"
     하는 경우로 법이 한정한다 — 외부 업체에 용역을 맡겼다는 사실만으로는
     성립하지 않는다.
+
+    [2026-09-18 지시 2항·6항] 건설공사 계약은 **어느 관계에** 적용되는지를
+    먼저 가른다. 같은 계약서 안에 원도급 대금관계와 재하도급 관계가 함께
+    등장하므로, "하도급" 이라는 낱말이 있다는 이유로 원도급 대금관계에
+    지급기한·직접지급을 적용하면 담당자는 적용되지 않는 법으로 협상하게 된다.
+    그 분리는 `construction_transaction_model.subcontract_act_scope()` 가
+    수행하고, 여기서는 그 결론을 법률 판단으로 옮긴다.
     """
     body = str(text or "")
+
+    if _settled_construction(construction_model):
+        from runtime.review.construction_transaction_model import (
+            SCOPE_APPLICABLE_AS_PRINCIPAL,
+            SCOPE_APPLICABLE_AS_SUBCONTRACTOR,
+            SCOPE_NOT_APPLICABLE_PRIME,
+            SCOPE_OWNER_DEPENDS_ON_BUSINESS,
+            subcontract_act_scope,
+        )
+
+        scope = subcontract_act_scope(construction_model)
+        # 우리가 발주자인 경우(SCOPE_OWNER_DEPENDS_ON_BUSINESS)는 아래 일반
+        # 로직(업 기준)에 맡긴다 — 건설업을 영위하지 않는 회사가 자기 시설을
+        # 짓기 위해 발주하는 것은 하도급법상 건설위탁이 아니다. 여기서 단정하면
+        # 그 사실 판단을 건너뛰게 된다.
+        if scope.scope == SCOPE_APPLICABLE_AS_SUBCONTRACTOR:
+            return StatuteDecision(
+                statute="하도급법",
+                conclusion=CONCLUSION_APPLICABLE,
+                reason=scope.reason,
+            )
+        if scope.scope == SCOPE_APPLICABLE_AS_PRINCIPAL:
+            # 이 계약(원도급) 자체의 대금관계에는 적용되지 않지만, 재하도급
+            # 계약에는 적용된다. 비적용으로 확정하면 재하도급 검토 항목이
+            # 통째로 지워지므로 "일부 적용" 으로 두고 범위를 사유에 적는다.
+            return StatuteDecision(
+                statute="하도급법",
+                conclusion=CONCLUSION_PARTIAL,
+                reason=scope.reason,
+            )
+        if scope.scope == SCOPE_NOT_APPLICABLE_PRIME:
+            return StatuteDecision(
+                statute="하도급법",
+                conclusion=CONCLUSION_NOT_APPLICABLE,
+                reason=scope.reason,
+                disabled_topics=list(SUBCONTRACT_ACT_TOPICS),
+            )
+        if scope.scope != SCOPE_OWNER_DEPENDS_ON_BUSINESS:
+            return StatuteDecision(
+                statute="하도급법",
+                conclusion=CONCLUSION_NEEDS_FACTS,
+                reason=scope.reason,
+                facts_needed=[
+                    "우리 회사가 이 공사의 도급인인지, 수급인인지, 수급인이면서 재하도급을 주는지",
+                    "상대방이 발주자인지, 우리에게 하도급을 주는 원사업자인지",
+                ],
+            )
     ours = our_business_domains(entity)
     domain = infer_entrusted_domain(text=body, contract_type_code=contract_type_code)
     domain_label = DOMAIN_LABELS.get(domain, domain or "(도메인 미상)")
@@ -268,11 +340,28 @@ def assess_subcontract_act(
             )
 
     # (3) 건설위탁 — 건설업자가 건설공사를 위탁하는 경우.
-    if domain == "construction" and ("construction" in ours):
+    if domain == "construction":
+        if "construction" in ours:
+            return StatuteDecision(
+                statute="하도급법",
+                conclusion=CONCLUSION_APPLICABLE,
+                reason="건설업을 영위하는 사업자가 건설공사를 위탁하는 구조로 건설위탁에 해당합니다.",
+            )
+        # 자기 시설을 짓거나 고치기 위해 공사를 발주하는 것은 건설위탁이 아니다 —
+        # 그 경우 우리 회사는 원사업자가 아니라 **발주자**다. 이 구분이 없으면
+        # 자기 사옥 리모델링 발주 계약에 하도급대금 지급기한·직접지급 규정이
+        # 붙는다(2026-09-18 지시 6항).
         return StatuteDecision(
             statute="하도급법",
-            conclusion=CONCLUSION_APPLICABLE,
-            reason="건설업을 영위하는 사업자가 건설공사를 위탁하는 구조로 건설위탁에 해당합니다.",
+            conclusion=CONCLUSION_NOT_APPLICABLE,
+            reason=(
+                "하도급법상 건설위탁은 건설업을 영위하는 사업자가 그 업에 따른 건설공사를 "
+                f"다른 사업자에게 위탁하는 경우를 말합니다(법 제2조). 우리 회사의 업은 "
+                f"{ours_label}이며 건설업을 영위하지 않으므로, 자기 시설의 공사를 발주하는 "
+                "이 계약에서 우리 회사는 원사업자가 아니라 발주자입니다. 따라서 하도급법의 "
+                "하도급대금 지급기한·직접지급 규정은 적용되지 않습니다."
+            ),
+            disabled_topics=list(SUBCONTRACT_ACT_TOPICS),
         )
 
     # (4) 용역위탁 — 우리가 **그 용역업을 업으로 영위**해야 한다.
@@ -477,8 +566,39 @@ def _construction_signal_count(text: str) -> int:
     return sum(1 for p in _CONSTRUCTION_SIGNALS if re.search(p, body, re.IGNORECASE))
 
 
-def assess_construction_act(*, text: str, transaction_type: str = "") -> StatuteDecision:
-    """건설산업기본법 — 실제 건설공사 도급이어야 적용된다."""
+def assess_construction_act(
+    *, text: str, transaction_type: str = "", construction_model: Any = None,
+) -> StatuteDecision:
+    """건설산업기본법 — 실제 건설공사 도급이어야 적용된다.
+
+    [2026-09-18 지시 2항] 원도급 관계든 재하도급 관계든 건설공사의 도급이면
+    이 법은 적용된다. 다만 **어느 지위에서** 적용되는지를 사유에 적어 둔다 —
+    같은 법이라도 수급인에게는 대금·하도급 제한이, 도급인에게는 시공관리·
+    하도급 승인이 문제 되기 때문이다.
+    """
+    if _settled_construction(construction_model):
+        role_note = ""
+        if getattr(construction_model, "is_contractor_side", False):
+            role_note = (
+                " 우리 회사가 수급인이므로 대금 지급, 하도급 제한, 하자담보책임기간"
+                "(법 제28조)이 주된 검토 대상입니다."
+            )
+            if getattr(construction_model, "subcontract_relationship_in_scope", False):
+                role_note += (
+                    " 일부 공종을 재하도급하는 구조이므로 일괄하도급 제한(법 제29조)과"
+                    " 하수급인 자격 요건도 함께 적용됩니다."
+                )
+        elif getattr(construction_model, "is_owner_side", False):
+            role_note = (
+                " 우리 회사가 도급인이므로 수급인의 건설업 등록 확인, 하도급 승인·통보,"
+                " 시공관리 의무가 주된 검토 대상입니다."
+            )
+        return StatuteDecision(
+            statute="건설산업기본법",
+            conclusion=CONCLUSION_APPLICABLE,
+            reason="건설공사의 도급 구조가 확인됩니다." + role_note,
+        )
+
     if transaction_type == "construction_works" or _construction_signal_count(text) >= 2:
         return StatuteDecision(
             statute="건설산업기본법",
@@ -490,6 +610,85 @@ def assess_construction_act(*, text: str, transaction_type: str = "") -> Statute
         conclusion=CONCLUSION_NOT_APPLICABLE,
         reason="이 계약은 건설공사의 도급이 아니므로 건설산업기본법이 적용되지 않습니다.",
         disabled_topics=list(CONSTRUCTION_ACT_TOPICS),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 산업안전보건법 · 중대재해처벌법
+# ══════════════════════════════════════════════════════════════════════════
+
+SAFETY_ACT_TOPICS: tuple[str, ...] = (
+    "산업안전보건법",
+    "중대재해처벌법",
+    "중대재해 처벌 등에 관한 법률",
+    "안전보건조치",
+    "안전보건확보의무",
+    "관계수급인",
+    "도급인의 안전조치",
+)
+
+#: 현장에서 **사람이 일하는** 구조인가. 이 법들은 근로자가 작업하는 사업장을
+#: 전제로 하므로, 물품만 오가는 계약에는 적용할 여지가 없다.
+_RX_SITE_WORK = re.compile(
+    r"착공|시공|설치\s*(?:공사|작업|인력)|현장\s*(?:작업|근로|인력|대리인|안전)"
+    r"|근로자|작업자|고소\s*작업|중장비|양중|비계|가설",
+    re.IGNORECASE,
+)
+
+
+def assess_safety_acts(*, text: str, construction_model: Any = None) -> StatuteDecision:
+    """산업안전보건법·중대재해처벌법 — 현장에서 사람이 일해야 적용된다.
+
+    [2026-09-18 지시 6항] "산업안전보건법 등은 키워드가 있다고 바로 적용하지
+    말고, 당사자 지위와 실제 거래구조를 먼저 확인한 후 적용 여부를 확정할 것."
+
+    두 법의 의무는 **공법상 의무**라서 계약으로 이전되지 않는다. 그래서 판단의
+    핵심은 "적용되는가" 보다 "**누가** 어느 의무를 지는가" 다 — 우리가 도급인
+    이면 관계수급인 근로자에 대한 조치의무(산안법 제63조)가, 우리가 수급인이면
+    자기 근로자에 대한 사업주 의무가 각각 성립한다.
+    """
+    body = str(text or "")
+    is_construction = _settled_construction(construction_model)
+    if not is_construction and not _RX_SITE_WORK.search(body):
+        return StatuteDecision(
+            statute="산업안전보건법",
+            conclusion=CONCLUSION_NOT_APPLICABLE,
+            reason=(
+                "이 계약에는 현장에서 근로자가 작업을 수행하는 구조가 확인되지 않아 "
+                "산업안전보건법·중대재해처벌법상 의무가 문제 되지 않습니다."
+            ),
+            disabled_topics=list(SAFETY_ACT_TOPICS),
+        )
+
+    role_note = ""
+    if construction_model is not None:
+        if getattr(construction_model, "is_owner_side", False):
+            role_note = (
+                " 우리 회사가 도급인이므로 관계수급인 근로자에 대한 산업재해 예방 "
+                "조치의무(법 제63조)와, 실질적으로 지배·운영·관리하는 사업장에 대한 "
+                "안전보건확보의무가 우리 회사에 성립합니다."
+            )
+        elif getattr(construction_model, "subcontract_relationship_in_scope", False):
+            role_note = (
+                " 우리 회사가 수급인이면서 일부 공종을 재하도급하므로, 자기 근로자에 "
+                "대한 사업주 의무와 함께 하수급인 근로자에 대한 도급인으로서의 "
+                "조치의무(법 제63조)를 동시에 부담합니다."
+            )
+        elif getattr(construction_model, "is_contractor_side", False):
+            role_note = (
+                " 우리 회사가 수급인이므로 자기 근로자에 대한 사업주 의무를 부담하며, "
+                "도급인이 제공·관리하는 시설과 타 수급인의 작업에 기인한 재해까지 "
+                "계약으로 전가받지 않도록 책임 경계를 확인해야 합니다."
+            )
+
+    return StatuteDecision(
+        statute="산업안전보건법",
+        conclusion=CONCLUSION_PARTIAL,
+        reason=(
+            "현장에서 근로자가 작업을 수행하는 구조가 확인되어 안전보건 관련 부분에 "
+            "적용됩니다. 두 법의 의무는 공법상 의무이므로 계약으로 상대방에게 이전되지 "
+            "않습니다." + role_note
+        ),
     )
 
 
@@ -574,6 +773,7 @@ def assess_statutes(
     text: str,
     contract_type_code: str = "",
     transaction_type: str = "",
+    construction_model: Any = None,
 ) -> list[StatuteDecision]:
     """적용요건 게이트가 정의된 법률을 **모두** 판단한다(2026-09-10 지시 항목 3).
 
@@ -585,10 +785,17 @@ def assess_statutes(
     텍스트 휴리스틱보다 우선한다 — 같은 판단을 두 번 하지 않기 위함이다.
     """
     return [
-        assess_subcontract_act(entity=entity, text=text, contract_type_code=contract_type_code),
+        assess_subcontract_act(
+            entity=entity, text=text, contract_type_code=contract_type_code,
+            construction_model=construction_model,
+        ),
         assess_dealer_act(text=text, transaction_type=transaction_type),
         assess_privacy_act(text=text),
-        assess_construction_act(text=text, transaction_type=transaction_type),
+        assess_construction_act(
+            text=text, transaction_type=transaction_type,
+            construction_model=construction_model,
+        ),
+        assess_safety_acts(text=text, construction_model=construction_model),
         assess_large_retail_act(text=text),
         assess_advertising_act(text=text),
     ]
@@ -623,6 +830,7 @@ _TOPICS_BY_STATUTE: dict[str, tuple[str, ...]] = {
     "대리점법": DEALER_ACT_TOPICS,
     "개인정보보호법": PRIVACY_ACT_TOPICS,
     "건설산업기본법": CONSTRUCTION_ACT_TOPICS,
+    "산업안전보건법": SAFETY_ACT_TOPICS,
     "대규모유통업법": LARGE_RETAIL_ACT_TOPICS,
     "표시광고법": AD_ACT_TOPICS,
 }

@@ -53,6 +53,59 @@ _RX_CLAUSE_FORM = re.compile(
 
 _PROPOSAL_FIELDS = ("suggested_rewrite", "proposed_revision")
 
+#: 논점 **자체**가 재경·세무의 확인사항인 것. 문안이 아니라 주제로 가른다.
+#:
+#: 2026-09-16 지시 6항 — "세무·회계 내부 처리사항, 특수관계인 확인 등은
+#: 원칙적으로 재경/세무 확인사항으로 분리하고 과도하게 HIGH/MEDIUM 으로
+#: 올리지 마세요."
+#:
+#: 이런 항목은 **계약 체결 여부를 바꾸지 않는다**. 세금계산서를 언제 끊을지,
+#: 특수관계인에 해당하는지는 담당 부서가 확인해 처리할 일이지, 상대방과
+#: 협상해서 조항을 고칠 일이 아니다. HIGH/MEDIUM 자리를 차지하면 정작 돈을
+#: 잃는 조항(미송출·위약금·일방 중단권)이 아래로 밀린다.
+_RX_FINANCE_TOPIC = re.compile(
+    r"특수관계(?:인|자)|부당행위계산(?:\s*부인)?|이전가격|과세표준|세무조정"
+    r"|손금\s*(?:산입|불산입)|익금|법인세|부가가치세|원천징수|가산세"
+    r"|세무\s*(?:신고|조사|리스크|검토)|회계\s*(?:처리|정책|기준)|계정\s*과목"
+    r"|자산\s*계상|비용\s*처리|원가\s*배부|증빙\s*(?:보관|비치|구비)"
+    r"|(?:K-)?IFRS|수익\s*인식"
+)
+
+#: 다만 **상대방에게 지우는 의무**로 정리해야 하는 것은 조항이 맞다.
+#: "을은 공급시기에 세금계산서를 발행하여 갑에게 교부한다" 는 전형적인
+#: 계약 문언이고, 세금계산서 발행 시기 자체가 대금 지급 조건과 얽힌다.
+_RX_FINANCE_IS_CONTRACT_TERM = re.compile(
+    r"세금계산서[^.\n]{0,20}(?:발행|교부|수취)"
+    r"|대금[^.\n]{0,15}지급[^.\n]{0,15}(?:기한|조건|시기)"
+    r"|지연\s*이자|지체상금"
+)
+
+
+#: 세법 적용의 **적정성**을 묻는 논점은, 문장에 "세금계산서 발행" 같은 계약
+#: 문언이 섞여 있어도 협상 대상이 아니다 (2026-09-21 지시 13항 —
+#: "세금계산서, 회계처리, 손금 등은 원칙적으로 재경/세무 확인사항으로 분리하고
+#:  핵심 건설리스크보다 HIGH 우선순위로 올리지 마세요").
+#:
+#: 실측(인테리어 2차 본계약): "공사대금의 세금계산서 분리 발행 —
+#: 부가가치세법상 적정성" 이 HIGH 로 올라와, 유치권 포기·지급유보와 같은
+#: 줄에 섰다. 이것은 재경팀이 확인해 처리할 일이지 도급인과 협상해 조문을
+#: 고칠 일이 아니다.
+_RX_FINANCE_STATUTE_QUESTION = re.compile(
+    r"(?:부가가치세법|법인세법|소득세법|국세기본법|조세특례제한법|세법)"
+    r"[^.\n]{0,30}(?:적정|적법|해당\s*여부|여부|검토|리스크|위험)"
+    r"|(?:세무|회계)\s*(?:상|처리)?[^.\n]{0,20}적정성"
+)
+
+
+def is_finance_confirmation_topic(text: str) -> bool:
+    """이 논점이 계약 협상이 아니라 재경·세무 확인으로 끝나는 것인가."""
+    body = str(text or "")
+    if not body.strip() or not _RX_FINANCE_TOPIC.search(body):
+        return False
+    if _RX_FINANCE_STATUTE_QUESTION.search(body):
+        return True
+    return not _RX_FINANCE_IS_CONTRACT_TERM.search(body)
+
 
 def looks_like_internal_control(text: str) -> bool:
     """이 문장이 **우리 내부**의 일인가.
@@ -121,5 +174,54 @@ def split_internal_controls(clause_results: list[dict[str, Any]]) -> list[dict[s
             "clause_id": str(cr.get("clause_id") or ""),
             "display_path": str(cr.get("display_path") or ""),
             "note": proposal,
+        })
+    moved.extend(_split_finance_confirmations(clause_results))
+    return moved
+
+
+def _split_finance_confirmations(
+    clause_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """논점 자체가 재경·세무 확인인 항목을 HIGH/MEDIUM 에서 내린다.
+
+    2026-09-16 지시 6항. 위 `split_internal_controls()` 는 **수정문안의 모양**
+    으로 가르므로, 문안 없이 "특수관계인 해당 여부를 확인해야 한다" 만 적힌
+    finding 은 걸리지 않고 HIGH 로 남는다. 여기서는 **논점의 주제**로 가른다.
+
+    항목을 지우지는 않는다 — 확인은 실제로 필요하다. 다만 계약 체결 여부를
+    좌우하는 자리(HIGH/MEDIUM)에서 내려 재경·세무 확인사항으로 옮긴다.
+    """
+    moved: list[dict[str, Any]] = []
+    for cr in clause_results:
+        if not isinstance(cr, dict) or bool(cr.get("dedup_suppressed")):
+            continue
+        if bool(cr.get("internal_control_item")):
+            continue  # 위에서 이미 옮겼다
+        tier = str(cr.get("risk_tier") or "").upper()
+        if tier not in ("HIGH", "CRITICAL", "MEDIUM"):
+            continue
+        topic = "\n".join(
+            str(cr.get(k) or "")
+            for k in ("issue_title", "problem", "rewrite_reason", "legal_business_reason")
+        )
+        if not is_finance_confirmation_topic(topic):
+            continue
+        cr["risk_tier"] = "LOW"
+        cr["severity"] = "LOW"
+        cr["review_tier"] = "NOTE"
+        cr["must_fix"] = False
+        cr["approval_required"] = False
+        cr["high_risk"] = False
+        cr["finance_confirmation_item"] = True
+        cr["finance_confirmation_reason"] = (
+            "재경·세무에서 확인·처리할 사항입니다. 상대방과 협상해 조항을 고칠 "
+            "문제가 아니고 계약 체결 여부를 좌우하지 않으므로, 계약 리스크 "
+            "등급에서는 내리고 담당 부서 확인사항으로 전달합니다."
+        )
+        moved.append({
+            "clause_id": str(cr.get("clause_id") or ""),
+            "display_path": str(cr.get("display_path") or ""),
+            "note": str(cr.get("issue_title") or "")[:120],
+            "demoted_from": tier,
         })
     return moved

@@ -88,21 +88,45 @@ def strip_placeholder_prefix(text: str | None) -> str:
 
 
 def find_article_for_pattern(
-    clauses: list[Any] | None, pattern: re.Pattern[str],
+    clauses: list[Any] | None,
+    pattern: re.Pattern[str],
+    *,
+    title_pattern: re.Pattern[str] | None = None,
 ) -> dict[str, Any] | None:
     """clauses(ClauseChunk 목록)에서 pattern에 매치되는 조항을 찾아 그
     조항의 article_number/title과, 그 조항 아래 이미 존재하는 항의
     최대 번호(다음 항을 신설할 때 쓸 번호)를 반환한다. 계약마다 조항
     번호가 다르므로 여기서 실제 구조를 조회한다 — 하드코딩하지 않는다."""
+    # ── 제목으로 먼저 자리를 잡는다 (2026-09-21 지시 5항 Semantic Anchor) ──
+    # 종전에는 문서 순서로 처음 본문이 매치되는 조항을 잡았다. 그래서
+    # "안전·산재 책임 전가" 지적이 계약금액 조항(제14조 — 본문에
+    # '산업안전보건관리비' 가 있다)에 붙고, 공사대금 회수 지적이 공사개요
+    # 조항(제1조)에 붙었다. 번호는 실재하지만 그 조항의 법률효과가 달라
+    # Semantic Anchor Gate 가 연결을 끊고, 결국 "조항 위치 확인 필요" 로
+    # 나갔다 — 지적은 맞는데 어디를 고치라는 말인지 없는 결과다.
+    #
+    # 조항의 **제목**이 그 조항의 법률효과를 가장 잘 말해 주므로, 호출자가
+    # `title_pattern` 을 주면 제목이 맞는 조항을 먼저 찾는다. 총칭 패턴을
+    # 제목에 그대로 대보지는 않는다 — 총칭은 넓어서(예: '검사') 엉뚱한
+    # 조항 제목에 걸린다. 옵션을 주지 않으면 종전 동작 그대로다.
     matched_article: str | None = None
     matched_title: str = ""
-    for c in (clauses or []):
-        text = getattr(c, "text", "") or ""
-        article = getattr(c, "article_number", None)
-        if article and pattern.search(text):
-            matched_article = str(article)
-            matched_title = str(getattr(c, "title", "") or "")
-            break
+    if title_pattern is not None:
+        for c in (clauses or []):
+            title = str(getattr(c, "title", "") or "")
+            article = getattr(c, "article_number", None)
+            if article and title and title_pattern.search(title):
+                matched_article = str(article)
+                matched_title = title
+                break
+    if not matched_article:
+        for c in (clauses or []):
+            text = getattr(c, "text", "") or ""
+            article = getattr(c, "article_number", None)
+            if article and pattern.search(text):
+                matched_article = str(article)
+                matched_title = str(getattr(c, "title", "") or "")
+                break
     if not matched_article:
         return None
     max_para = 0

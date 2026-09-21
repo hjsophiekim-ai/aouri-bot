@@ -69,6 +69,7 @@ _CANONICAL_SERVICE_RECIPIENT_TYPE_CODES = frozenset({
     "advisory_service", "software_app_development", "ai_search_marketing",
     "store_operation_outsourcing", "creative_agency_service",
     "content_production_service", "advertising_content_production",
+    "advertising_media_placement",
 })
 
 _TESTING_SERVICE_KW = [

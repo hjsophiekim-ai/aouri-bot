@@ -41,6 +41,29 @@ def _q(qid: str, title: str, description: str) -> Question:
 
 
 #: 지시가 열거한 우선 확인 항목. 순서가 곧 중요도다.
+#: 지시가 열거한 우선순위 그대로의 질문 순서.
+#:
+#: [2026-09-16 지시 2항] 열거 순서 — 광고기간·위치·수량·노출 → 미송출·부분
+#: 송출·장애 구제 → 실제 송출실적 증빙 → 중도해지·위약금 → 매체사 일방 중단·
+#: 변경권 → 민원 → 제공 콘텐츠의 법적 책임 → 상대방의 임의 수정·편집 책임 →
+#: 광고료·지급조건 → 면책·손해배상.
+#:
+#: id 는 v11 에서 매긴 번호를 그대로 둔다. 번호를 다시 매기면 이미 답변이
+#: 저장된 세션의 답이 엉뚱한 질문에 붙는다. 순서는 이 표가 정한다.
+QUESTION_PRIORITY: tuple[str, ...] = (
+    "Q-ADM-001",  # 광고기간·매체 위치·수량
+    "Q-ADM-002",  # 송출 횟수·시간·노출 기준
+    "Q-ADM-003",  # 미송출·장애 시 연장/환불
+    "Q-ADM-011",  # 실제 송출실적 증빙
+    "Q-ADM-005",  # 중도해지·위약금
+    "Q-ADM-006",  # 매체사 일방 중단·변경
+    "Q-ADM-010",  # 민원 시 중단·교체·비용
+    "Q-ADM-008",  # 우리가 제공한 콘텐츠의 법적 책임 범위
+    "Q-ADM-009",  # 상대방의 임의 수정·편집·송출 책임
+    "Q-ADM-004",  # 광고료·지급조건
+    "Q-ADM-007",  # 심의·법령 위반 책임
+)
+
 MEDIA_PLACEMENT_QUESTIONS: tuple[Question, ...] = (
     _q(
         "Q-ADM-001",
@@ -117,9 +140,21 @@ MEDIA_PLACEMENT_QUESTIONS: tuple[Question, ...] = (
 _RX_PRODUCTION_ONLY_QUESTION = re.compile(
     r"2차\s*활용|2차적저작물|저작인격권|재가공|chain\s*of\s*title"
     r"|저작(?:재산)?권[^?\n]{0,20}(?:양도|이전|확보|귀속)"
-    r"|창작자[^?\n]{0,20}(?:권리|확약)"
+    r"|창작자[^?\n]{0,20}(?:권리|확약|동의)"
     r"|취득하는\s*지식재산"
-    r"|결과물[^?\n]{0,20}(?:권리|활용)",
+    r"|결과물[^?\n]{0,20}(?:권리|활용|저작권)"
+    # [2026-09-16 지시 2항] "저작물을 어느 매체·기간·지역에서 쓸지" — 우리가
+    # 만들지도, 넘겨받지도 않는 저작물의 이용범위를 묻는 질문이다. 집행형에서
+    # 매체·기간은 **급부의 특정**(어디에 얼마나 싣는가)이지 저작물 이용범위가
+    # 아니므로, 저작물 어휘와 함께 나올 때만 거른다.
+    r"|(?:저작물|콘텐츠|산출물|제작물)[^?\n]{0,30}(?:매체|기간|지역)[^?\n]{0,15}"
+    r"(?:범위|활용|사용|이용)"
+    r"|(?:이용|활용|사용)\s*범위[^?\n]{0,15}\(?\s*매체[^?\n]{0,10}기간[^?\n]{0,10}지역"
+    # 상대방이 소재를 조달해 만들 때만 성립하는 확인 항목.
+    r"|(?:제3자|타인)\s*(?:소재|저작물)[^?\n]{0,25}(?:라이선스|이용허락|권리처리)"
+    r"|(?:폰트|음원|스톡\s*이미지)[^?\n]{0,20}(?:라이선스|이용허락)"
+    r"|초상권[^?\n]{0,20}(?:이용허락|동의서)"
+    r"|시안[^?\n]{0,10}(?:검수|확정|승인)|수정\s*요청\s*횟수",
     re.IGNORECASE,
 )
 
@@ -162,22 +197,64 @@ def apply_ad_media_question_policy(
     if not getattr(model, "confident", False):
         return report
 
-    kept: list[Question] = []
+    survivors: list[Question] = []
     for q in questions:
         if is_production_only_question(q):
             report["suppressed"].append({"question_id": q.question_id, "title": q.title[:80]})
             continue
-        kept.append(q)
+        survivors.append(q)
 
-    existing = {q.question_id for q in kept}
-    for q in MEDIA_PLACEMENT_QUESTIONS:
-        if len(kept) >= max_questions:
-            break
-        if q.question_id in existing:
+    # 순서가 곧 무엇을 묻게 되는가다 — 질문 수에는 상한(`max_questions`)이
+    # 있으므로 뒤로 밀린 질문은 **나가지 않는다**.
+    #
+    # [2026-09-16 지시 2항] "대신 다음을 우선 질문·검토하세요" — 광고기간·
+    # 위치·수량·노출, 미송출 구제, 실적 증빙, 중도해지·위약금, 매체사 일방
+    # 중단권, 민원, 제공 콘텐츠 책임, 임의 수정 책임, 광고료·지급조건.
+    #
+    # 종전에는 일반 질문(대가 산정 근거·최대 손해 규모 등)을 먼저 채운 뒤
+    # 남는 자리에만 집행형 질문을 넣었다. 실측: 11개 중 4개만 나가고 실적
+    # 증빙·중도해지·일방 중단·민원·제공 콘텐츠 책임이 전부 잘렸다 —
+    # 지시가 우선하라고 한 항목들이다.
+    #
+    # 담당자가 **직접 적은 검토 요청**(Q-FOCUS-…)은 그보다도 앞이다. 우리가
+    # 고른 질문이 사용자가 물어본 것을 밀어낼 수는 없다.
+    def _is_user_focus(q: Question) -> bool:
+        return q.question_id.startswith("Q-FOCUS-")
+
+    by_id = {q.question_id: q for q in MEDIA_PLACEMENT_QUESTIONS}
+    prioritized = [by_id[qid] for qid in QUESTION_PRIORITY if qid in by_id]
+    prioritized += [q for q in MEDIA_PLACEMENT_QUESTIONS if q.question_id not in QUESTION_PRIORITY]
+
+    ordered: list[Question] = [q for q in survivors if _is_user_focus(q)]
+    seen = {q.question_id for q in ordered}
+    for q in prioritized:
+        if q.question_id in seen:
             continue
-        kept.append(q)
+        ordered.append(q)
+        seen.add(q.question_id)
         report["added"].append(q.question_id)
+    for q in survivors:
+        if q.question_id in seen:
+            continue
+        ordered.append(q)
+        seen.add(q.question_id)
 
+    # 지시 2항은 열 가지를 **전부** 물으라고 했다. 일반 상한(7)을 그대로
+    # 적용하면 실적 증빙·민원·제공 콘텐츠 책임·임의 수정 책임이 잘린다 —
+    # 실측: 11개 중 4개만 나갔다. 이 거래구조에서는 이 질문들의 답이 곧
+    # 검토의 입력이므로 집행형 질문에 한해 상한을 그만큼 넓힌다. 일반
+    # 질문은 여전히 `max_questions` 뒤로 밀려 잘린다.
+    _must_ask = sum(
+        1 for q in ordered
+        if _is_user_focus(q) or q.question_id.startswith(AD_MEDIA_PREFIX)
+    )
+    limit = max(int(max_questions), _must_ask)
+    kept = ordered[:limit]
+    _kept_ids = {q.question_id for q in kept}
+    report["added"] = [qid for qid in report["added"] if qid in _kept_ids]
+    report["dropped_for_limit"] = [
+        q.question_id for q in ordered[max_questions:]
+    ]
     report["questions"] = kept
     report["applied"] = True
     return report

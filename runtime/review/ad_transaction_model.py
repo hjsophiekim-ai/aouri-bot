@@ -61,6 +61,28 @@ MODEL_LABELS: dict[str, str] = {
 
 REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH = "REVIEW_FAILED_TRANSACTION_MODEL_MISMATCH"
 
+#: 거래모델 → **canonical contract_type 코드**.
+#:
+#: 2026-09-16 지시 1항 — "canonical transaction model 을 하나만 확정하고, 이후
+#: 사전질문·finding·rewrite·UI·DOCX 모두 그 값을 사용하세요."
+#:
+#: 실측(v11 이후에도 남아 있던 자기모순): 거래모델은 `ad_media_placement`
+#: (confident) 로 확정됐는데 canonical 계약유형은 여전히
+#: `advertising_content_production`("제품 광고 콘텐츠 제작 대행 계약")이었다.
+#: 리포트 상단은 "제작 대행", 본문 검토는 "송출만 한다" 였고, 최종 자가점검은
+#: 룰 분류기의 `contract_type_resolution`(미확정)을 보고 blocking 실패했다.
+#: 거래모델이 확정됐으면 **그것이 계약유형이다**. 한 곳에서만 정한다.
+#:
+#: 혼합형·제작형은 제작계약 코드를 그대로 쓴다 — 아무것도 끄지 않기 위함이다.
+MODEL_TO_CONTRACT_TYPE: dict[str, str] = {
+    AD_MEDIA_PLACEMENT: "advertising_media_placement",
+    AD_CONTENT_PRODUCTION: "advertising_content_production",
+    AD_HYBRID: "advertising_content_production",
+}
+
+#: 집행형 canonical 코드. 이 문자열을 다른 모듈이 직접 쓰지 않게 여기서 내보낸다.
+AD_MEDIA_PLACEMENT_TYPE_CODE = MODEL_TO_CONTRACT_TYPE[AD_MEDIA_PLACEMENT]
+
 
 def _rx(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
@@ -143,6 +165,23 @@ class AdTransactionModel:
     def label(self) -> str:
         return MODEL_LABELS.get(self.model, self.model)
 
+    @property
+    def canonical_contract_type(self) -> str:
+        """이 거래모델이 확정하는 canonical 계약유형 코드.
+
+        확신하지 못하면 빈 문자열이다 — 모르는 상태에서 유형을 덮어쓰면
+        틀린 유형의 체크리스트를 주입하게 된다. 아무것도 확정하지 않는 편이
+        안전하다는 원칙(v10)을 여기서도 그대로 지킨다.
+        """
+        if not self.confident:
+            return ""
+        return MODEL_TO_CONTRACT_TYPE.get(self.model, "")
+
+    @property
+    def is_settled(self) -> bool:
+        """거래모델이 하나로 확정됐는가 — "유형 미확정" 과 양립할 수 없는 상태."""
+        return bool(self.canonical_contract_type)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "model": self.model,
@@ -152,6 +191,8 @@ class AdTransactionModel:
             "text_signals": dict(self.text_signals),
             "user_signal": self.user_signal,
             "counterparty_produces_content": self.counterparty_produces_content,
+            "canonical_contract_type": self.canonical_contract_type,
+            "settled": self.is_settled,
         }
 
 
@@ -245,14 +286,86 @@ def classify_ad_transaction_model(
     )
 
 
+# ── canonical 해석: 거래모델을 한 번만 정한다 ────────────────────────────────
+
+def _answers_to_text(answers: Any) -> str:
+    """사용자 답변에서 거래구조 신호가 될 수 있는 **값만** 모은다.
+
+    답변은 `{question_id: value}` 또는 `[{"question_id": …, "answer": …}]` 로
+    들어온다. 어느 쪽이든 값만 이어 붙이고 **질문 문구는 넣지 않는다** —
+    질문 템플릿이 만든 낱말("2차 활용", "결과물 저작권", "성적서")이 사용자
+    설명으로 둔갑해 거래구조 판정을 뒤집는 일을 막기 위함이다(지시 4항).
+    """
+    if not answers:
+        return ""
+    vals: list[str] = []
+    if isinstance(answers, dict):
+        vals = [str(v) for v in answers.values() if isinstance(v, (str, int, float))]
+    elif isinstance(answers, list):
+        for row in answers:
+            if isinstance(row, dict):
+                for key in ("answer", "value", "text", "answer_text"):
+                    v = row.get(key)
+                    if isinstance(v, (str, int, float)) and str(v).strip():
+                        vals.append(str(v))
+                        break
+            elif isinstance(row, str):
+                vals.append(row)
+    return "\n".join(vals)
+
+
+def resolve_ad_transaction_model(
+    *,
+    contract_text: str,
+    user_description: str = "",
+    contract_type_code: str = "",
+    answers: Any = None,
+) -> AdTransactionModel:
+    """거래모델의 **단일 확정 지점**.
+
+    2026-09-16 지시 1항 — "사용자 설명과 계약 원문을 모두 반영해 canonical
+    transaction model 을 하나만 확정하고, 이후 사전질문·finding·rewrite·UI·
+    DOCX 모두 그 값을 사용하세요."
+
+    사전질문 생성기와 검토 파이프라인이 각자 `classify_…()` 를 부르면 입력이
+    조금만 달라도 서로 다른 모델을 들고 일하게 된다 — 질문은 집행형으로
+    나가고 finding 은 제작형으로 생성되는 상태다. 두 경로 모두 이 함수만
+    부른다.
+
+    답변까지 받은 뒤 다시 부르면 그 답변이 사용자 설명에 더해진 채로
+    재확정된다. 검토 시점의 판정이 질문 시점의 판정을 덮어쓰는 것이 맞다 —
+    담당자가 "상대방이 영상도 만든다" 고 답했으면 그때부터 혼합형이다.
+    """
+    desc = "\n".join(
+        x for x in (str(user_description or ""), _answers_to_text(answers)) if x.strip()
+    )
+    return classify_ad_transaction_model(
+        contract_text=contract_text,
+        user_description=desc,
+        contract_type_code=contract_type_code,
+    )
+
+
 # ── 제작계약용 finding 비활성화 ──────────────────────────────────────────────
 
 #: 상대방이 콘텐츠를 만들 때만 성립하는 논점. 집행형에서는 근거 자체가 없다.
 _RX_PRODUCTION_ONLY_FINDING = _rx(
-    r"2차적저작물|2차\s*활용|저작인격권|chain\s*of\s*title"
-    r"|저작(?:재산)?권[^.\n]{0,20}(?:양도|이전|귀속)"
-    r"|창작자[^.\n]{0,20}(?:권리|확약)|결과물[^.\n]{0,15}권리\s*(?:이전|귀속)"
-    r"|산출물[^.\n]{0,15}(?:인도|권리)"
+    r"2차적저작물|2차\s*활용|2차\s*저작물|저작인격권|chain\s*of\s*title"
+    r"|저작(?:재산)?권[^.\n]{0,20}(?:양도|이전|귀속|확보)"
+    r"|창작자[^.\n]{0,20}(?:권리|확약|동의)"
+    r"|결과물[^.\n]{0,15}(?:권리|저작권|이전|귀속)"
+    r"|산출물[^.\n]{0,15}(?:인도|권리|귀속)"
+    # [2026-09-16 지시 4항] 집행형 계약에 없는 산출물·의무를 만들어 내던 말들.
+    # "제3자 소재 라이선스 확보 의무" 는 상대방이 소재를 조달해 만들 때만
+    # 성립한다. 우리가 완성된 광고물을 주는 구조에서는 상대방에게 지울 의무가
+    # 아니다 — 우리 쪽 책임 문제는 `_RX_SUPPLIED_CONTENT_LIABILITY` 가 남긴다.
+    r"|(?:제3자|타인)\s*(?:소재|저작물|콘텐츠|권리)[^.\n]{0,25}"
+    r"(?:라이선스|이용허락|사용권|권리처리)[^.\n]{0,20}(?:확보|취득|입수|처리)"
+    r"|(?:폰트|음원|스톡\s*이미지|BGM)[^.\n]{0,20}(?:라이선스|이용허락)[^.\n]{0,20}(?:확보|취득)"
+    r"|초상권[^.\n]{0,20}(?:이용허락(?:서)?|동의서)[^.\n]{0,20}(?:확보|징구|제출)"
+    r"|모델\s*(?:계약|섭외|출연\s*동의)"
+    r"|시안[^.\n]{0,15}(?:검수|확정|승인)|수정\s*요청\s*횟수"
+    r"|포트폴리오[^.\n]{0,15}(?:활용|게재)"
 )
 
 #: 다만 **광고주가 제공한 콘텐츠에 대한 책임** 은 집행형의 진짜 논점이다.
@@ -266,6 +379,30 @@ _RX_SUPPLIED_CONTENT_LIABILITY = _rx(
     r"(?:컨텐츠|콘텐츠|광고물|소재)"
     r"|제공한?\s*(?:광고\s*)?(?:컨텐츠|콘텐츠|광고물|소재)[^.\n]{0,40}(?:책임|적법|위법|침해)"
 )
+
+
+#: 이 필드들이 finding 의 "말" 이다. 여러 곳에서 같은 목록을 쓰므로 한 번만 적는다.
+FINDING_TEXT_FIELDS: tuple[str, ...] = (
+    "issue_title", "clause_title", "problem", "rewrite_reason",
+    "legal_business_reason", "suggested_rewrite", "recommendation_text",
+)
+
+
+def finding_blob(cr: dict[str, Any]) -> str:
+    """finding 이 담당자에게 실제로 말하는 내용 전부."""
+    return "\n".join(str(cr.get(k) or "") for k in FINDING_TEXT_FIELDS)
+
+
+def is_production_only_finding(blob: str) -> bool:
+    """이 문장이 **상대방이 콘텐츠를 만들 때만** 성립하는 논점인가.
+
+    광고주가 제공한 콘텐츠의 책임 범위를 다루는 항목은 제외한다 — 그것은
+    집행형의 진짜 논점이다(지시 5항).
+    """
+    body = str(blob or "")
+    if not _RX_PRODUCTION_ONLY_FINDING.search(body):
+        return False
+    return not _RX_SUPPLIED_CONTENT_LIABILITY.search(body)
 
 
 def deactivate_production_only_findings(
@@ -288,16 +425,13 @@ def deactivate_production_only_findings(
         if not isinstance(cr, dict):
             kept.append(cr)
             continue
-        blob = "\n".join(
-            str(cr.get(k) or "")
-            for k in ("issue_title", "clause_title", "problem", "rewrite_reason",
-                      "legal_business_reason", "suggested_rewrite", "recommendation_text")
-        )
-        if not _RX_PRODUCTION_ONLY_FINDING.search(blob):
+        # 집행형 체크리스트가 스스로 만든 항목은 대상이 아니다 — 그 항목들이
+        # 바로 "이 거래구조에서 무엇을 볼 것인가" 의 답이다(제공 콘텐츠 책임
+        # carve-out 문안이 "초상권" 한 낱말로 지워지던 v11 실측).
+        if bool(cr.get("is_ad_media_checklist")):
             kept.append(cr)
             continue
-        if _RX_SUPPLIED_CONTENT_LIABILITY.search(blob):
-            # 광고주 제공 콘텐츠의 책임 범위 논점 — 집행형에서도 유효하다.
+        if not is_production_only_finding(finding_blob(cr)):
             kept.append(cr)
             continue
         removed.append({

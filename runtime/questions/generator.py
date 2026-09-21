@@ -364,10 +364,12 @@ def generate_questions(
             from runtime.questions.ad_media_questions import (
                 apply_ad_media_question_policy,
             )
+            # 거래모델은 `resolve_ad_transaction_model()` 한 곳에서만 정한다 —
+            # 검토 파이프라인도 같은 함수를 부른다(2026-09-16 지시 1항).
             from runtime.review.ad_transaction_model import (
-                classify_ad_transaction_model,
+                resolve_ad_transaction_model,
             )
-            _ad_model = classify_ad_transaction_model(
+            _ad_model = resolve_ad_transaction_model(
                 contract_text=str(contract_text),
                 user_description=str(review_focus or ""),
                 contract_type_code=str(contract_type_code or ""),
@@ -378,7 +380,98 @@ def generate_questions(
             out = _ad_report["questions"]
         except Exception:  # noqa: BLE001 - 질문 생성이 실패해도 검토는 계속된다
             pass
+
+    # [건설계약 당사자 지위 확인, 2026-09-18 지시 1항·9항]
+    # 같은 조문이 지위에 따라 정반대의 위험이 된다. 계약서 문언만으로 도급인/
+    # 수급인/재하도급인을 확정하지 못하면 검토 결과를 생성하지 않으므로,
+    # 담당자에게 **먼저** 물어 그 상태를 풀 수 있게 한다. 확정된 경우에는
+    # 묻지 않는다 — 이미 아는 것을 묻는 질문은 담당자의 시간을 쓴다.
+    if contract_text:
+        try:
+            from runtime.review.construction_transaction_model import (
+                resolve_construction_transaction_model as _resolve_construction,
+            )
+            _cm = _resolve_construction(
+                contract_text=str(contract_text),
+                user_description=str(review_focus or ""),
+                entity=str(entity or ""),
+                contract_type_code=str(contract_type_code or ""),
+            )
+            if _cm.is_construction and not _cm.is_settled:
+                _existing_ids = {q.question_id for q in out}
+                if "Q-CONST-ROLE-001-our-position" not in _existing_ids:
+                    out.insert(0, _build_construction_role_question(_cm))
+                    if len(out) > max_questions:
+                        out = out[:max_questions]
+            # ── [건설 계약 전용 질문 묶음] (2026-09-21 지시 3항) ──────────
+            # 지위가 확정되면 그 지위에서 실제 판단에 필요한 것만 묻는다.
+            # 종전에는 건설 전용 묶음이 없어 거래 원형에서 기계적으로 만든
+            # 일반 질문(Q-EFF-*)이 그 자리를 채웠고, 인테리어 공사도급계약에
+            # "취득하는 지식재산을 어느 매체·기간·지역에서 활용할 계획인가"
+            # 가 나갔다(실측 2026-09-21). 공사도급에서 설계 결과물의 귀속은
+            # 부수 조항이지 우리가 취득해 활용할 지식재산이 아니다.
+            elif _cm.is_construction and _cm.construction_confident and _cm.is_settled:
+                from runtime.questions.construction_questions import (
+                    INCOMPATIBLE_QUESTION_IDS as _CONST_INCOMPATIBLE,
+                    build_construction_questions as _build_const_questions,
+                )
+                _const_qs = _build_const_questions(
+                    model=_cm,
+                    contract_text=str(contract_text),
+                    answered_topics=str(review_focus or ""),
+                    max_questions=max_questions,
+                )
+                if _const_qs:
+                    _kept = [
+                        q for q in out
+                        if q.question_id not in _CONST_INCOMPATIBLE
+                        and not q.question_id.startswith("Q-EFF-")
+                    ]
+                    _const_ids = {q.question_id for q in _const_qs}
+                    out = _const_qs + [
+                        q for q in _kept if q.question_id not in _const_ids
+                    ]
+                    if len(out) > max_questions:
+                        out = sorted(out, key=lambda q: not q.required)[:max_questions]
+        except Exception:  # noqa: BLE001 - 질문 생성이 실패해도 검토는 계속된다
+            pass
     return out
+
+
+def _build_construction_role_question(model: Any) -> Question:
+    """건설계약에서 우리 회사의 지위를 직접 확인하는 질문.
+
+    선택지는 `construction_transaction_model._ANSWER_ROLE_MAP` 의 키와 같아야
+    한다 — 답변이 그대로 지위 판정으로 들어가기 때문이다.
+    """
+    return Question(
+        question_id="Q-CONST-ROLE-001-our-position",
+        title="이 건설·인테리어 공사 계약에서 우리 회사의 지위는 무엇인가요?",
+        description=(
+            "같은 조문이라도 지위에 따라 정반대의 위험이 됩니다(예: '검사 완료 전 기성 "
+            "청구 불가'는 수급인에게는 대금 미회수 위험, 도급인에게는 보호 장치). "
+            "지위가 확정되어야 검토 결과를 생성할 수 있습니다. "
+            f"자동 판정: {model.role_basis}"
+        ),
+        answer_type="single_choice",
+        required=True,
+        options=[
+            QuestionOption(
+                "we_are_contractor",
+                "우리가 공사를 도급받아 수행하는 쪽(수급인/원도급자)",
+            ),
+            QuestionOption(
+                "we_are_contractor_with_subcontract",
+                "우리가 공사를 도급받은 뒤 일부 공종을 전문업체에 재하도급하는 쪽",
+            ),
+            QuestionOption(
+                "we_are_ordering_party",
+                "우리가 다른 업체에게 공사를 발주하는 쪽(도급인)",
+            ),
+        ],
+        tags=["topic:construction_party_role", "reason_code:construction_role_unsettled"],
+        related_rule_ids=[],
+    )
 
 
 def _build_type_confirmation_questions(*, entity: str, contract_type: str, text: str) -> list[Question]:

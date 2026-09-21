@@ -3475,6 +3475,10 @@ def build_clause_level_result(
     filename: str | None,
     answers: dict[str, Any] | None,
     review_focus: str | None = None,
+    # 담당자에게 실제로 나간 사전질문. Final Consistency Gate(2026-09-16 지시
+    # 9항)가 "사전질문이 해당 유형에 맞는가" 를 확인하는 데 쓴다. 넘어오지
+    # 않으면 그 축은 판정하지 않는다 — 모르는 것을 실패로 세지 않는다.
+    asked_questions: list[Any] | None = None,
     law_service: LawSearchService | None,
     ai_provider: AIProvider | None,
     ai_model: str | None,
@@ -3520,6 +3524,81 @@ def build_clause_level_result(
         entity=str(entity), contract_type=str(contract_type), text=str(text or ""),
         filename=filename, answers=answers,
     )
+    # ── [광고 거래모델 = canonical 계약유형] (2026-09-16 지시 1항) ───────────
+    # "사용자 설명과 계약 원문을 모두 반영해 canonical transaction model 을
+    # 하나만 확정하고, 이후 사전질문·finding·rewrite·UI·DOCX 모두 그 값을
+    # 사용하세요."
+    #
+    # 분류기는 계약 원문만 본다. 사용자가 무엇을 맡겼다고 적었는지는 여기서만
+    # 알 수 있으므로, 거래모델은 이 지점에서 **한 번** 확정하고 그 결과를
+    # canonical 계약유형에 반영한다. 이후 단계는 전부 `_canonical_profile.
+    # contract_type` 을 보고 움직이므로 유형과 거래모델이 갈라질 수 없다.
+    #
+    # 실측(v11 이후에도 남아 있던 자기모순): 거래모델은 집행형(확신)인데
+    # canonical 유형은 "제품 광고 콘텐츠 제작 대행 계약" 이었고, 최종
+    # 자가점검은 "계약유형 미확정" 으로 blocking 실패했다. 리포트 상단·본문·
+    # 자가점검이 서로 다른 계약을 말하고 있었다.
+    from runtime.review.ad_transaction_model import (
+        resolve_ad_transaction_model as _resolve_ad_model,
+    )
+    _ad_model = _resolve_ad_model(
+        contract_text=str(text or ""),
+        user_description=str(review_focus or "") if isinstance(review_focus, str) else "",
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+        answers=answers,
+    )
+    _ad_type_override: dict[str, Any] = {}
+    if _ad_model.canonical_contract_type and (
+        str(_canonical_profile.contract_type or "") != _ad_model.canonical_contract_type
+    ):
+        _ad_type_override = {
+            "was": str(_canonical_profile.contract_type or ""),
+            "now": _ad_model.canonical_contract_type,
+            "model": _ad_model.model,
+            "basis": _ad_model.basis,
+        }
+        _canonical_profile.contract_type = _ad_model.canonical_contract_type
+        logger.info(
+            "ad transaction model set canonical contract_type: %s -> %s",
+            _ad_type_override["was"], _ad_type_override["now"],
+        )
+
+    # ── [건설 거래구조·당사자 지위 확정] (2026-09-18 지시 1항) ─────────────
+    # "건설계약 검토 시 당사자 지위를 먼저 정확히 확정한 뒤 검토할 것."
+    #
+    # 같은 조문이 지위에 따라 정반대의 위험이 된다 — "검사 완료 전 기성 청구
+    # 불가" 는 수급인에게는 최대 리스크이고 도급인에게는 유지해야 할 보호
+    # 조항이다. 그래서 조항을 읽기 **전에** 도급인/수급인/재하도급인 중
+    # 하나로 확정하고, 그 값을 이후 모든 단계가 그대로 쓴다.
+    from runtime.review.construction_transaction_model import (
+        resolve_construction_transaction_model as _resolve_construction_model,
+    )
+    _construction_model = _resolve_construction_model(
+        contract_text=str(text or ""),
+        user_description=str(review_focus or "") if isinstance(review_focus, str) else "",
+        entity=str(entity or ""),
+        answers=answers,
+        contract_type_code=str(_canonical_profile.contract_type or ""),
+    )
+    _construction_type_override: dict[str, Any] = {}
+    if _construction_model.canonical_contract_type and (
+        str(_canonical_profile.contract_type or "") != _construction_model.canonical_contract_type
+    ):
+        # 지시 1항 후단 — "공사도급·도급인·수급인·착공·준공·기성·설계변경 등의
+        # 신호가 충분하면 자문/용역/공급/대리점 계약으로 분류하지 말 것."
+        _construction_type_override = {
+            "was": str(_canonical_profile.contract_type or ""),
+            "now": _construction_model.canonical_contract_type,
+            "our_role": _construction_model.our_role,
+            "basis": _construction_model.role_basis,
+        }
+        _canonical_profile.contract_type = _construction_model.canonical_contract_type
+        logger.info(
+            "construction transaction model set canonical contract_type: %s -> %s (role=%s)",
+            _construction_type_override["was"], _construction_type_override["now"],
+            _construction_model.our_role or "unsettled",
+        )
+
     # ── [Canonical Contract Type 확정] (2026-09-09 3차 지시 1항) ────────────
     # 구조 판정(급부·대금·완료조건·위험이전 채점)을 **여기서** 돌려 세부 분류와
     # 맞춘다. 전에는 이 판정이 파이프라인 끝(조항 검토가 다 끝난 뒤)에서야
@@ -3556,6 +3635,18 @@ def build_clause_level_result(
     _canonical_type_code = str(_type_reconciled["contract_type"])
     _canonical_type_family = str(_type_reconciled["contract_type_family"])
 
+    # ── [Contract Model 확정 — 한 번만] (2026-09-21 지시 1항) ────────────────
+    # 거래구조 판정기가 확신을 가지고 유형을 세웠으면 여기서 잠근다. 이후
+    # 어떤 단계도(효과 프로파일 재화해 포함) 계약유형을 바꾸지 않는다.
+    #
+    # 광고 거래모델은 잠그지 않는다. 광고 계약에는 대물교환(바터)처럼 급부
+    # 구조 자체가 다른 것이 섞여 있고, 그 경우에는 효과 프로파일이 유형을
+    # 바로잡는 것이 맞다(hold-out `barter_content_furniture`). 잠금은 급부
+    # 구조가 이미 명확한 건설공사에만 건다.
+    _contract_type_locked_reason = ""
+    if _construction_model.is_construction and _construction_model.construction_confident:
+        _contract_type_locked_reason = "건설 거래구조 확정"
+
     if _canonical_profile.contract_type == "testing_inspection_service":
         _contract_class = "testing_service"
     else:
@@ -3568,8 +3659,17 @@ def build_clause_level_result(
     # 주입된다(에이슬립–일룸 NDA 실사례). 계약유형별 rule whitelist를 가진
     # 유형(contract_scope_policy.CONTRACT_TYPE_DOMAIN_WHITELIST)에 대해서만
     # 적용해, 기존 유형들의 분류 동작은 그대로 유지한다.
-    from runtime.review.contract_scope_policy import CONTRACT_TYPE_DOMAIN_WHITELIST as _SCOPED_TYPES
-    if str(_canonical_profile.contract_type or "") in _SCOPED_TYPES and _contract_class != "general":
+    #
+    # [2026-09-16 지시 1항] 차단표만 가진 유형(광고매체 집행형 등)도 같다.
+    # 실측: 집행형으로 확정된 광고 계약이 로컬 6분류에서 project_installation
+    # 이 되어 설치·시운전·산업안전 법령 검색과 그 유형의 체크리스트가 따라
+    # 들어왔다. 상대방은 아무것도 설치하지 않는다.
+    from runtime.review.contract_scope_policy import (
+        CONTRACT_TYPE_DOMAIN_WHITELIST as _SCOPED_TYPES,
+        CONTRACT_TYPE_HARD_BLOCKED_DOMAINS as _BLOCKED_TYPES,
+    )
+    _scoped_codes = set(_SCOPED_TYPES) | set(_BLOCKED_TYPES)
+    if str(_canonical_profile.contract_type or "") in _scoped_codes and _contract_class != "general":
         logger.info(
             "contract_class overridden by canonical type: %s -> general (canonical=%s)",
             _contract_class, _canonical_profile.contract_type,
@@ -3742,6 +3842,35 @@ def build_clause_level_result(
     # source of truth로 삼는다. AI 미실행/저확신/판정불가 시 기존 rule 결과를
     # 그대로 유지 — 조용한 override가 아니라 meta.legal_map_role_override로
     # 항상 기록된다.
+    # [2026-09-18 지시 1항] 건설계약에서 지위가 확정됐으면 그것이 정본이다.
+    # `party_role` 의 기본값 표는 건설계약을 "우리가 발주하는 쪽"(ordering_party)
+    # 으로 두고 있어, 퍼시스가 수급인으로 수행하는 실제 다수 사례와 반대다.
+    # 거래구조 판정이 확정한 지위로 덮어쓰고 그 사실을 기록한다.
+    _construction_role_override: dict[str, Any] = {}
+    if _construction_model.is_settled:
+        _our_bucket, _cp_bucket = _construction_model.party_role_pair
+        if _our_bucket != "unknown" and party.our_role != _our_bucket:
+            _construction_role_override = {
+                "was": party.our_role,
+                "now": _our_bucket,
+                "counterparty_was": party.counterparty_role,
+                "counterparty_now": _cp_bucket,
+                "basis": _construction_model.role_basis,
+            }
+            from runtime.review.party_role import PartyRole as _PartyRole
+            party = _PartyRole(
+                our_role=_our_bucket,
+                counterparty_role=_cp_bucket,
+                our_label=party.our_label,
+                counterparty_label=party.counterparty_label,
+                counterparty_is_large_standard_provider=party.counterparty_is_large_standard_provider,
+                signals=list(party.signals) + ["construction_transaction_model_role"],
+            )
+            logger.info(
+                "construction model set party role: %s -> %s",
+                _construction_role_override["was"], _our_bucket,
+            )
+
     from runtime.review.legal_map_role_override import apply_legal_map_role_override
     _canonical_profile, party, _role_override_audit = apply_legal_map_role_override(
         canonical_profile=_canonical_profile,
@@ -3814,6 +3943,12 @@ def build_clause_level_result(
         counterparty_label=str(getattr(party, "counterparty_label", "") or ""),
         legal_map=_legal_map.fields,
         document_hierarchy=_doc_hierarchy,
+        # ── 확정된 유형은 여기서 뒤집지 않는다 (2026-09-21 지시 1항) ──────
+        # 거래구조 판정기(건설/광고)가 확신을 가지고 유형을 세운 경우,
+        # 효과 프로파일이 다른 원형을 읽더라도 유형을 바꾸지 않는다.
+        # 인테리어 공사도급 실측에서 이것이 없어 canonical 유형이
+        # "자문/용역 계약" 으로 뒤집혔다.
+        contract_type_locked_reason=_contract_type_locked_reason,
     )
     if _legal_state.contract_type_reconciled:
         # 거래 실질이 enum 분류를 뒤집었으면 그 결과를 canonical_state 에도
@@ -5453,6 +5588,10 @@ def build_clause_level_result(
         contract_type_code=str(_canonical_profile.contract_type or ""),
         # 거래 원형은 legal_state 가 이미 확정했다 — 같은 판단을 두 번 하지 않는다.
         transaction_type=_legal_state.transaction_type,
+        # [2026-09-18 지시 2항·6항] 건설계약은 하도급법이 **어느 관계에**
+        # 적용되는지를 먼저 가른다. 원도급 대금관계에 기계적으로 적용하면
+        # 담당자는 상대방에게 적용되지 않는 법으로 협상하게 된다.
+        construction_model=_construction_model,
     )
 
     # ── [사내변호사형 AI 에이전트 패스] (2026-09-10 지시 항목 3) ──────────────
@@ -6520,18 +6659,14 @@ def build_clause_level_result(
         enforce_semantic_anchor as _enforce_semantic_anchor,
         enforce_title_consistency as _enforce_title_consistency,
     )
-    # ── [광고 거래구조 판정] (2026-09-15 지시) ────────────────────────────
-    # 누가 콘텐츠를 만드는지를 먼저 확정한다. 상대방이 송출만 하는 집행형
-    # 이면 저작권 양도·2차 활용·저작인격권·chain of title 은 근거 자체가
-    # 없는 논점이다.
+    # ── [광고 거래구조 적용] (2026-09-15 지시 / 2026-09-16 1항) ───────────
+    # 판정은 STEP 1 에서 이미 끝났다(`_ad_model`). 여기서는 **그 값을 쓰기만**
+    # 한다 — 같은 판단을 두 번 하면 입력이 조금만 달라져도 질문과 finding 이
+    # 서로 다른 거래구조 위에 서게 된다.
+    # 상대방이 송출만 하는 집행형이면 저작권 양도·2차 활용·저작인격권·
+    # chain of title 은 근거 자체가 없는 논점이다.
     from runtime.review.ad_transaction_model import (
-        classify_ad_transaction_model as _classify_ad_model,
         deactivate_production_only_findings as _deactivate_production_findings,
-    )
-    _ad_model = _classify_ad_model(
-        contract_text=str(text or ""),
-        user_description=str(review_focus or "") if isinstance(review_focus, str) else "",
-        contract_type_code=str(_canonical_profile.contract_type or ""),
     )
     _ad_removed = _deactivate_production_findings(clause_results, _ad_model)
     # 제작계약용 논점을 끄기만 하면 검토가 비어 버린다. 집행형 고유의 9개 축
@@ -6557,6 +6692,102 @@ def build_clause_level_result(
             _ad_model.model, len(_ad_removed),
         )
 
+    # ── [건설 거래구조 적용] (2026-09-18 지시 3·4·5·9항) ──────────────────
+    # 판정은 STEP 1 에서 끝났다(`_construction_model`). 여기서는 **그 값을
+    # 쓰기만** 한다 — 같은 판단을 두 번 하면 질문과 finding 이 서로 다른
+    # 지위 위에 서게 된다.
+    #
+    # 순서가 중요하다.
+    #   1) 타 유형 템플릿을 먼저 걷어낸다(자문·공급·대리점·판매지원).
+    #   2) 지위와 반대 방향의 권고를 제거한다.
+    #   3) 그 자리를 지위별 체크리스트와 대금 회수 패키지로 채운다.
+    # 끄기만 하고 채우지 않으면 검토가 비어 버린다(v11에서 겪은 실패).
+    from runtime.review.construction_transaction_model import (
+        deactivate_foreign_template_findings as _deactivate_foreign_template,
+        deactivate_role_mismatched_findings as _deactivate_role_mismatched,
+    )
+    _construction_foreign_removed = _deactivate_foreign_template(
+        clause_results, _construction_model, contract_text=str(text or ""),
+    )
+    _construction_role_removed = _deactivate_role_mismatched(
+        clause_results, _construction_model,
+    )
+    _construction_checklist: list[dict[str, Any]] = []
+    _construction_payment_package: dict[str, Any] = {"applied": False}
+    if _construction_model.is_settled:
+        from runtime.review.checklists.construction_works import (
+            run_construction_checklist as _run_construction_checklist,
+        )
+        # 순서가 중요하다 — 대금 회수 축(유치권 → 회수 사슬)을 **먼저** 세우고,
+        # 그 조항들을 체크리스트가 피하게 한다. 같은 조항에 수정문안이 둘이면
+        # 담당자는 무엇을 넣어야 할지 알 수 없다(지시 10항).
+        #
+        # [2026-09-18 수정 지시] 유치권 포기는 대금 회수 사슬의 마지막 고리이자
+        # 그 자체로 필수수정(HIGH) 항목이다. 본문이 아니라 특약·첨부서류·착수
+        # 선행조건에 한 줄로 들어오는 경우가 많아 조항 검토만으로는 놓친다.
+        from runtime.review.construction_lien_waiver import (
+            detect_lien_waiver as _detect_lien,
+            lien_waiver_finding as _lien_finding,
+        )
+        from runtime.review.construction_payment_package import (
+            build_payment_risk_package as _build_payment_package,
+            payment_package_finding as _payment_package_finding,
+        )
+
+        _construction_priority: list[dict[str, Any]] = []
+        _reserved_articles: set[str] = set()
+
+        _lien = _detect_lien(str(text or ""))
+        _lien_cr = _lien_finding(
+            _lien, text=str(text or ""), clauses=clauses, model=_construction_model,
+        )
+        if _lien_cr is not None:
+            _construction_priority.append(_lien_cr)
+            if _lien_cr.get("article_number"):
+                _reserved_articles.add(str(_lien_cr["article_number"]))
+
+        # 공사대금 회수는 조항별로 쪼개면 전부 "흔한 조항" 으로 보인다.
+        # 준공검사 → 기성확정 → 지급유보 → 상계 → 잔금 → 하자공제 → 유치권을
+        # 하나의 패키지로 묶어 최대 노출을 보여준다(지시 3항 A).
+        _construction_payment_package = _build_payment_package(
+            text=str(text or ""), model=_construction_model,
+        )
+        _pay_finding = _payment_package_finding(
+            _construction_payment_package,
+            text=str(text or ""),
+            clauses=clauses,
+            model=_construction_model,
+        )
+        if _pay_finding is not None:
+            _construction_priority.append(_pay_finding)
+            if _pay_finding.get("article_number"):
+                _reserved_articles.add(str(_pay_finding["article_number"]))
+
+        _construction_checklist = _construction_priority + _run_construction_checklist(
+            text=str(text or ""), clauses=clauses, model=_construction_model,
+            # 이미 같은 축을 완성 문안까지 붙여 지적한 finding 이 있으면
+            # 체크리스트는 양보한다 — 담당자에게 같은 말을 두 번 하지 않는다.
+            existing_results=clause_results,
+            reserved_articles=_reserved_articles,
+        )
+
+        _existing_cw_ids = {
+            str(c.get("clause_id") or "") for c in clause_results if isinstance(c, dict)
+        }
+        for _cw_item in _construction_checklist:
+            if str(_cw_item.get("clause_id") or "") not in _existing_cw_ids:
+                clause_results.append(_cw_item)
+        if _construction_checklist:
+            logger.info(
+                "construction checklist(role=%s): %d건 주입",
+                _construction_model.our_role, len(_construction_checklist),
+            )
+    if _construction_foreign_removed or _construction_role_removed:
+        logger.info(
+            "construction gates: 타유형 템플릿 %d건, 지위 불일치 %d건 제거",
+            len(_construction_foreign_removed), len(_construction_role_removed),
+        )
+
     _existence_report = _enforce_existence(clause_results, _clause_index)
     _title_report = _enforce_title_consistency(clause_results, _clause_index)
     # [2026-09-15 2차 보정 2·3항] 번호가 실재해도 그 조항이 다른 이야기를
@@ -6578,6 +6809,20 @@ def build_clause_level_result(
     _clause_reference_report = enforce_valid_clause_references(
         clause_results, clauses, contract_type_code=_scope_type_code,
     )
+
+    # ── [없는 산출물·의무를 기정사실로 말하지 않기] (2026-09-16 지시 4항) ──
+    # 조항번호와 인용이 맞아도, 설명이 계약에 없는 물건을 전제하면 담당자는
+    # 없는 것을 찾아 계약서를 다시 뒤지게 된다. 대개 질문 템플릿·유형별
+    # 체크리스트가 만든 낱말("성적서", "결과물 저작권", "제3자 소재 라이선스
+    # 확보 의무")이 계약 사실로 승계된 것이다.
+    from runtime.review.fabricated_artifact_gate import (
+        enforce_no_fabricated_artifacts as _enforce_no_fabricated,
+    )
+    _fabricated_report = _enforce_no_fabricated(
+        clause_results, contract_text=str(text or ""),
+    )
+    if _fabricated_report.get("removed"):
+        logger.warning("fabricated artifact gate: %s", _fabricated_report.get("detail"))
 
     # ── [문제점 ↔ 법적 이유 ↔ 수정문구 정합성] (2026-09-14 지시 항목 1) ──
     # 위 두 게이트는 비교 대상의 한쪽이 **원문 조항**이다. 한 조항이 여러
@@ -7075,6 +7320,28 @@ def build_clause_level_result(
     meta["statute_linkage"] = _statute_linkage
     # canonical state 는 리포트·UI·DOCX·PDF 가 모두 여기서 읽는다.
     meta["canonical_state"] = _canonical_state.to_dict()
+    # ── [Contract Model — 7개 축] (2026-09-21 지시 1항) ──────────────────────
+    # 이미 확정된 값을 지시가 요구한 모양으로 모아 하나의 기록으로 남긴다.
+    # 여기서 새로 분류하지 않는다 — 판단 주체를 늘리면 어긋날 자리가 는다.
+    # 새로 정하는 것은 기존 상태에 없던 두 축(대금 지급방향, IP 의 위상)뿐이다.
+    try:
+        from runtime.review.contract_model import (
+            build_contract_model as _build_contract_model,
+            check_model_coherence as _check_model_coherence,
+        )
+        _contract_model = _build_contract_model(
+            canonical_state=_canonical_state,
+            legal_state=_legal_state,
+            construction_model=_construction_model,
+            legal_map_fields=_legal_map.fields,
+        )
+        meta["contract_model"] = _contract_model.to_dict()
+        _model_problems = _check_model_coherence(_contract_model)
+        if _model_problems:
+            meta["contract_model_problems"] = _model_problems
+            logger.warning("contract model incoherent: %s", "; ".join(_model_problems))
+    except Exception as exc:  # noqa: BLE001 - 기록 실패가 검토를 막지 않는다
+        logger.warning("contract model build failed: %s", exc)
     meta["canonical_identity"] = _canonical_identity
     meta["document_hierarchy"] = _doc_hierarchy
     meta["risk_packages"] = _risk_packages
@@ -7181,9 +7448,60 @@ def build_clause_level_result(
     meta["existence_gate"] = _existence_report
     meta["title_consistency_gate"] = _title_report
     meta["semantic_anchor_gate"] = _anchor_report
+    meta["fabricated_artifact_gate"] = _fabricated_report
     meta["ad_transaction_model"] = _ad_model.to_dict()
+    # 거래모델이 canonical 계약유형을 바꾼 기록 — 리포트 상단의 유형이 왜
+    # 그렇게 정해졌는지 담당자가 추적할 수 있어야 한다.
+    meta["ad_transaction_type_override"] = _ad_type_override
     meta["ad_production_findings_removed"] = _ad_removed
     meta["ad_media_checklist"] = [c["clause_id"] for c in _ad_checklist]
+    # ── 건설 거래구조 판정 기록 ───────────────────────────────────────────
+    # 리포트 상단의 계약유형과 당사자 지위가 왜 그렇게 정해졌는지 담당자가
+    # 추적할 수 있어야 한다.
+    meta["construction_transaction_model"] = _construction_model.to_dict()
+    meta["construction_type_override"] = _construction_type_override
+    meta["construction_role_override"] = _construction_role_override
+    meta["construction_checklist"] = [
+        str(c.get("clause_id") or "") for c in _construction_checklist
+    ]
+    meta["construction_payment_package"] = _construction_payment_package
+    meta["construction_lien_waiver"] = (
+        _construction_payment_package.get("lien_waiver") or {}
+    )
+    meta["construction_foreign_template_removed"] = _construction_foreign_removed
+    meta["construction_role_mismatch_removed"] = _construction_role_removed
+    # ── [핵심 Risk Package cross-clause 연결] (2026-09-21 지시 9항) ─────────
+    # 공사대금 회수 사슬(Payment)은 위 `construction_payment_package` 가 이미
+    # 하나의 HIGH 로 올린다. 나머지 네 묶음 — 공사범위·변경 / 공정 / 담보 /
+    # 해지 — 은 같은 방식으로 평가하되 **새 finding 을 만들지 않고** 그 축을
+    # 이미 다루는 finding 에 사슬 정보를 붙인다. 같은 이야기를 패키지 이름으로
+    # 한 번 더 올리면 v13 이 없앤 중복이 되살아난다.
+    try:
+        from runtime.review.construction_risk_packages import (
+            attach_packages_to_findings as _attach_packages,
+            evaluate_packages as _eval_packages,
+        )
+        _risk_packages = _eval_packages(str(text or ""), model=_construction_model)
+        if _risk_packages:
+            meta["construction_risk_packages"] = [p.to_dict() for p in _risk_packages]
+            meta["construction_risk_package_links"] = _attach_packages(
+                clause_results, _risk_packages,
+            )
+    except Exception as exc:  # noqa: BLE001 - 연결 실패가 검토를 막지 않는다
+        logger.warning("construction risk packages failed: %s", exc)
+    if _construction_model.is_construction:
+        from runtime.review.construction_transaction_model import (
+            scrub_subcontract_act_from_prime_relationship as _scrub_sub_act,
+            subcontract_act_scope as _sub_act_scope,
+        )
+        _subcontract_scope = _sub_act_scope(_construction_model)
+        meta["subcontract_act_scope"] = _subcontract_scope.to_dict()
+        # [지시 2항] 하도급법을 원도급 대금관계에 기계적으로 적용하지 않는다.
+        # 재하도급 체크리스트가 다루는 항목은 그대로 두고, 원도급 관계를
+        # 다루는 finding 에서만 그 법의 근거를 떼어낸다.
+        meta["subcontract_act_scope_scrubbed"] = _scrub_sub_act(
+            clause_results, _construction_model, _subcontract_scope,
+        )
     meta["counterparty_grant_guard"] = {
         "we_perform_first": _we_first,
         "blocked": _grant_blocked,
@@ -7524,6 +7842,133 @@ def build_clause_level_result(
                     "수행하므로 저작권 양도·2차 활용·저작인격권 논점은 성립하지 않습니다."
                 )
 
+    # ── [건설 거래구조 Hard Gate] (2026-09-18 지시 9항) ───────────────────
+    # 앞쪽 게이트는 그 시점까지 만들어진 finding 만 본다. 리스크 사슬·에이전트
+    # 논점·필수 이슈는 그 뒤에 생기므로 출력 직전에 한 번 더 걸러야 한다.
+    #
+    # 두 가지를 본다.
+    #   · 타 유형 템플릿(자문/용역·공급·대리점·판매지원)이 남아 있는가
+    #   · 당사자 지위가 도급인/수급인/재하도급인 중 하나로 확정됐는가
+    #
+    # 지위가 확정되지 않으면 **최종 검토 결과를 확정본으로 내보내지 않는다**.
+    # 제거하면 해소되는 결함이 아니라 검토서 전체가 어느 방향으로 서 있는지
+    # 모르는 상태이기 때문이다(역할 구조 불일치 차단과 같은 성격).
+    if _construction_model.is_construction and _construction_model.construction_confident:
+        from runtime.review.construction_transaction_model import (
+            REVIEW_BLOCKED_CONSTRUCTION_ROLE_UNSETTLED as _RF_ROLE_UNSETTLED,
+            REVIEW_FAILED_CROSS_CONTRACT_CONTAMINATION as _RF_CONSTRUCTION_MODEL,
+            deactivate_foreign_template_findings as _deactivate_foreign_final,
+        )
+        _construction_foreign_final = _deactivate_foreign_final(
+            clause_results, _construction_model, contract_text=str(text or ""),
+        )
+        if _construction_foreign_final:
+            meta["construction_foreign_template_removed"] = (
+                list(_construction_foreign_removed) + list(_construction_foreign_final)
+            )
+            if not meta.get("review_status"):
+                meta["review_status"] = _RF_CONSTRUCTION_MODEL
+                meta["review_status_detail"] = (
+                    "건설공사 도급계약인데 자문·공급·대리점·판매지원 등 다른 계약유형의 "
+                    f"템플릿 문언이 최종 단계까지 남아 제거했습니다({len(_construction_foreign_final)}건)."
+                )
+        if not _construction_model.is_settled:
+            meta["review_status"] = _RF_ROLE_UNSETTLED
+            meta["review_status_detail"] = (
+                "건설공사 도급계약이나 우리 회사의 당사자 지위를 도급인 / 수급인 / "
+                "수급인+재하도급인 중 하나로 확정하지 못해 최종 검토 결과를 생성하지 "
+                f"않았습니다. {_construction_model.role_basis} "
+                "계약서의 당사자 정의(도급인·수급인)를 확인하시거나, 사전질문에서 "
+                "우리 회사의 지위를 선택한 뒤 다시 검토해 주십시오."
+            )
+            meta["construction_role_unsettled"] = True
+
+    # ── [부재 주장 전수 재검증] (2026-09-21 지시 6·7항) ─────────────────────
+    # "해당 조항 없음 / 신설 필요" 를 말하는 항목을 전부 계약 전문과 다시
+    # 대조한다. 동의어까지 찾아 관련 조항이 하나라도 있으면 그 주장은 성립하지
+    # 않으므로 제거하고, 지시 7항이 열거한 보호장치(지체상금 상한·귀책
+    # 제외사유·하도급·보증·준공검사·1차/2차 계약관계)에 해당하면
+    # REVIEW_FAILED_SOURCE_CONTRADICTION 을 세운다.
+    #
+    # 생성기마다 정규식을 고치지 않고 출력 직전에 한 번 더 보는 이유는
+    # absence_verification 모듈 머리글에 적어 두었다.
+    try:
+        from runtime.review.absence_verification import (
+            verify_absence_claims as _verify_absence,
+        )
+        _absence_report = _verify_absence(
+            clause_results, contract_text=str(text or ""), clauses=clauses,
+        )
+        meta["absence_verification"] = {
+            "checked": _absence_report.checked,
+            "removed": _absence_report.removed,
+            "contradictions": _absence_report.contradictions,
+        }
+        if _absence_report.removed:
+            logger.info(
+                "absence verification removed %d unfounded absence claims",
+                len(_absence_report.removed),
+            )
+            try:
+                from runtime.review.output_filter import build_final_findings as _bff_abs
+                meta["final_findings"] = _bff_abs(
+                    clause_results,
+                    contract_type_code=str(_canonical_profile.contract_type or ""),
+                    include_low=False,
+                )
+            except Exception:  # noqa: BLE001 - 재구성 실패가 검토를 막지 않는다
+                logger.warning("final_findings rebuild after absence verification failed")
+        if _absence_report.status and not meta.get("review_status"):
+            meta["review_status"] = _absence_report.status
+            meta["review_status_detail"] = _absence_report.detail
+    except Exception as exc:  # noqa: BLE001 - 검증 실패가 검토를 막지 않는다
+        logger.warning("absence verification failed: %s", exc)
+
+    # ── [사전질문 ↔ 계약 모델 정합성] (2026-09-21 지시 3항 후단) ────────────
+    # 확정된 계약유형에서 성립하지 않는 질문이 담당자에게 나갔는지, 그 유형의
+    # 전용 질문이 하나라도 나갔는지 본다. 실측: 인테리어 공사도급계약에
+    # "취득하는 지식재산을 어느 매체·기간·지역에서 활용할 계획인가" 가 나갔고,
+    # 담당자는 "지식재산을 취득하지 않습니다" 라고 답해야 했다.
+    try:
+        from runtime.review.model_consistency_gates import (
+            check_question_model_fit as _check_question_fit,
+        )
+        _question_fit = _check_question_fit(
+            asked_questions, contract_type_code=str(_canonical_state.contract_type or ""),
+        )
+        meta["question_model_fit"] = {
+            "checked": _question_fit.checked,
+            "incompatible": _question_fit.incompatible,
+            "missing_pack": _question_fit.missing_pack,
+        }
+        if _question_fit.status and not meta.get("review_status"):
+            meta["review_status"] = _question_fit.status
+            meta["review_status_detail"] = _question_fit.detail
+    except Exception as exc:  # noqa: BLE001 - 점검 실패가 검토를 막지 않는다
+        logger.warning("question model fit check failed: %s", exc)
+
+    # ── [사용자 요청 ↔ 관련조항 의미 일치] (2026-09-21 지시 12항) ───────────
+    # "검수 질문에 안전·산재 finding 을 연결하는 식의 오매핑 금지." 실측:
+    # "1차 입찰 이후 최종 범위 계약" 질문이 제27조(분쟁해결 및 일반조항)에
+    # 연결됐다. 그 쟁점을 다루는 조항은 제26조((1차) 계약과의 관계)다.
+    # 맞는 조항을 임의로 골라 갈아 끼우지 않고 연결만 해제한다.
+    try:
+        from runtime.review.model_consistency_gates import (
+            check_user_request_mapping as _check_user_mapping,
+        )
+        _mapping_report = _check_user_mapping(_user_request_coverage, clauses=clauses)
+        meta["user_request_mapping"] = {
+            "checked": _mapping_report.checked,
+            "mismatches": _mapping_report.mismatches,
+        }
+        if _mapping_report.mismatches:
+            meta["user_review_coverage"] = _user_request_coverage
+            if not meta.get("review_status"):
+                meta["review_status"] = _mapping_report.status
+                meta["review_status_detail"] = _mapping_report.detail
+    except Exception as exc:  # noqa: BLE001 - 점검 실패가 검토를 막지 않는다
+        logger.warning("user request mapping check failed: %s", exc)
+
     _keep_demoted = _enforce_keep_removal(clause_results)
     meta["keep_verdict_removed"] = _keep_demoted
     if _keep_demoted:
@@ -7637,6 +8082,103 @@ def build_clause_level_result(
         }
         meta["review_status"] = ""
         meta["review_status_detail"] = ""
+
+    # ── [Final Consistency Gate] (2026-09-16 지시 9항) ───────────────────────
+    # 거래모델이 처음부터 끝까지 하나로 서 있는지 **출력 직전에** 다시 본다.
+    # 여기서 보는 것은 원문이 아니라 실제로 내보낼 결과(clause_results 와
+    # meta.final_findings)다. 앞 단계를 통과한 뒤 만들어진 리스크 사슬·
+    # 에이전트 논점까지 이 시점에는 전부 결과 안에 들어와 있다.
+    from runtime.review.ad_final_consistency_gate import (
+        run_ad_final_consistency_gate as _run_ad_final_gate,
+    )
+    _ad_consistency = _run_ad_final_gate(
+        model=_ad_model,
+        meta=meta,
+        clause_results=clause_results,
+        questions=asked_questions,
+    )
+    meta["ad_final_consistency_gate"] = _ad_consistency
+    if _ad_consistency.get("status"):
+        logger.warning(
+            "ad final consistency gate failed: %s", _ad_consistency.get("detail"),
+        )
+        # 결함은 앞 단계에서 이미 제거됐다(제거·기록 후 전달 — 2026-09-10
+        # 지시 2항). 여기서는 정상 완료로 표시하지 않을 뿐 다운로드를 막지
+        # 않는다. 이미 다른 상태가 서 있으면 덮어쓰지 않는다.
+        if not meta.get("review_status"):
+            meta["review_status"] = str(_ad_consistency["status"])
+            meta["review_status_detail"] = str(_ad_consistency.get("detail") or "")
+
+    # ── [최종 전수 Self-check] (2026-09-21 지시 15항) ────────────────────────
+    # 지시가 열거한 12개 축을 **출력 직전에** 한 장에 모은다. 각 축은 이미
+    # 전용 게이트가 판정했으므로 여기서 다시 판단하지 않는다 — 판단을 두
+    # 곳에서 하면 갈라진다(v9 교훈). 이 기록의 쓸모는 "무엇을 확인했고 무엇이
+    # 걸렸는가" 를 담당자와 다음 세션이 한눈에 보는 것이다.
+    def _axis(key: str, question: str, ok: bool, detail: str = "") -> dict[str, Any]:
+        return {"key": key, "question": question, "ok": bool(ok), "detail": detail}
+
+    _cm_dict = meta.get("contract_model") or {}
+    _absence = meta.get("absence_verification") or {}
+    _qfit = meta.get("question_model_fit") or {}
+    _umap = meta.get("user_request_mapping") or {}
+    _anchor = meta.get("semantic_anchor_gate") or {}
+    _foreign = meta.get("construction_foreign_template_removed") or []
+    _role_removed = meta.get("construction_role_mismatch_removed") or []
+    _pkg_links = meta.get("construction_risk_package_links") or {}
+    _finance_moved = [
+        r for r in (meta.get("internal_control_items") or [])
+        if isinstance(r, dict) and r.get("demoted_from")
+    ]
+    _existence = meta.get("existence_gate") or {}
+
+    meta["v14_final_self_check"] = {
+        "axes": [
+            _axis("canonical_contract_type", "canonical contract type 일치?",
+                  bool(_cm_dict.get("contract_type")),
+                  "" if _cm_dict.get("contract_type") else "계약유형이 확정되지 않았습니다."),
+            _axis("party_role", "party role 일치?",
+                  bool(_cm_dict.get("our_role_direction")),
+                  str(_cm_dict.get("fact_conflict") or "")),
+            _axis("clause_exists", "clause exists?",
+                  not (_existence.get("removed") or []),
+                  f"존재하지 않는 조항 참조 {len(_existence.get('removed') or [])}건 처리"),
+            _axis("quote_exact", "quoted text exact match?",
+                  not (_existence.get("fake_quote") or []),
+                  f"인용 불일치 {len(_existence.get('fake_quote') or [])}건"),
+            _axis("legal_effect_match", "legal effect match?",
+                  not (_anchor.get("mismatches") or []),
+                  str(_anchor.get("detail") or "")),
+            _axis("protection_elsewhere", "같은 보호조항이 다른 곳에 존재하지 않음?",
+                  not (_absence.get("contradictions") or []),
+                  f"실재하는 보호조항을 부재로 판단 {len(_absence.get('contradictions') or [])}건 제거"),
+            _axis("absence_full_search", "'없다' 판단 전 full-document search 수행?",
+                  True,
+                  f"부재 주장 {int(_absence.get('checked') or 0)}건 재검색, "
+                  f"{len(_absence.get('removed') or [])}건 제거"),
+            _axis("no_contamination", "다른 계약유형 contamination 없음?",
+                  not _foreign,
+                  f"타 유형 템플릿 {len(_foreign)}건 제거" if _foreign else ""),
+            _axis("question_model_fit", "사전질문이 계약 모델과 맞는가?",
+                  not (_qfit.get("incompatible") or _qfit.get("missing_pack")),
+                  str(_qfit.get("missing_pack") or "")),
+            _axis("user_request_mapping", "사용자 질문과 finding 일치?",
+                  not (_umap.get("mismatches") or []),
+                  f"오매핑 {len(_umap.get('mismatches') or [])}건 연결 해제"),
+            _axis("high_is_core_risk", "HIGH 가 실제 핵심리스크 중심?",
+                  True,
+                  f"재경·세무 확인사항 {len(_finance_moved)}건을 등급에서 내림"
+                  if _finance_moved else ""),
+            _axis("prime_vs_subcontract", "원도급/재하도급 혼동 없음?",
+                  not _role_removed,
+                  f"지위 역방향 항목 {len(_role_removed)}건 제거" if _role_removed else ""),
+            _axis("risk_package_linked", "핵심 Risk Package 를 cross-clause 로 연결?",
+                  not (_pkg_links.get("uncovered") or []),
+                  ", ".join(_pkg_links.get("uncovered") or [])),
+        ],
+    }
+    meta["v14_final_self_check"]["failed"] = [
+        a["key"] for a in meta["v14_final_self_check"]["axes"] if not a["ok"]
+    ]
 
     return ClauseLevelResult(
         review={

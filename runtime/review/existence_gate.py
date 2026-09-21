@@ -398,6 +398,13 @@ def enforce_semantic_anchor(
         # 경우도 많다 — 예: 해지 비용 지적은 '광고료 납부' 조항에 붙는다.
         if bool(cr.get("is_ad_media_checklist")) or bool(cr.get("is_common_legal_risk")):
             continue
+        # 건설 체크리스트도 같다 — 계약 원문의 **조 제목**으로 자리를 잡는다
+        # (2026-09-21 지시 5항). 한 항목이 대금·공기·책임에 동시에 걸치므로
+        # 단일 법률효과 태그로 대조하면 정당한 연결까지 끊긴다. 실측:
+        # 보증·유보금 지적(CWC-10)이 제16조(보증)에 제대로 붙었는데도
+        # "조항 위치 확인 필요" 로 나갔다.
+        if bool(cr.get("is_construction_checklist")):
+            continue
         number = anchored_article(cr)
         if not number or not index.has_article(number):
             continue

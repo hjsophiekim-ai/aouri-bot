@@ -343,17 +343,51 @@ def final_lawyer_self_check(
         })
 
     # 1. 계약유형이 맞는가
+    #
+    # [2026-09-16 지시 9항 마지막 축] "canonical type 이 확정된 상태에서
+    # '유형 미확정' 이 동시에 존재하지 않는가."
+    #
+    # `contract_type_resolution` 은 **거래 원형 계열**(공사/공급/용역/NDA)을
+    # 채점하는 보조 판정이다. 그 표에 없는 계열(광고매체 집행 등)은 점수가 0
+    # 이 되어 늘 `uncertain` 으로 나온다. 그것만 보고 blocking 실패를 세우면,
+    # canonical 유형이 확정된 검토가 "유형 미확정" 으로 막힌다 — 실측(디지털
+    # 사이니지 광고 계약): 거래모델 집행형(확신) + canonical 유형 확정인데
+    # 자가점검은 유형 미확정으로 실패했다.
+    #
+    # canonical 유형이 확정돼 있으면 그것이 답이다. 보조 판정의 침묵은
+    # 유형 미확정이 아니다.
     tr = m.get("contract_type_resolution") or {}
+    _canonical_type = str(
+        (m.get("canonical_state") or {}).get("contract_type")
+        or (m.get("legal_state") or {}).get("contract_type")
+        or ""
+    ).strip()
+    _type_settled = bool(_canonical_type) or (
+        bool(tr.get("contract_type_code")) and not tr.get("uncertain")
+    )
     add("contract_type", "계약유형이 맞는가?",
-        bool(tr.get("contract_type_code")) and not tr.get("uncertain"),
-        str(tr.get("reason") or "") or "계약유형이 확정되지 않았습니다.")
+        _type_settled,
+        "" if _type_settled else (
+            str(tr.get("reason") or "") or "계약유형이 확정되지 않았습니다."
+        ))
 
     # 2. 우리 회사 지위가 맞는가
+    #
+    # 2026-09-21 지시 15항 — 자가점검이 확정된 값을 보지 않고 실패를 보고하면
+    # 그 자체가 자기모순이다. 실측: canonical_state.party_role_direction 이
+    # "provider"(수급인)로 확정돼 있는데도 Legal Map 만 보고 "지위 미확정"을
+    # 띄웠다. AI 미사용 경로에서는 Legal Map 이 비는 것이 정상이다.
     lm = m.get("contract_legal_map") or {}
-    # AI 미사용 경로에서는 Legal Map 이 채워지지 않는다 — advisory.
+    _role_direction = str(
+        lm.get("our_role_direction")
+        or (m.get("contract_model") or {}).get("our_role_direction")
+        or (m.get("canonical_state") or {}).get("party_role_direction")
+        or (m.get("legal_state") or {}).get("our_role_direction")
+        or ""
+    ).strip()
     add("our_role", "우리 회사 지위가 맞는가?",
-        bool(str(lm.get("our_role_direction") or "").strip()),
-        "Legal Map 의 our_role_direction 이 비어 있습니다." if not lm.get("our_role_direction") else "",
+        bool(_role_direction),
+        "" if _role_direction else "우리 회사의 지위(제공자/수령자)가 확정되지 않았습니다.",
         blocking=False)
 
     # 3. 핵심 상업조건이 모두 확인됐는가

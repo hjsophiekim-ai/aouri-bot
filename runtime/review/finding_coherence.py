@@ -71,7 +71,15 @@ from runtime.review.legal_effect_taxonomy import (
 STATUS_SEMANTIC_MISMATCH = "REVIEW_FAILED_SEMANTIC_MISMATCH"
 
 #: 문제 제기가 계약 문언·구조에 묶여 있어, 문안만 회수하고 남겨야 하는 finding.
-_STRUCTURAL_FLAGS = ("is_common_legal_risk", "is_risk_package", "is_counsel_agent")
+# `is_construction_checklist` 도 같은 이유로 예외다. 건설 체크리스트 항목은
+# 하나의 위험이 대금·공기·책임에 동시에 걸쳐 있어(예: "설계변경 → 계약금액
+# 조정 절차 부재" 는 문제점이 payment, 제안 문안이 sow_change 로 잡힌다)
+# 단일 topic 라벨로 접으면 반드시 어긋난다. 실측: CWC-01 이 이 축에서
+# 문안을 회수당했다(2026-09-18).
+_STRUCTURAL_FLAGS = (
+    "is_common_legal_risk", "is_risk_package", "is_counsel_agent",
+    "is_construction_checklist",
+)
 
 #: 세 부분을 이루는 필드. 순서가 곧 사람이 읽는 순서다.
 _PROBLEM_FIELDS = ("issue_title", "problem")
