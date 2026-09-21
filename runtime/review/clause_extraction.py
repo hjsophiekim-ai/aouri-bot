@@ -119,6 +119,26 @@ def _is_kr_article_heading(match: "re.Match[str]") -> bool:
     return not _RX_KR_ARTICLE_REF_TAIL.match(rest)
 
 
+def is_article_heading_line(line: str) -> tuple[str, str] | None:
+    """조 제목 줄이면 (조 번호, 제목), 아니면 None.
+
+    다른 모듈이 원문에서 조 구간을 잘라낼 때 같은 판별을 쓰도록 공개한다 —
+    판별이 두 곳에 따로 있으면 한쪽만 고쳐져 어긋난다(2026-09-21 2차 지시 3항:
+    조 구간을 잘못 잡으면 인용이 다른 조에서 온다).
+    """
+    l = (line or "").strip()
+    if not l:
+        return None
+    m = _RX_KR_ARTICLE_HEAD.match(l)
+    if not m or not _is_kr_article_heading(m):
+        return None
+    num = re.sub(r"[^\d]", "", m.group(1) or "")
+    if not num:
+        return None
+    title = (m.group(2) or "").strip() or (m.group(3) or "").strip()
+    return num, title
+
+
 def _article_number_key(head: str) -> str:
     return re.sub(r"[^\d의]", "", head or "")
 

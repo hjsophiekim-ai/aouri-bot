@@ -87,6 +87,66 @@ def strip_placeholder_prefix(text: str | None) -> str:
     return s
 
 
+# ── 조(條)의 **원문 구간** ────────────────────────────────────────────────
+# (2026-09-21 2차 지시 3항 Exact Quote Location Gate)
+#
+# 인용은 계약 원문에서 직접 잘라 와야 가짜 인용 게이트를 통과한다. 그런데
+# 종전에는 앵커 패턴을 **계약 전체**에서 검색해 첫 매치 줄을 잘라 왔다.
+# 그래서 지적은 제17조에 붙었는데 인용문은 제8조에서 온다. 실측
+# (인테리어 2차 본계약, 2026-09-21 15:45 검토):
+#
+#     CWC-13 | 제17조 | "질의 없이 임의로 시공한 경우 … 수급인이 부담한다"  ← 제8조
+#     CWC-07 | 제20조 | "수급인은 공정관리·품질관리·안전관리 … 계획서를"      ← 제4조
+#     CWC-10 | 제16조 | "⑤ 자재 사용설명서·품질보증서·시험성적서"            ← 제12조
+#
+# 인용 자체는 진짜라서 가짜 인용 게이트도 통과한다. 틀린 것은 **위치**다.
+# 앵커 검색을 그 조의 구간 안으로 제한해 애초에 다른 조에서 잘라 오지 못하게
+# 한다.
+def article_raw_span(text: str, article_number: str | int | None) -> tuple[int, int] | None:
+    """계약 원문에서 그 조가 차지하는 [start, end) 구간.
+
+    조 제목 줄부터 다음 조 제목 줄 직전까지. 제목 판별은
+    `clause_extraction.is_article_heading_line()` 한 곳에서만 한다 — 판별이
+    두 곳에 따로 있으면 한쪽만 고쳐져 구간이 어긋나고, 그러면 인용이 다시
+    다른 조에서 온다. 번호가 **증가하는** 줄만 제목으로 인정해, 부속 문서가
+    번호를 다시 세는 경우에도 첫 본문 구간을 잡는다.
+    """
+    from runtime.review.clause_extraction import is_article_heading_line
+
+    body = str(text or "")
+    want = str(article_number or "").strip()
+    if not body or not want:
+        return None
+    heads: list[tuple[int, str]] = []
+    last = 0
+    offset = 0
+    for line in body.split("\n"):
+        parsed = is_article_heading_line(line)
+        if parsed is not None:
+            num = parsed[0]
+            try:
+                value = int(num)
+            except ValueError:
+                value = 0
+            if value > last:
+                last = value
+                heads.append((offset, num))
+        offset += len(line) + 1
+    for i, (pos, num) in enumerate(heads):
+        if num != want:
+            continue
+        end = heads[i + 1][0] if i + 1 < len(heads) else len(body)
+        return pos, end
+    return None
+
+
+def article_raw_text(text: str, article_number: str | int | None) -> str:
+    span = article_raw_span(text, article_number)
+    if span is None:
+        return ""
+    return str(text or "")[span[0]: span[1]]
+
+
 def find_article_for_pattern(
     clauses: list[Any] | None,
     pattern: re.Pattern[str],

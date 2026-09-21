@@ -1278,7 +1278,9 @@ ALL_CHECKS: tuple[ConstructionCheck, ...] = (
 
 # ── 실행 ────────────────────────────────────────────────────────────────────
 
-def _raw_excerpt(text: str, anchor: re.Pattern[str] | None) -> str:
+def _raw_excerpt(
+    text: str, anchor: re.Pattern[str] | None, *, article_number: str | None = None,
+) -> str:
     """앵커가 걸린 자리의 **계약 원문 그대로**를 잘라 온다.
 
     조항 추출기가 돌려주는 텍스트는 줄바꿈·공백이 정규화돼 있어 원문과 글자
@@ -1288,8 +1290,31 @@ def _raw_excerpt(text: str, anchor: re.Pattern[str] | None) -> str:
     body = str(text or "")
     if anchor is None or not body:
         return ABSENT_MARKER
+    # 지적이 붙은 조의 구간 안에서만 인용을 자른다 (2026-09-21 2차 지시 3항).
+    # 전체에서 찾으면 지적은 제17조에 붙고 인용문은 제8조에서 온다.
+    scoped = False
+    if article_number:
+        from runtime.review.redline_instruction import article_raw_span
+
+        span = article_raw_span(body, article_number)
+        if span is not None:
+            # 조 제목 줄은 인용에서 뺀다 — "제15조 (대금의 지급)" 을 원문으로
+            # 싣는 것은 담당자에게 아무 정보도 주지 않는다.
+            head_end = body.find("\n", span[0])
+            start = (head_end + 1) if (0 <= head_end < span[1]) else span[0]
+            body = body[start: span[1]]
+            scoped = True
     m = anchor.search(body)
     if m is None:
+        # 제목으로 자리를 잡은 경우(title_anchor) 본문에 그 패턴이 없을 수
+        # 있다. 다른 조에서 끌어오는 대신 **그 조의 첫 실질 문장**을 인용한다
+        # — 인용은 반드시 그 조 안의 것이어야 한다.
+        if not scoped:
+            return ABSENT_MARKER
+        for line in body.split("\n")[1:]:
+            candidate = line.strip()
+            if len(candidate) >= 12:
+                return candidate[:400]
         return ABSENT_MARKER
     start = body.rfind("\n", 0, m.start()) + 1
     end = body.find("\n", m.end())
@@ -1441,7 +1466,14 @@ def run_construction_checklist(
                 article = str(loc.get("article_number") or "")
                 if article and article in anchored_articles:
                     continue
-        quoted = _raw_excerpt(body, used_anchor) if used_anchor is not None else ABSENT_MARKER
+        quoted = (
+            _raw_excerpt(
+                body, used_anchor,
+                article_number=(str(loc.get("article_number")) if loc else None),
+            )
+            if used_anchor is not None
+            else ABSENT_MARKER
+        )
         if not is_for_subcontract:
             edit_location = location_insert_after_last_paragraph(loc)
         marker = paragraph_marker(

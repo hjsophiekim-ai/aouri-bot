@@ -126,6 +126,8 @@ def check_question_model_fit(
 @dataclass
 class UserRequestMappingReport:
     mismatches: list[dict[str, Any]] = field(default_factory=list)
+    #: "해당 조항 없음" 이라고 했다가 실제 조항을 찾아 붙인 항목.
+    regrounded: list[dict[str, Any]] = field(default_factory=list)
     checked: int = 0
 
     @property
@@ -146,6 +148,68 @@ class UserRequestMappingReport:
 
 
 _UNRESOLVED_LABEL = "조항 확인 필요"
+
+#: 담당자 질문의 주제 → 그 주제를 규정한 조항을 찾는 제목 패턴
+#: (2026-09-21 2차 지시 2항이 든 예시 그대로).
+_TOPIC_TITLE_PATTERNS: tuple[tuple[str, "re.Pattern[str]", "re.Pattern[str]"], ...] = (
+    ("payment_settlement",
+     re.compile(r"기성|대금|지급|정산|공사비"),
+     re.compile(r"대금|기성|지급|정산")),
+    ("acceptance",
+     re.compile(r"준공|검수|검사|인수인계|합격"),
+     re.compile(r"준공|검사|검수|인수")),
+    ("sow_change",
+     re.compile(r"설계\s*변경|추가\s*공사|변경|범위|change\s*order", re.IGNORECASE),
+     re.compile(r"설계\s*변경|계약금액|변경|범위")),
+    ("security",
+     re.compile(r"유치권|포기각서|보증|담보"),
+     re.compile(r"보증|유치권|담보")),
+    ("subcontract",
+     re.compile(r"하도급|재하도급|하수급"),
+     re.compile(r"하도급")),
+    ("delay",
+     re.compile(r"지체\s*상금|공기|공사기간|지연|연장"),
+     re.compile(r"지체|공사기간|연장")),
+    ("termination",
+     re.compile(r"해지|해제|중도\s*해지"),
+     re.compile(r"해제|해지")),
+)
+
+
+def _reground(row: dict[str, Any], by_article: dict[str, Any]) -> dict[str, Any] | None:
+    """담당자 질문에 맞는 조항을 계약 전체에서 다시 찾는다."""
+    question = " ".join(
+        _norm(row.get(k))
+        for k in ("original_user_text", "normalized_issue", "objective_title")
+    )
+    if not question or not by_article:
+        return None
+    for _topic, question_rx, title_rx in _TOPIC_TITLE_PATTERNS:
+        if not question_rx.search(question):
+            continue
+        for art in sorted(by_article, key=lambda x: int(x) if x.isdigit() else 999):
+            clause = by_article[art]
+            title = str(getattr(clause, "title", "") or "")
+            if not title or not title_rx.search(title):
+                continue
+            path = f"제{art}조"
+            row["relevant_clause"] = path
+            row["relevant_clause_paths"] = [path]
+            row["answer_clause_paths"] = [path]
+            row["review_status"] = "관련 조항 확인"
+            row["regrounded_by_full_document_search"] = True
+            row["direct_answer"] = (
+                f"이 쟁점을 다루는 조항은 {path}({title})입니다. 계약 전문을 다시 "
+                "검색해 연결했습니다 — 해당 조항의 내용을 기준으로 판단하십시오."
+            )
+            row["conclusion"] = row["direct_answer"]
+            return {
+                "issue_id": str(row.get("issue_id") or ""),
+                "original_user_text": _norm(row.get("original_user_text"))[:100],
+                "grounded_to": path,
+                "article_title": title,
+            }
+    return None
 
 
 def check_user_request_mapping(
@@ -181,6 +245,13 @@ def check_user_request_mapping(
         paths = row.get("relevant_clause_paths")
         relevant = _norm(row.get("relevant_clause"))
         if not relevant or "없음" in relevant or _UNRESOLVED_LABEL in relevant:
+            # ── 관련 조항을 못 찾았다고 한 경우 계약 전문을 다시 뒤진다 ──
+            # (2026-09-21 2차 지시 2항) "관련 조항이 실제 있는데 '해당 조항
+            # 없음' 으로 표시하지 마세요." 담당자 질문의 주제와 같은 주제를
+            # 다루는 조항이 실재하면 그 조항으로 연결한다.
+            found = _reground(row, by_article)
+            if found:
+                report.regrounded.append(found)
             continue
         m = re.search(r"제\s*(\d+)\s*조", relevant)
         if not m:

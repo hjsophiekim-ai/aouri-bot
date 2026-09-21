@@ -146,9 +146,37 @@ _RX_SUBCONTRACT_IN_TEXT = _rx(
 #: 상대방이 **원도급사**라는 신호 — 그러면 우리는 하도급법상 수급사업자다.
 #: (발주자→원사업자→우리) 이 구조에서는 하도급법이 **우리를 보호하는 방향**
 #: 으로 적용된다. 원도급 관계와 혼동해서는 안 된다(지시 2항).
+#: 우리가 **하도급받는 쪽**(하수급인)이라는 신호.
+#:
+#: 2026-09-21 2차 지시 1항 — 종전 패턴은 `하도급\s*계약(?:서)?` 만으로도
+#: 참이 됐다. 그래서 우리가 **원사업자로서** 전문업체와 맺을 하도급계약을
+#: 규정한 조항 하나 때문에 우리가 하수급인으로 뒤집혔다. 실측(인테리어 2차
+#: 본계약 제21조 제4항):
+#:
+#:     "수급인은 하도급계약 체결 시 건설산업기본법 및 하도급거래 공정화에
+#:      관한 법률에 따른 의무를 이행하며 …"
+#:
+#: 이 한 줄로 `we_are_subcontractor=True` 가 되어, 하도급법이 "우리를 보호하는
+#: 방향으로 적용" 된다는 정반대의 결론이 나왔다. 그 결론의 근거 문장은
+#: 발주자를 원사업자라고 서술했다(지시 1항 위반).
+#:
+#: 하수급인이라는 것은 **상대방이 원사업자**라는 뜻이다. 그 사실을 직접
+#: 가리키는 문언만 신호로 삼는다.
 _RX_WE_ARE_SUBCONTRACTOR = _rx(
-    r"하도급\s*계약(?:서)?|원도급(?:사|인|자|계약|공사)|원사업자|원수급인"
-    r"|발주(?:처|자)(?:로부터|에서)\s*(?:수주|도급받)"
+    r"원사업자(?:은|는|이|가|와|과|로부터|에게|의)"
+    r"|원도급(?:사|인|자)(?:은|는|이|가|와|과|로부터|에게|의)"
+    r"|원도급\s*계약[^.\n]{0,30}(?:에\s*따른|에\s*기초한|의)\s*하도급"
+    r"|(?:하수급인|수급사업자)(?:으)?로\s*(?:한다|본다|정한다)"
+    r"|이하\s*[\"'“”']?(?:하수급인|수급사업자)"
+    r"|발주(?:처|자)(?:로부터|에서)\s*(?:수주|도급받)(?:은|는)\s*[^.\n]{0,20}로부터"
+)
+
+#: 상대방을 원사업자·원도급인으로 **정의**하는 문언. 이것이 있으면 우리
+#: 호칭이 "수급인" 이어도 층위는 하도급이다.
+_RX_COUNTERPARTY_IS_PRINCIPAL = _rx(
+    r"[\"'“”]?\s*(?:원사업자|원도급인|원도급사|원수급인)\s*[\"'“”]?\s*(?:라|이라)?\s*한다"
+    r"|(?:원사업자|원도급인|원도급사|원수급인)(?:은|는|이|가|와|과|로부터|에게)"
+    r"|원도급\s*계약에\s*따른[^.\n]{0,40}하도급"
 )
 
 #: 계약 원문의 당사자 정의에서 쓰이는 역할 명사.
@@ -428,6 +456,9 @@ def classify_construction_transaction(
     has_sub_user = bool(_RX_USER_SUBCONTRACT.search(desc_all))
     has_subcontracting = has_sub_text or has_sub_user
     we_are_subcontractor = bool(_RX_WE_ARE_SUBCONTRACTOR.search(body))
+    #: 상대방이 스스로를 원사업자·원도급인으로 정의했는가. 하도급계약서는
+    #: 우리를 "수급인" 이라고 부르므로, 우리 호칭만으로는 층위를 알 수 없다.
+    counterparty_is_principal = bool(_RX_COUNTERPARTY_IS_PRINCIPAL.search(body))
     payment_risk = bool(_RX_USER_PAYMENT_RISK.search(desc_all))
 
     signals: list[str] = []
@@ -471,6 +502,18 @@ def classify_construction_transaction(
     if role == ROLE_CONTRACTOR and has_subcontracting:
         role = ROLE_CONTRACTOR_WITH_SUBCONTRACT
         signals.append("subcontracting_present")
+
+    # 확정된 지위가 "**발주자와 직접** 계약한 수급인" 이면 우리는 하수급인이
+    # 아니다 (2026-09-21 2차 지시 1항). 이 값이 하도급법의 적용 **방향**을
+    # 정하므로, 뒤집히면 "하도급법이 우리를 보호한다" 는 정반대의 결론이 나온다.
+    #
+    # 다만 상대방이 스스로를 원사업자·원도급인으로 정의했으면 우리 쪽 호칭이
+    # "수급인" 이어도 우리는 하수급인이다 — 하도급계약서는 우리를 대개
+    # "수급인" 이라고 부른다. 그래서 **상대방의 정의**를 먼저 본다.
+    if role_confident and role in (ROLE_CONTRACTOR, ROLE_CONTRACTOR_WITH_SUBCONTRACT):
+        if we_are_subcontractor and not counterparty_is_principal:
+            signals.append("we_are_subcontractor_signal_overridden_by_role")
+            we_are_subcontractor = False
 
     return ConstructionTransactionModel(
         is_construction=True,

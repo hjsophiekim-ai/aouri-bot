@@ -7883,6 +7883,88 @@ def build_clause_level_result(
             )
             meta["construction_role_unsettled"] = True
 
+    # ── [Applicable Law canonical state] (2026-09-21 2차 지시 7항) ──────────
+    # 법률마다 결론은 하나다. 적용요건 판단(우리 업 도메인 + 확정된 당사자
+    # 지위)이 canonical 이고, AI 적용가능성 분석은 그 아래로 맞춘다. 실측:
+    # 같은 리포트에서 하도급법이 rule engine 은 "비적용", AI 는 "높음/HIGH"
+    # 였고, AI 쪽 근거는 발주자를 원사업자로 보고 있었다.
+    try:
+        from runtime.review.statute_canonical_state import (
+            build_statute_canonical_state as _build_statute_state,
+            reconcile_ai_applicability as _reconcile_statutes,
+        )
+        _statute_state = _build_statute_state(_statute_decisions)
+        _reconcile_statutes(_legal_applicability_results, _statute_state)
+        meta["applicable_law_state"] = _statute_state.to_dict()
+        if _statute_state.conflicts:
+            logger.warning("statute state: %s", _statute_state.detail)
+            meta["legal_applicability"] = _legal_applicability_results
+    except Exception as exc:  # noqa: BLE001 - 통일 실패가 검토를 막지 않는다
+        logger.warning("statute canonical state failed: %s", exc)
+        _statute_state = None
+
+    # ── [Party Role 출력 검증] (2026-09-21 2차 지시 1항) ────────────────────
+    # 지위는 판정 단계에서 이미 고정됐다. 여기서 보는 것은 출력된 **문장**이다
+    # — 판정은 맞는데 설명이 반대로 적히는 일이 실제로 있었다.
+    try:
+        from runtime.review.party_role_output_gate import (
+            check_party_role_output as _check_party_role_output,
+        )
+        _party_role_report = _check_party_role_output(
+            our_names=list(_our_labels_for_review or []),
+            counterparty_names=[
+                n for n in [
+                    str(getattr(party, "counterparty_label", "") or ""),
+                    str((_legal_map.fields or {}).get("counterparty_name") or ""),
+                ] if n
+            ],
+            our_role=str(_construction_model.our_role or getattr(party, "our_role", "") or ""),
+            counterparty_role=str(getattr(party, "counterparty_role", "") or ""),
+            our_role_label=str(_construction_model.role_label or ""),
+            counterparty_role_label="도급인" if _construction_model.is_contractor_side else "",
+            clause_results=clause_results,
+            # 적용법률 분석(AI)과 적용요건 판단(룰) **둘 다** 본다. 실측에서
+            # 지위를 뒤집은 문장은 AI 쪽에도, 룰 쪽 근거에도 있었다.
+            extra_records=list(_legal_applicability_results or [])
+            + [d.to_dict() for d in _statute_decisions],
+        )
+        meta["party_role_output_gate"] = {
+            "checked": _party_role_report.checked,
+            "violations": _party_role_report.violations,
+        }
+        if _party_role_report.violations:
+            logger.warning("party role output: %s", _party_role_report.detail)
+            if not meta.get("review_status"):
+                meta["review_status"] = _party_role_report.status
+                meta["review_status_detail"] = _party_role_report.detail
+    except Exception as exc:  # noqa: BLE001 - 검증 실패가 검토를 막지 않는다
+        logger.warning("party role output gate failed: %s", exc)
+
+    # ── [Exact Quote Location Gate] (2026-09-21 2차 지시 3항) ───────────────
+    # 인용문이 그 finding 이 가리키는 조항 **안의** 것인지 본다. 가짜 인용
+    # 게이트는 "계약 어딘가에 있는가" 만 보므로, 제8조의 문장을 제17조의
+    # 원문으로 싣는 오류를 통과시킨다 — 문장은 진짜이고 위치가 틀렸다.
+    # 앵커는 v14 에서 조 제목·법률효과로 바로잡았으니 그 자리가 맞고,
+    # 고쳐야 하는 것은 인용이다.
+    try:
+        from runtime.review.quote_location_gate import (
+            enforce_quote_location as _enforce_quote_location,
+        )
+        _quote_location = _enforce_quote_location(
+            clause_results, index=_clause_index, contract_text=str(text or ""),
+        )
+        meta["quote_location_gate"] = {
+            "checked": _quote_location.checked,
+            "relocated": _quote_location.relocated,
+        }
+        if _quote_location.relocated:
+            logger.warning("quote location: %s", _quote_location.detail)
+            if not meta.get("review_status"):
+                meta["review_status"] = _quote_location.status
+                meta["review_status_detail"] = _quote_location.detail
+    except Exception as exc:  # noqa: BLE001 - 검증 실패가 검토를 막지 않는다
+        logger.warning("quote location gate failed: %s", exc)
+
     # ── [부재 주장 전수 재검증] (2026-09-21 지시 6·7항) ─────────────────────
     # "해당 조항 없음 / 신설 필요" 를 말하는 항목을 전부 계약 전문과 다시
     # 대조한다. 동의어까지 찾아 관련 조항이 하나라도 있으면 그 주장은 성립하지
@@ -7960,7 +8042,14 @@ def build_clause_level_result(
         meta["user_request_mapping"] = {
             "checked": _mapping_report.checked,
             "mismatches": _mapping_report.mismatches,
+            "regrounded": _mapping_report.regrounded,
         }
+        if _mapping_report.regrounded:
+            meta["user_review_coverage"] = _user_request_coverage
+            logger.info(
+                "user request regrounded to real clauses: %s",
+                ", ".join(r["grounded_to"] for r in _mapping_report.regrounded),
+            )
         if _mapping_report.mismatches:
             meta["user_review_coverage"] = _user_request_coverage
             if not meta.get("review_status"):
@@ -7968,6 +8057,56 @@ def build_clause_level_result(
                 meta["review_status_detail"] = _mapping_report.detail
     except Exception as exc:  # noqa: BLE001 - 점검 실패가 검토를 막지 않는다
         logger.warning("user request mapping check failed: %s", exc)
+
+    # ── [중복 finding 통합] (2026-09-21 2차 지시 8항) ───────────────────────
+    # 같은 법률효과를 여러 항목이 반복하면 담당자는 같은 이야기를 세 번 읽고,
+    # 어느 문안을 계약서에 넣어야 하는지 알 수 없다. 실측: 유치권이
+    # counsel_KR-16 ×2 + CWC-LIEN-WAIVER 로 세 번 실렸다.
+    try:
+        from runtime.review.duplicate_consolidation import (
+            consolidate_duplicate_findings as _consolidate_duplicates,
+        )
+        _dup_report = _consolidate_duplicates(clause_results)
+        meta["duplicate_consolidation"] = {
+            "exact_duplicates": _dup_report.exact_duplicates,
+            "merged": _dup_report.merged,
+        }
+        if _dup_report.merged or _dup_report.exact_duplicates:
+            logger.info("duplicate consolidation: %s", _dup_report.detail)
+            try:
+                from runtime.review.output_filter import build_final_findings as _bff_dup
+                meta["final_findings"] = _bff_dup(
+                    clause_results,
+                    contract_type_code=str(_canonical_profile.contract_type or ""),
+                    include_low=False,
+                )
+            except Exception:  # noqa: BLE001 - 재구성 실패가 검토를 막지 않는다
+                logger.warning("final_findings rebuild after consolidation failed")
+    except Exception as exc:  # noqa: BLE001 - 통합 실패가 검토를 막지 않는다
+        logger.warning("duplicate consolidation failed: %s", exc)
+
+    # ── [HIGH 손실 규모 순 정렬] (2026-09-21 2차 지시 9항) ──────────────────
+    # 등급이 같으면 순서는 생성 순서로 정해지는데, 그 순서는 손실 규모와
+    # 아무 관계가 없다. 실측: 안전 서류 항목이 유치권 포기보다 앞에 실렸다.
+    # 등급은 건드리지 않고 순서만 정한다.
+    try:
+        from runtime.review.construction_high_priority import (
+            apply_high_priority_order as _apply_loss_order,
+        )
+        _loss_order = _apply_loss_order(clause_results, model=_construction_model)
+        if _loss_order:
+            meta["high_priority_order"] = _loss_order
+            try:
+                from runtime.review.output_filter import build_final_findings as _bff_ord
+                meta["final_findings"] = _bff_ord(
+                    clause_results,
+                    contract_type_code=str(_canonical_profile.contract_type or ""),
+                    include_low=False,
+                )
+            except Exception:  # noqa: BLE001 - 재구성 실패가 검토를 막지 않는다
+                logger.warning("final_findings rebuild after priority order failed")
+    except Exception as exc:  # noqa: BLE001 - 정렬 실패가 검토를 막지 않는다
+        logger.warning("high priority order failed: %s", exc)
 
     _keep_demoted = _enforce_keep_removal(clause_results)
     meta["keep_verdict_removed"] = _keep_demoted
@@ -8174,6 +8313,23 @@ def build_clause_level_result(
             _axis("risk_package_linked", "핵심 Risk Package 를 cross-clause 로 연결?",
                   not (_pkg_links.get("uncovered") or []),
                   ", ".join(_pkg_links.get("uncovered") or [])),
+            # ── 2026-09-21 2차 지시 12항이 추가한 축 ──────────────────────
+            _axis("quote_location_correct", "quote location correct?",
+                  not ((meta.get("quote_location_gate") or {}).get("relocated") or []),
+                  f"다른 조항의 문장을 원문으로 표시한 항목 "
+                  f"{len((meta.get('quote_location_gate') or {}).get('relocated') or [])}건 정정"),
+            _axis("party_role_in_output", "출력 문장이 확정 지위를 지키는가?",
+                  not ((meta.get("party_role_output_gate") or {}).get("violations") or []),
+                  f"지위를 뒤집은 문장 "
+                  f"{len((meta.get('party_role_output_gate') or {}).get('violations') or [])}건"),
+            _axis("applicable_law_single_state", "법률별 결론이 하나인가?",
+                  not ((meta.get("applicable_law_state") or {}).get("conflicts") or []),
+                  f"결론이 갈린 법률 "
+                  f"{len((meta.get('applicable_law_state') or {}).get('conflicts') or [])}건 통일"),
+            _axis("no_duplicate_finding", "duplicate finding?",
+                  not ((meta.get("duplicate_consolidation") or {}).get("merged") or []),
+                  f"같은 법률효과 "
+                  f"{len((meta.get('duplicate_consolidation') or {}).get('merged') or [])}묶음 통합"),
         ],
     }
     meta["v14_final_self_check"]["failed"] = [

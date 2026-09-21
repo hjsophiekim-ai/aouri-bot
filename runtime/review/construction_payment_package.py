@@ -252,7 +252,9 @@ def build_payment_risk_package(
 ABSENT_MARKER = "해당 조항 없음 — 신설 필요"
 
 
-def raw_excerpt(text: str, anchor: re.Pattern[str] | None) -> str:
+def raw_excerpt(
+    text: str, anchor: re.Pattern[str] | None, *, article_number: str | None = None,
+) -> str:
     """앵커가 걸린 자리의 **계약 원문 그대로**를 잘라 온다.
 
     조항 추출기가 돌려주는 텍스트는 줄바꿈·공백이 정규화돼 있어 원문과 글자
@@ -262,8 +264,28 @@ def raw_excerpt(text: str, anchor: re.Pattern[str] | None) -> str:
     body = str(text or "")
     if anchor is None or not body:
         return ABSENT_MARKER
+    # 인용은 지적이 붙은 조 안에서만 자른다 (2026-09-21 2차 지시 3항). 실측:
+    # 대금 회수 사슬 지적이 제15조에 붙었는데 인용문은 제1조에서 왔다.
+    scoped = False
+    if article_number:
+        from runtime.review.redline_instruction import article_raw_span
+
+        span = article_raw_span(body, article_number)
+        if span is not None:
+            # 조 제목 줄은 인용에서 뺀다 — "제15조 (대금의 지급)" 을 원문으로
+            # 싣는 것은 담당자에게 아무 정보도 주지 않는다.
+            head_end = body.find("\n", span[0])
+            start = (head_end + 1) if (0 <= head_end < span[1]) else span[0]
+            body = body[start: span[1]]
+            scoped = True
     m = anchor.search(body)
     if m is None:
+        if not scoped:
+            return ABSENT_MARKER
+        for line in body.split("\n")[1:]:
+            candidate = line.strip()
+            if len(candidate) >= 12:
+                return candidate[:400]
         return ABSENT_MARKER
     start = body.rfind("\n", 0, m.start()) + 1
     end = body.find("\n", m.end())
@@ -314,7 +336,10 @@ def payment_package_finding(
     display_path = f"제{loc['article_number']}조" if loc else "신설 조항"
     # 인용은 **계약 원문에서 직접** 잘라 온다. 조항 추출기의 정규화된 텍스트를
     # 그대로 쓰면 가짜 인용 게이트(90% 일치)에 걸려 항목이 통째로 사라진다.
-    original = raw_excerpt(str(text or ""), anchor)
+    original = raw_excerpt(
+        str(text or ""), anchor,
+        article_number=(str(loc["article_number"]) if loc else None),
+    )
 
     problem = (
         "공사대금 회수 경로가 준공검사 → 기성확정 → 지급유보 → 상계 → 잔금 → "
