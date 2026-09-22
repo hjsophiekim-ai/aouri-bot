@@ -85,6 +85,27 @@ _BLOCKING_BY_FAMILY: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     ),
 )
 
+#: 유형군별로 **구조상 존재할 수 없는** 축. 없는 것을 "확인 필요" 로 적으면
+#: 담당자는 빠진 것을 찾으러 간다 — NDA 에 검수·준공 조건은 없는 것이 정상이다
+#: (2026-09-21 4차 지시 11항).
+_NOT_APPLICABLE_BY_FAMILY: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("nda", "confidential", "비밀유지"),
+        ("payment_flow", "acceptance_and_completion", "risk_transfer_point",
+         "guarantee_structure"),
+    ),
+)
+
+
+def not_applicable_axes_for(contract_type_code: str) -> tuple[str, ...]:
+    """이 계약유형의 급부 구조에 존재하지 않는 축."""
+    code = str(contract_type_code or "").strip().lower()
+    for needles, axes in _NOT_APPLICABLE_BY_FAMILY:
+        if any(n in code for n in needles):
+            return axes
+    return ()
+
+
 #: 값이 있어도 "모른다"는 뜻인 표기 — 채워진 것으로 보면 안 된다.
 _EMPTY_MARKERS: frozenset[str] = frozenset({
     "", "none", "null", "n/a", "na", "-", "미확인", "미확정", "불명", "불명확",
@@ -141,6 +162,7 @@ def evaluate_legal_map(
     """
     f = fields or {}
     blocking = set(blocking_axes_for(contract_type_code))
+    not_applicable = set(not_applicable_axes_for(contract_type_code))
 
     axes: list[dict[str, Any]] = []
     missing_blocking: list[str] = []
@@ -148,11 +170,14 @@ def evaluate_legal_map(
     for key, label in LEGAL_MAP_AXES:
         filled = _is_filled(f.get(key))
         is_blocking = key in blocking
+        is_na = key in not_applicable and not filled
         axes.append({
-            "key": key, "label": label, "filled": filled, "blocking": is_blocking,
+            "key": key, "label": label, "filled": filled,
+            "blocking": is_blocking, "not_applicable": is_na,
         })
-        if not filled:
-            (missing_blocking if is_blocking else missing_advisory).append(label)
+        if filled or is_na:
+            continue
+        (missing_blocking if is_blocking else missing_advisory).append(label)
 
     complete = not missing_blocking
     detail = ""

@@ -44,6 +44,15 @@ _RX_PAYMENT_ACTION = re.compile(
     re.IGNORECASE,
 )
 
+#: 과업 범위를 가리키는 형태만 SOW 로 본다. 맨 낱말 "범위" 는 거의 모든
+#: 조항에 나오므로 분류 근거가 되지 못한다.
+_RX_SOW_SCOPE = re.compile(
+    r"(?:업무|과업|공급|공사|용역|서비스|개발)\s*범위"
+    r"|범위(?:의|를)?\s*(?:변경|조정|확정|추가)"
+    r"|scope\s+of\s+work",
+    re.IGNORECASE,
+)
+
 
 def classify_clause_topic(*, title: str | None, text: str | None) -> str:
     t = (title or "").strip()
@@ -70,7 +79,12 @@ def classify_clause_topic(*, title: str | None, text: str | None) -> str:
     if _has_any_ci(hay, ["오픈소스", "opensource", "open source", "sbom", "gpl", "mit", "apache", "copyleft", "license", "라이선스"]):
         return TOPIC_OSS
 
-    if _has_any_ci(hay, ["sow", "statement of work", "요구사항", "사양", "범위", "변경요청", "change request", "변경관리"]):
+    # "범위" 는 거의 모든 조항에 나온다 — "필요한 범위 내에서만 복제할 수
+    # 있다"(NDA 자료관리 조항)가 SOW 로 분류돼 개인정보 rewrite 가 의미
+    # 불일치로 걸렸다(2026-09-21 실측). 대금 스캔을 행위 문맥으로 좁혔던
+    # 것과 같은 이유로, 여기서도 **과업 범위**를 가리키는 형태만 본다.
+    if _has_any_ci(hay, ["sow", "statement of work", "요구사항", "사양", "변경요청", "change request", "변경관리"]) \
+            or _RX_SOW_SCOPE.search(hay):
         return TOPIC_SOW
 
     term_hit = _has_any_ci(hay, ["계약해지", "해지", "종료", "중도해지", "갱신", "시정", "최고", "시정기간", "termination"])

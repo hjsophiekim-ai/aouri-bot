@@ -6914,7 +6914,15 @@ def build_clause_level_result(
     from runtime.review.commercial_terms_gate import (
         build_commercial_terms_findings as _build_ct_findings,
     )
-    _ct_type_code = _type_resolution.contract_type_code or _scope_type_code
+    # 유형은 canonical 값을 먼저 쓴다. 구조 판정기의 코드를 그대로 쓰면
+    # 상호 NDA 가 development_service 로 읽혀 계약금액·착공일·준공일이
+    # 필수 상업조건이 된다 — NDA 에 없는 것이 정상인 항목을 미확정으로
+    # 보고하게 된다(2026-09-21 4차 지시 11항).
+    _ct_type_code = (
+        str(_canonical_state.contract_type or "")
+        or _type_resolution.contract_type_code
+        or _scope_type_code
+    )
     _ct_findings, _ct_rows = _build_ct_findings(
         str(text or ""), contract_type_code=_ct_type_code,
     )
@@ -7365,9 +7373,33 @@ def build_clause_level_result(
     from runtime.review.legal_map_gate import (
         evaluate_legal_map as _evaluate_legal_map,
     )
+    # ── [Map 의 "미기재" 를 원문으로 확인] (2026-09-21 4차 지시 3항) ────────
+    # Map 은 AI 산출물이라 regex fallback 에서는 사실상 비어 있다. 그 상태로
+    # 완결성을 재면 계약에 **실재하는** 축까지 미기재가 된다. 실측(상호 NDA):
+    # 지식재산 귀속은 제9조에, 우리 지위는 canonical_state 에 있는데도
+    # 둘 다 "미기재" 였다. 이미 있는 것을 못 본 것을 먼저 고친다.
+    from runtime.review.legal_map_gate import LEGAL_MAP_AXES as _LM_AXES
+    from runtime.review.legal_map_grounding import ground_legal_map as _ground_map
+
+    _map_grounding = _ground_map(
+        _legal_map.fields,
+        contract_text=str(text or ""),
+        canonical_state=_canonical_state,
+        axis_labels=dict(_LM_AXES),
+    )
+    meta["legal_map_grounding"] = _map_grounding.to_dict()
+
+    # 유형은 **canonical 값**으로 넘긴다. 구조 판정기의 코드를 그대로 쓰면
+    # 상호 NDA 가 development_service 로 읽혀 대가 지급·검수/준공이 필수 축이
+    # 된다 — NDA 에 없는 것이 정상인 축을 품질실패 사유로 삼게 된다
+    # (2026-09-21 4차 지시 11항).
     _legal_map_eval = _evaluate_legal_map(
         _legal_map.fields,
-        contract_type_code=_type_resolution.contract_type_code or _scope_type_code,
+        contract_type_code=(
+            str(_canonical_state.contract_type or "")
+            or _type_resolution.contract_type_code
+            or _scope_type_code
+        ),
     )
     meta["legal_map_completeness"] = _legal_map_eval
     # Map 이 확정되지 않은 채 만들어진 조항별 결론은 근거가 없다. 먼저 잡힌

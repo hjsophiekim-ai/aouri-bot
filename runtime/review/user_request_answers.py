@@ -36,6 +36,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+#: 다른 언어본·자료 없이 "일치/적정" 으로 결론 내리면 세우는 상태
+#: (2026-09-21 4차 지시 10항).
+REVIEW_FAILED_MISSING_SOURCE = "REVIEW_FAILED_MISSING_SOURCE"
+
 VERDICT_KEEP = "KEEP"
 VERDICT_SUPPLEMENT = "SUPPLEMENT"
 VERDICT_SEPARATE = "SEPARATE"
@@ -145,6 +149,73 @@ REQUEST_TOPICS: tuple[RequestTopic, ...] = (
 )
 
 
+# ── 국제중재 조항의 구성요소 (지시 9항) ──────────────────────────────────
+#: "조항이 있다/없다" 가 아니라 **무엇으로 정해져 있는지**를 항목별로 읽는다.
+_ARBITRATION_FIELDS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    ("institution", "중재기관", _rx(
+        r"대한상사중재원|KCAB|ICC|SIAC|HKIAC|CIETAC|국제상업회의소"
+    )),
+    ("seat", "중재지", _rx(
+        r"(?:서울|부산|싱가포르|홍콩|런던|베이징|상하이|제네바)(?:에서|특별시)?"
+    )),
+    ("language", "중재언어", _rx(r"(?:영어|한국어|중국어|영문|국문)로\s*진행")),
+    ("arbitrators", "중재인 수", _rx(r"중재인은?\s*(?:\d+\s*인|[일이삼]\s*인)")),
+    ("finality", "판정의 구속력", _rx(r"최종적(?:이고|이며)[^.\n]{0,20}구속력")),
+)
+
+
+def extract_arbitration_terms(clause_text: str) -> dict[str, str]:
+    """중재 조항에서 항목별 값을 그대로 뽑는다. 없으면 빈 값."""
+    body = _norm(clause_text)
+    out: dict[str, str] = {}
+    for key, _label, pattern in _ARBITRATION_FIELDS:
+        m = pattern.search(body)
+        out[key] = m.group(0) if m else ""
+    return out
+
+
+def _arbitration_clause_text(clauses: list[Any] | None, found: list[str]) -> str:
+    wanted = {re.sub(r"[^\d]", "", p) for p in found}
+    parts: list[str] = []
+    for c in clauses or []:
+        article = str(getattr(c, "article_number", "") or "")
+        if article and article in wanted:
+            parts.append(str(getattr(c, "text", "") or ""))
+    return "\n".join(parts)
+
+
+def _arbitration_reason(terms: dict[str, str], found: list[str]) -> str:
+    settled = [
+        f"{label} {terms.get(key)}"
+        for key, label, _rxp in _ARBITRATION_FIELDS
+        if terms.get(key)
+    ]
+    unsettled = [
+        label for key, label, _rxp in _ARBITRATION_FIELDS if not terms.get(key)
+    ]
+    head = (
+        f"중재 조항은 {', '.join(found)}에 있습니다. " if found
+        else "중재 조항을 계약에서 확인했습니다. "
+    )
+    body = (
+        ("확정된 항목 — " + " / ".join(settled) + ". ") if settled
+        else "조항에서 읽어낸 구성요소가 없습니다. "
+    )
+    gap = (
+        ("미확정 항목 — " + ", ".join(unsettled) + ". ") if unsettled else ""
+    )
+    return (
+        head + body + gap
+        + "다만 상대국에서의 집행 가능성은 계약 문언이 아니라 집행지 법제의 "
+        "문제입니다. 중국은 뉴욕협약 가입국이나 상호주의·상사 유보를 두고 있고, "
+        "승인·집행은 피신청인 주소지 또는 재산 소재지의 중급인민법원이 관할합니다. "
+        "따라서 ① 상대방의 집행 대상 재산이 중국 내에 실재하는지, ② 중재합의의 "
+        "서면성과 수권대표 서명이 갖추어졌는지, ③ 판정문의 중국어 번역·공증·인증 "
+        "절차를 누가 부담하는지를 별도로 확인해야 합니다. 조항 자체는 수정할 "
+        "필요가 없더라도 이 세 가지는 체결 전에 확인하시기 바랍니다."
+    )
+
+
 @dataclass
 class RequestAnswer:
     index: int
@@ -155,6 +226,8 @@ class RequestAnswer:
     topic: str = ""
     rewrite_needed: bool = False
     related_finding_ids: list[str] = field(default_factory=list)
+    #: 국제중재 질문일 때 항목별로 읽어낸 값(지시 9항).
+    arbitration: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -167,6 +240,7 @@ class RequestAnswer:
             "topic": self.topic,
             "rewrite_needed": self.rewrite_needed,
             "related_finding_ids": list(self.related_finding_ids),
+            "arbitration": dict(self.arbitration),
         }
 
 
@@ -273,18 +347,17 @@ def answer_requests(
             continue
 
         # 집행 가능성은 계약 문언이 아니라 집행지 법제의 문제다.
+        # 지시 9항 — "조항 존재 여부만 확인하지 말고 중재기관·중재지·언어·
+        # 중재인 수·집행 가능성·고려사항을 분석하세요. '별도 수정 필요 없음'
+        # 한 줄로 끝내지 마세요."
         if _RX_ENFORCEABILITY_TOPIC.search(question):
+            clause_text = _arbitration_clause_text(clauses, found)
+            terms = extract_arbitration_terms(clause_text)
             out.append(RequestAnswer(
                 index=index, question=question, verdict=VERDICT_NEEDS_FACTS,
                 topic=(topic.key if topic else ""), clauses=found,
-                reason=(
-                    "중재조항 자체의 적정성은 "
-                    + (f"{', '.join(found)}에서 판단했습니다. " if found else "")
-                    + "다만 상대국에서의 집행 가능성은 계약 문언이 아니라 집행지 "
-                    "법제의 문제이므로, 중재판정의 승인·집행 요건(뉴욕협약 가입 "
-                    "여부와 유보, 집행지 법원의 실무, 상대방 자산 소재지)을 "
-                    "별도로 확인해야 합니다."
-                ),
+                arbitration=terms,
+                reason=_arbitration_reason(terms, found),
             ))
             continue
 

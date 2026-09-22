@@ -378,14 +378,40 @@ _RX_DEFINITION_CLAUSE = re.compile(
 )
 
 
+#: 유형군별로 **급부 구조상 존재할 수 없는** 위험축. 없는 축을 "계약이
+#: 침묵한다" 고 보고하면, 담당자는 NDA 에서 추가공사·준공검사 조항을 찾으러
+#: 간다(2026-09-21 4차 지시 11항 — 검수/준공/공사대금 rule 혼입 금지).
+_NOT_APPLICABLE_AXES_BY_FAMILY: tuple[tuple[tuple[str, ...], frozenset[str]], ...] = (
+    (
+        ("nda", "confidential", "비밀유지", "mou", "loi"),
+        frozenset({
+            "schedule_delay", "payment_default", "design_change", "extra_work",
+            "acceptance", "defects", "safety_accident", "insurance",
+        }),
+    ),
+)
+
+
+def not_applicable_axis_keys(contract_type_code: str) -> frozenset[str]:
+    code = str(contract_type_code or "").strip().lower()
+    for needles, keys in _NOT_APPLICABLE_AXES_BY_FAMILY:
+        if any(n in code for n in needles):
+            return keys
+    return frozenset()
+
+
 def build_risk_allocation_matrix(
     text: str, *, our_role_direction: str = "", contract_type_code: str = "",
 ) -> dict[str, Any]:
     """위험축별 부담 주체 매트릭스. 조항별 finding 생성 **전에** 호출한다."""
     ours_aliases, their_aliases = _side_aliases(our_role_direction)
+    skip = not_applicable_axis_keys(contract_type_code)
     rows: list[dict[str, Any]] = []
     for axis in RISK_AXES:
         windows = _axis_units(text or "", axis)
+        # 이 유형에 존재하지 않는 축은 계약이 침묵해도 공백이 아니다.
+        if not windows and axis.key in skip:
+            continue
         if not windows:
             rows.append({
                 "key": axis.key, "label": axis.label, "side": SIDE_UNALLOCATED,
