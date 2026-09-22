@@ -87,6 +87,11 @@ class RequestTopic:
     question_rx: re.Pattern[str]
     title_rx: re.Pattern[str]
     body_rx: re.Pattern[str]
+    #: 같은 법률효과를 영문 계약에서 찾는 문형(2026-09-21 5차 지시 7항).
+    #: 같은 계약의 국문본·영문본이 같은 축에 걸리도록 **하나의 주제 안에**
+    #: 둔다 — 언어별로 주제표를 따로 두면 둘이 갈라진다.
+    body_rx_en: re.Pattern[str] | None = None
+    title_rx_en: re.Pattern[str] | None = None
 
 
 def _rx(p: str) -> re.Pattern[str]:
@@ -101,12 +106,26 @@ REQUEST_TOPICS: tuple[RequestTopic, ...] = (
         _rx(r"제3자|국내\s*개발사|협력업체|시험기관|인증기관|공유"),
         _rx(r"비밀유지|제3자|개발|공동"),
         _rx(r"제3자[^.\n]{0,80}(?:제공|공개)|협력업체[^.\n]{0,60}제공"),
+        body_rx_en=_rx(
+            r"may\s+disclose[^.\n]{0,120}(?:third\s+part|contractor|adviser|affiliate"
+            r"|need-to-know|development,\s*testing)"
+            r"|may\s+engage[^.\n]{0,80}third\s+part"
+            r"|shall\s+notify[^.\n]{0,80}third-party"
+            r"|responsible\s+for\s+the\s+acts\s+of\s+any\s+third-party"
+        ),
+        title_rx_en=_rx(r"Confidentiality|Third-?Party|Joint\s+Development"),
     ),
     RequestTopic(
         "core_tech_approval",
         _rx(r"핵심기술|사전\s*승인|사전\s*동의|승인\s*범위"),
         _rx(r"비밀유지|SDK|제3자|보호"),
         _rx(r"핵심기술[^.\n]{0,80}(?:승인|동의)"),
+        body_rx_en=_rx(
+            r"core\s+technical\s+information[^.]{0,160}(?:prior\s+written|consent|approval)"
+            r"|designat(?:es|ed)[^.]{0,60}in\s+writing[^.]{0,160}core\s+technical"
+            r"|prior\s+written\s+(?:consent|approval)[^.]{0,200}core\s+technical"
+        ),
+        title_rx_en=_rx(r"Confidentiality|SDK|Third-?Party|Special\s+Protection"),
     ),
     RequestTopic(
         "ip_ownership_split",
@@ -114,12 +133,28 @@ REQUEST_TOPICS: tuple[RequestTopic, ...] = (
         _rx(r"지식재산|권리\s*귀속|개발"),
         _rx(r"(?:체결\s*전부터|이전부터)\s*보유[^.\n]{0,80}귀속"
             r"|개발\s*성과[^.\n]{0,120}별도"),
+        body_rx_en=_rx(
+            r"retains?\s+ownership[^.\n]{0,160}(?:prior|before|pre-existing|independently)"
+            r"|(?:development\s+results|deliverables|improvements|modifications"
+            r"|derivative\s+technology|interface\s+adaptation)[^.\n]{0,200}"
+            r"(?:separate\s+development\s+agreement|separately\s+agreed|written\s+agreement)"
+        ),
+        title_rx_en=_rx(r"Intellectual\s+Property|Ownership|Joint\s+Development"),
     ),
     RequestTopic(
         "independent_development",
         _rx(r"독자\s*개발|독자개발|다른\s*업체|타사와의?\s*협업|제한하지"),
         _rx(r"지식재산|비밀유지|권리"),
         _rx(r"독자(?:적으로)?\s*(?:개발|연구)[^.\n]{0,80}(?:제한되지|할\s*수\s*있)"),
+        body_rx_en=_rx(
+            r"does\s+not\s+restrict[^.]{0,120}independent\s+development"
+            r"|independent(?:ly)?\s+develop[^.]{0,200}"
+            r"(?:shall\s+not\s+be\s+restricted|not\s+be\s+restricted|permitted|may)"
+            r"|without\s+use\s+of[^.]{0,80}Confidential\s+Information"
+            r"|cooperation\s+with\s+third\s+parties[^.]{0,120}without\s+use"
+            r"|does\s+not\s+create\s+any[^.]{0,120}exclusive"
+        ),
+        title_rx_en=_rx(r"Intellectual\s+Property|Ownership|Confidentiality"),
     ),
     RequestTopic(
         "term_and_damages",
@@ -127,24 +162,52 @@ REQUEST_TOPICS: tuple[RequestTopic, ...] = (
         _rx(r"기간|위반|배상|책임"),
         _rx(r"비밀유지의무[^.\n]{0,60}(?:\d+\s*년|영업비밀)"
             r"|손해[^.\n]{0,80}(?:직접손해|배상)"),
+        body_rx_en=_rx(
+            r"confidentiality\s+obligations?[^.]{0,200}"
+            r"(?:\(?\d+\)?\s*years?|trade[-\s]secret|remain\s+in\s+effect|continue)"
+            r"|(?:survive|remain\s+in\s+effect)[^.]{0,160}(?:termination|trade[-\s]secret|years?)"
+            r"|damages\s+shall\s+be\s+limited[^.]{0,160}direct"
+            r"|indirect[^.]{0,120}(?:excluded|shall\s+be\s+excluded)"
+        ),
+        title_rx_en=_rx(r"Term|Confidentiality\s+Period|Liability|Breach|Damages"),
     ),
     RequestTopic(
         "personal_data",
         _rx(r"개인정보|수면\s*데이터|데이터\s*처리|DPA"),
         _rx(r"데이터|개인정보|보안"),
         _rx(r"개인정보[^.\n]{0,120}(?:법령|별도|처리계약|동의)"),
+        body_rx_en=_rx(
+            r"personal\s+(?:data|information)[^.\n]{0,160}"
+            r"(?:comply|applicable\s+laws?|data\s+subject|separate)"
+            r"|(?:sleep|user|health-related)\s+data[^.\n]{0,160}(?:comply|protection|separate)"
+            r"|separate\s+written\s+(?:technical\s+agreement|data\s+processing\s+agreement)"
+        ),
+        title_rx_en=_rx(r"Data\s+Security|Personal\s+(?:Data|Information)|Privacy"),
     ),
     RequestTopic(
         "governing_law_arbitration",
         _rx(r"준거법|중재|KCAB|상사중재|분쟁\s*해결|집행\s*가능성"),
         _rx(r"준거법|분쟁"),
         _rx(r"중재[^.\n]{0,80}(?:최종|구속력|규칙)"),
+        body_rx_en=_rx(
+            r"governed\s+by[^.\n]{0,80}laws?\s+of"
+            r"|arbitration[^.\n]{0,160}(?:KCAB|Korean\s+Commercial\s+Arbitration"
+            r"|final\s+and\s+binding|seat|Seoul)"
+        ),
+        title_rx_en=_rx(r"Governing\s+Law|Dispute\s+Resolution|Arbitration"),
     ),
     RequestTopic(
         "prevailing_language",
         _rx(r"국문|영문|중문|언어|우선\s*조항|번역"),
         _rx(r"기타|일반|언어"),
         _rx(r"(?:영문|국문|중문)본[^.\n]{0,60}(?:기준|우선)"),
+        body_rx_en=_rx(
+            r"(?:English|Chinese|Korean)\s+(?:version|language)[^.\n]{0,160}"
+            r"(?:prevail|controlling|govern|interpretation|reference)"
+            r"|three\s+versions?[^.\n]{0,120}(?:Chinese|English|Korean)"
+            r"|conflicting\s+wording[^.\n]{0,120}English"
+        ),
+        title_rx_en=_rx(r"Miscellaneous|General|Language"),
     ),
 )
 
@@ -281,24 +344,109 @@ def parse_numbered_requests(text: str) -> list[tuple[int, str]]:
     return out
 
 
-def _find_clauses(topic: RequestTopic, clauses: list[Any] | None) -> list[str]:
-    """그 주제를 규정한 조항들. 제목을 먼저 보고, 없으면 본문을 본다."""
+def _clause_path(c: Any) -> str:
+    """조항이 스스로 아는 표시 경로. 영문은 "Article 5.3", 국문은 "제5조".
+
+    2026-09-21 5차 지시 12항 — 번호 체계는 내부적으로 article/paragraph 로
+    같게 두되, 화면에는 문서 언어에 맞게 돌려준다. 여기서 `제N조` 를 직접
+    만들면 영문 계약에도 한국어 표기가 붙고, 항 단위 정밀도도 잃는다.
+    """
+    path = str(getattr(c, "display_path", "") or "").strip()
+    if path:
+        return path
+    article = str(getattr(c, "article_number", "") or "")
+    return f"제{article}조" if article else ""
+
+
+def _article_path(c: Any) -> str:
+    """항이 아니라 **조** 단위 경로 — 같은 조의 여러 항을 한 번만 세려고 쓴다."""
+    article = str(getattr(c, "article_number", "") or "")
+    if not article:
+        return ""
+    clause_id = str(getattr(c, "clause_id", "") or "")
+    return f"Article {article}" if clause_id.startswith("EN-") else f"제{article}조"
+
+
+def _spread_over_articles(
+    hits: list[tuple[str, str]],
+    spillover: list[tuple[str, str]],
+    limit: int,
+) -> list[str]:
+    """한 조가 답변을 독차지하지 않게, 조를 돌아가며 뽑는다.
+
+    실측: 질문 5(비밀유지기간·손해배상)에 Article 12 의 2·3·4항이 먼저
+    차면서 손해배상을 정한 Article 13 이 통째로 밀려났다. 담당자가 알아야
+    하는 것은 한 조의 세 항이 아니라 **그 쟁점을 정하는 조가 어디어디인가**
+    이므로, 조 단위로 한 항씩 번갈아 채운 뒤 원문 순서로 되돌린다.
+    """
+    order = {path: i for i, (_, path) in enumerate(hits + spillover)}
+    picked: list[str] = []
+    # 주제의 조를 먼저 다 채우고, 자리가 남을 때만 그 밖의 조를 붙인다.
+    for group in (hits, spillover):
+        buckets: dict[str, list[str]] = {}
+        for article, path in group:
+            buckets.setdefault(article, []).append(path)
+        while len(picked) < limit and any(buckets.values()):
+            for paths in buckets.values():
+                if not paths:
+                    continue
+                picked.append(paths.pop(0))
+                if len(picked) >= limit:
+                    break
+    return sorted(picked, key=lambda p: order.get(p, 0))
+
+
+def _find_clauses(
+    topic: RequestTopic, clauses: list[Any] | None, *, limit: int = 3,
+) -> list[str]:
+    """그 주제를 규정한 조항들.
+
+    지시 8항 — exact keyword / semantic topic / legal-effect 세 단계를 모두
+    거친다. 여기서는 (1) 본문이 그 법률효과를 **규정하는 문형**과 맞는지,
+    (2) 아니면 조 제목이 그 주제인지 순으로 본다. 본문 매치가 먼저다 —
+    제목만 맞는 조항은 그 주제를 다룰 뿐 정하지는 않을 수 있다.
+    """
     by_title: list[str] = []
-    by_body: list[str] = []
+    by_body: list[tuple[str, str]] = []
+    #: 본문은 맞지만 그 주제의 조가 아닌 곳 — 뒤로 민다.
+    by_body_offtopic: list[tuple[str, str]] = []
     for c in clauses or []:
-        article = str(getattr(c, "article_number", "") or "")
-        if not article:
+        if not str(getattr(c, "article_number", "") or ""):
             continue
-        path = f"제{article}조"
+        path = _clause_path(c)
+        if not path:
+            continue
         title = str(getattr(c, "title", "") or "")
-        body = str(getattr(c, "text", "") or "")
-        if topic.body_rx.search(body) and path not in by_body:
-            by_body.append(path)
-        elif title and topic.title_rx.search(title) and path not in by_title:
+        # PDF 는 문장을 줄 폭에서 끊는다. 줄바꿈을 그대로 두면 `[^.\n]` 로
+        # 거리를 제한한 문형이 한 문장 안에서도 끊겨 못 찾는다 — 실측:
+        # Article 9.2 의 "retains ownership … before the execution" 이
+        # 줄바꿈 때문에 안 잡혔다. 문장 경계는 마침표로 충분하다.
+        body = re.sub(r"\s*\n\s*", " ", str(getattr(c, "text", "") or ""))
+        body_hit = topic.body_rx.search(body) or (
+            topic.body_rx_en.search(body) if topic.body_rx_en else None
+        )
+        title_hit = title and (
+            topic.title_rx.search(title)
+            or (topic.title_rx_en.search(title) if topic.title_rx_en else None)
+        )
+        if body_hit and path not in by_body:
+            # article_number 는 "12.2" 처럼 항까지 담는다 — 조 단위로 묶는다.
+            article = str(getattr(c, "article_number", "") or "").split(".")[0]
+            (by_body if title_hit else by_body_offtopic).append((article, path))
+        elif title_hit and path not in by_title:
             by_title.append(path)
-    # 본문에서 실제 규정을 찾은 조항이 먼저다 — 제목만 맞는 조항은 보조다.
-    ordered = by_body + [p for p in by_title if p not in by_body]
-    return ordered[:3]
+    # 본문이 그 법률효과를 **정하는** 조항이 하나라도 있으면 그것만 쓴다.
+    # 제목 매치를 섞으면 같은 조의 무관한 항(5.1·5.2·5.4)이 답변에 딸려
+    # 들어와, 담당자가 어느 조항을 보아야 하는지 흐려진다.
+    #
+    # 본문 매치 안에서는 **그 주제의 조에 있는 항**이 먼저다. 실측: 질문 5
+    # (비밀유지기간·손해배상)에 Article 11.2(반환·폐기 후 잔존 백업분에도
+    # 비밀유지의무가 계속된다)가 Article 13.2(손해배상 범위)보다 앞서 들어와
+    # limit 에서 13 이 통째로 밀려났다. 11.2 도 틀린 인용은 아니지만, 담당자가
+    # 먼저 펴 보아야 하는 것은 기간을 정한 12조와 배상을 정한 13조다.
+    if by_body or by_body_offtopic:
+        return _spread_over_articles(by_body, by_body_offtopic, limit)
+    return by_title[:limit]
 
 
 def answer_requests(

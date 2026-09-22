@@ -106,6 +106,10 @@ REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     # 지위를 뒤집은 문장에는 정정 표시를 붙였다 — 결함이 해소되므로 전달한다.
     "REVIEW_FAILED_WRONG_QUOTE_LOCATION",
     "REVIEW_FAILED_PARTY_ROLE_MISMATCH",
+    # [2026-09-21 5차 지시 9·18항] 실재하는 영문 조항을 '없음'으로 판단한
+    # 항목에 근거 조항을 붙여 두었다 — 담당자가 그 조항을 바로 펴 볼 수
+    # 있으므로 결함이 해소된다. 전달을 막지 않는다.
+    "REVIEW_FAILED_ENGLISH_CLAUSE_GROUNDING",
 })
 
 #: 제거·중화가 불가능해 다운로드를 실제로 막아야 하는 상태.
@@ -169,6 +173,7 @@ STATUS_LABELS: dict[str, str] = {
     "REVIEW_FAILED_USER_REQUEST_MAPPING_MISMATCH": "담당자 질문과 다른 내용의 조항이 연결되어 있어 연결을 해제함",
     "REVIEW_FAILED_WRONG_QUOTE_LOCATION": "다른 조항의 문장을 원문으로 표시하여 해당 조항의 문장으로 바로잡음",
     "REVIEW_FAILED_PARTY_ROLE_MISMATCH": "확정된 당사자 지위와 반대로 서술한 문장이 있어 정정 표시함 — 지위 확인 필요",
+    "REVIEW_FAILED_ENGLISH_CLAUSE_GROUNDING": "영문 계약에 실재하는 조항을 '없음'으로 판단한 항목에 근거 조항을 표시함 — 해당 Article 을 확인할 것",
 }
 
 #: 수정문안이 걷어내진 finding 에 남기는 표시. DOCX/PDF 작성기와

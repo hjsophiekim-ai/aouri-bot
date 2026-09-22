@@ -732,6 +732,66 @@ def _parse_kr_article_hierarchy(
     return out
 
 
+#: 영문 조 제목의 모양. 제목은 **부르는 이름**이지 문장이 아니다.
+#: (2026-09-21 5차 지시 2항)
+_RX_EN_SENTENCE_VERB = re.compile(
+    r"\b(?:shall|will|must|may|is|are|has|have|does|do|means|includes?|agrees?"
+    r"|undertakes?|acknowledges?|represents?|warrants?|shall\s+not)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_en_heading(rest: str) -> bool:
+    """`N. <rest>` 의 rest 가 조 제목인가, 항 본문인가."""
+    s = (rest or "").strip()
+    if not s:
+        return False
+    # 제목은 짧다. 한 문장을 다 적으면 제목이 아니다.
+    if len(s) > 80:
+        return False
+    # 제목은 마침표로 끝나지 않는다.
+    if s.endswith((".", ";", ":")):
+        return False
+    # 서술 동사가 있으면 의무를 정하는 문장이다.
+    if _RX_EN_SENTENCE_VERB.search(s):
+        return False
+    # 제목은 단어 수가 적다.
+    if len(s.split()) > 12:
+        return False
+    return True
+
+
+#: 영문 항(項) 마커. "5.3" 형태와 조 안에서 1부터 매기는 "3." 형태를 모두 본다.
+_RX_EN_PLAIN_PARAGRAPH = re.compile(r"^(\d{1,2})\.\s+(\S.*)$")
+#: 호(號) 마커 — (a) / (i) / a) 형태.
+_RX_EN_ITEM = re.compile(r"^\(?([a-z]{1,3}|[ivx]{1,4})\)\s+(\S.*)$")
+
+
+def _parse_en_plain_paragraph_start(line: str) -> tuple[str, str] | None:
+    """조 안에서 1부터 매기는 "3. The Receiving Party may …" 형태의 항."""
+    l = (line or "").strip()
+    if not l:
+        return None
+    m = _RX_EN_PLAIN_PARAGRAPH.match(l)
+    if not m:
+        return None
+    rest = (m.group(2) or "").strip()
+    # 조 제목처럼 생긴 줄은 항이 아니다 — 이미 상위에서 조로 잘렸어야 한다.
+    if _looks_like_en_heading(rest):
+        return None
+    return str(int(m.group(1))), rest
+
+
+def _parse_en_item_start(line: str) -> tuple[str, str] | None:
+    l = (line or "").strip()
+    if not l:
+        return None
+    m = _RX_EN_ITEM.match(l)
+    if not m:
+        return None
+    return (m.group(1) or "").strip(), (m.group(2) or "").strip()
+
+
 def _parse_en_paragraph_start(line: str, article_number: str) -> tuple[str, str] | None:
     """Match an English "N.M " numbered-paragraph marker (e.g. "3.4 If
     Consultant fails...") at the start of a line, only when N equals the
@@ -772,6 +832,12 @@ def _parse_en_article_hierarchy(
     lines = [x for x in body_lines if (x or "").strip()]
     para_blocks = _split_blocks(lines, lambda l: _parse_en_paragraph_start(l, article_number))
     if not para_blocks:
+        # "5.1 / 5.2" 형태가 아니라 조 안에서 1부터 매기는 "1. / 2. / 3."
+        # 형태를 쓰는 계약이 많다(실측: 오킨 영문 NDA 전체). 그 경우에도
+        # Article 5 의 세 번째 항은 **5.3** 이지 Article 3 이 아니다
+        # (2026-09-21 5차 지시 3항).
+        para_blocks = _split_blocks(lines, _parse_en_plain_paragraph_start)
+    if not para_blocks:
         full = _norm_text("\n".join(lines))
         head = _norm_text(title)
         text = _norm_text((head + "\n" + full).strip()) if full else head
@@ -810,7 +876,12 @@ def _parse_en_article_hierarchy(
         out.append(
             ClauseChunk(
                 clause_id=f"{base_clause_id}.{pn}",
-                article_number=f"{article_number}.{pn}",
+                # 조 번호는 조 번호만 담는다. 종전에는 "5.3" 을 통째로 넣어
+                # clause_index 가 숫자만 추려 **제53조** 라는 없는 조를 만들었고,
+                # 그 바람에 영문 계약마다 "조 번호가 연속되지 않습니다(빠진 번호:
+                # 제2조~제9조)" 가 떴다. 항은 paragraph_number 가 들고 있다 —
+                # 국문 파서와 같은 모양이다 (2026-09-21 5차 지시 12항).
+                article_number=article_number,
                 paragraph_number=pn,
                 item_number=None,
                 subitem_number=None,
@@ -895,30 +966,45 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
     if not idxs:
         _english_heavy = sum(1 for ch in (cleaned[:3000]) if "a" <= ch.lower() <= "z") / max(1, min(3000, len(cleaned))) >= 0.20
         if _english_heavy:
+            # ── 제목과 항(項)을 구분한다 (2026-09-21 5차 지시 1·3항) ──────
+            # 종전에는 "N. " 로 시작하는 **모든** 줄을 Article 로 승격했다.
+            # 그래서 영문 NDA 가 이렇게 파싱됐다:
+            #
+            #     5. Confidentiality Obligations        → Article 5   (맞음)
+            #     1. The Receiving Party undertakes …   → Article 1   (5.1 이어야)
+            #     3. The Receiving Party may disclose … → Article 3   (5.3 이어야)
+            #
+            # 같은 번호가 조마다 반복되므로 `.D2/.D3` 중복 id 가 쏟아지고,
+            # 정작 Article 5.3(제3자 제공 허용)은 색인에 존재하지 않게 된다.
+            # 담당자가 "제3자 제공 조항의 적정성" 을 물으면 "해당 조항 없음"
+            # 이 나온다.
+            #
+            # 제목과 항은 문장 모양이 다르다. 제목은 짧고, 마침표로 끝나지
+            # 않으며, 서술 동사가 없다. 항은 완결된 문장이다. 거기에 번호가
+            # **1부터 차례로 올라가는** 줄만 제목으로 인정한다 — 항 번호는
+            # 조마다 1로 되돌아가므로 이 규칙이 둘을 갈라 준다.
+            expected_article = 1
             for i, line in enumerate(lines):
                 l = (line or "").strip()
                 if not l:
                     continue
-                # Accept "N. <any text>" — no length limit so long clause bodies don't prevent detection.
-                # "shall/will/must" etc. are allowed in the title: for English NDA the heading
-                # often IS the first sentence (e.g. "8. For any disputes...").
                 m3 = re.match(r"^(\d{1,2})\.\s+(.+)$", l)
                 if not m3:
                     continue
-                num = m3.group(1)
+                num = int(m3.group(1))
                 rest = (m3.group(2) or "").strip()
-                # Must start with uppercase letter (avoids matching list items like "1. first item")
-                if not re.match(r"^[A-Z]", rest):
+                if not re.match(r"^[A-Z“\"']", rest):
                     continue
-                # Skip lines that are clearly mid-sentence continuations (all lowercase start)
-                # Already handled above. Also skip lines that look like sub-bullets "1. (a)"
                 if re.match(r"^\(\w\)", rest):
                     continue
-                # Require the preceding context is not already inside a numbered section
-                # (simple heuristic: only accept if number is sequential or first occurrence)
+                if num != expected_article:
+                    continue  # 항 번호이거나 본문 중의 숫자다
+                if not _looks_like_en_heading(rest):
+                    continue
                 idxs.append(i)
                 titles[i] = f"{num}. {rest[:120]}"
                 ids[i] = f"EN-{num}"
+                expected_article += 1
 
     # Phase 1-3: bare numbered heading format "1. 제목" / "1) 제목" / "① 제목"
     # (2026-09-04 지시 — 그림닷컴 판매지원 용역계약 실사례) — 제N조/Article N이

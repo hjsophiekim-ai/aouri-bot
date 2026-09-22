@@ -8109,6 +8109,27 @@ def build_clause_level_result(
     except Exception as exc:  # noqa: BLE001 - 검증 실패가 검토를 막지 않는다
         logger.warning("absence verification failed: %s", exc)
 
+    # ── [영문 조항 grounding] (2026-09-21 5차 지시 9·10·11·18항) ────────────
+    # 위 부재 재검증은 한국어 문형 사전으로 돈다. 영문 계약에는 걸리지 않아
+    # Article 5.3 이 버젓이 있는데도 "제3자 제공 조항 없음" 이 나갔다.
+    # 영문 계약이면 보호장치별 존재 여부를 조항 단위로 확정하고(지시 10항),
+    # 실재하는 것을 '없음'이라고 말한 항목에 근거 조항을 붙여
+    # REVIEW_FAILED_ENGLISH_CLAUSE_GROUNDING 을 세운다.
+    try:
+        from runtime.review.english_clause_grounding import (
+            check_english_clause_grounding as _check_en_grounding,
+        )
+        _en_grounding = _check_en_grounding(
+            clauses, clause_results, contract_text=str(text or ""),
+        )
+        if _en_grounding.applied:
+            meta["english_clause_grounding"] = _en_grounding.to_dict()
+        if _en_grounding.status and not meta.get("review_status"):
+            meta["review_status"] = _en_grounding.status
+            meta["review_status_detail"] = _en_grounding.detail
+    except Exception as exc:  # noqa: BLE001 - 검증 실패가 검토를 막지 않는다
+        logger.warning("english clause grounding failed: %s", exc)
+
     # ── [사전질문 ↔ 계약 모델 정합성] (2026-09-21 지시 3항 후단) ────────────
     # 확정된 계약유형에서 성립하지 않는 질문이 담당자에게 나갔는지, 그 유형의
     # 전용 질문이 하나라도 나갔는지 본다. 실측: 인테리어 공사도급계약에

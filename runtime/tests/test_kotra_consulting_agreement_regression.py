@@ -71,8 +71,22 @@ class EnglishSubParagraphSegmentationTest(unittest.TestCase):
 
     def test_article_number_is_bare_digit_not_embedded_label(self) -> None:
         cr = self.by_id.get("EN-3.4")
-        self.assertEqual(cr.article_number, "3.4")
+        # [2026-09-21 5차 지시 12항] 조 번호에는 조 번호만 담는다. 종전에는
+        # "3.4" 를 통째로 넣어 clause_index 가 숫자만 추려 **제34조** 라는
+        # 없는 조를 만들었고, 영문 계약마다 "조 번호가 연속되지 않습니다" 가
+        # 떴다. 항은 국문 파서와 같이 paragraph_number 가 든다.
+        self.assertEqual(cr.article_number, "3")
+        self.assertEqual(cr.paragraph_number, "4")
         self.assertEqual(cr.display_path, "Article 3.4")
+
+    def test_clause_index_does_not_invent_article_34(self) -> None:
+        from runtime.review.clause_index import build_clause_index
+
+        text = FIXTURE_PATH.read_text(encoding="utf-8")
+        index = build_clause_index(text, list(self.by_id.values()))
+        self.assertTrue(index.has_article(3))
+        self.assertTrue(index.has_paragraph(3, 4))
+        self.assertFalse(index.has_article(34))
 
 
 class KotraMonetaryRiskAndLegalEffectRulesTest(unittest.TestCase):

@@ -1,0 +1,181 @@
+MUTUAL NON-DISCLOSURE AGREEMENT
+
+1. Parties
+Party A: Hanwool Living Co., Ltd.
+Address: 00, Dosan-daero, Gangnam-gu, Seoul, Republic of Korea
+Representative: Managing Director, Motion Furniture Division
+Contact: legal@hanwool-living.example
+
+Party B: Beihai Motion Technology Co., Ltd.
+Address: No. 00, Longgang District, Shenzhen, People's Republic of China
+Representative: General Manager, Overseas Business Division
+Contact: overseas@beihai-motion.example
+
+Party A and Party B are collectively referred to as the "Parties" and individually as a "Party".
+
+2. Purpose
+1. The parties intend to engage in technical exchanges, business discussions, sample testing, solution evaluation, and
+preliminary development cooperation concerning motion bed actuators, controllers, and related control software
+(the "Project").
+2. To protect the trade secrets, technical materials, product materials, development materials, and other confidential information
+exchanged in the course of the Project, the parties enter into this Agreement.
+
+3. Definitions
+1. "Disclosing Party" means the party that discloses Confidential Information to the other party during the cooperation under this
+Agreement.
+2. "Receiving Party" means the party that receives, accesses, uses, or keeps the Confidential Information of the Disclosing Party
+under this Agreement.
+3. This Agreement imposes mutual confidentiality obligations on both parties. Unless the context clearly provides otherwise, the
+obligations in this Agreement apply to both Parties equally.
+
+4. Scope of Confidential Information
+1. "Confidential Information" under this Agreement means all information disclosed by one party to the other party in any form,
+whether in writing, orally, electronically, or by demonstration of samples, in connection with the Project.
+2. Confidential Information includes, but is not limited to, drawings, know-how, technical solutions, processes, charts, designs,
+circuit diagrams, firmware, source code, control logic, test data, quality data, cost information, supplier information, customer
+information, business plans, and price conditions.
+3. Confidential Information also includes experience accumulation, technical judgment logic, testing methods, debugging methods,
+and failure analysis methods that are not generally known in the relevant industry.
+4. Information not marked as confidential shall be treated as Confidential Information only where, by its nature or the
+circumstances of disclosure, a reasonable person would understand it to be confidential.
+
+5. Confidentiality Obligations
+1. The Receiving Party undertakes to use the Confidential Information solely for the cooperation purpose set forth in Section 2 of
+this Agreement.
+2. Except as expressly permitted under this Agreement, the Receiving Party shall not disclose, transfer, or provide the Disclosing
+Party's Confidential Information to any third party.
+3. The Receiving Party may disclose Confidential Information, on a need-to-know basis and to the extent necessary for the Project,
+to its officers, employees, affiliates, advisers, and third-party development, testing, or certification companies that are bound by
+confidentiality obligations no less protective than this Agreement, provided that for core technical information designated in
+writing by the Disclosing Party the Receiving Party shall obtain the Disclosing Party's prior written consent before any such
+disclosure.
+4. The Receiving Party shall take reasonable protective measures no less stringent than those used to protect its own similar
+confidential information, and in no event less than a reasonable standard of care.
+5. The Receiving Party shall not use the Disclosing Party's Confidential Information to infringe the Disclosing Party's intellectual
+property rights; independent development by the Receiving Party without use of the Disclosing Party's Confidential Information,
+including cooperation with third parties without use of such Confidential Information, shall not be restricted by this Agreement.
+
+6. Special Protection for Party B SDK, API and Protocol
+1. If Party B provides any SDK, API, Protocol, interface protocol, sample code, development document, or other technical material
+to Party A for the Project, such material constitutes a specially protected technical asset of Party B and requires the prior
+written consent of Party B for any use beyond the Project.
+2. Without Party B's prior written consent, Party A and its affiliates, employees, partners, or third-party development companies
+shall not decompile, disassemble, or reverse engineer such material.
+3. Without Party B's prior written consent, Party A shall not delete, modify, circumvent, or bypass any technical protection
+measure applied to such material.
+4. Party A shall not resell, assign, lease, or lend any SDK, API, Protocol, sample code, development document, or related material.
+5. Party A shall not use the SDK, API, Protocol, or related materials provided by Party B to develop, improve, or perfect any
+competing actuator or controller product.
+6. Party A shall not copy, disseminate, or upload Party B's technical materials to any public network, code platform, sharing
+service, or generative AI service.
+
+7. Third-Party Development and Joint Development
+1. Party A may engage Korean development companies or other third parties for APP, server, algorithm, interface, system
+integration, and certification work in connection with the Project, provided that where such engagement requires access to core
+technical information of Party B, Party A shall obtain Party B's prior written consent.
+2. Party A shall notify Party B in writing in advance of the identity, scope of work, and scope of access of any third party that will
+access Party B's Confidential Information.
+3. Party A shall be responsible for the acts of any third-party development company, advisor, or partner designated or engaged by
+Party A as if they were the acts of Party A.
+4. Each party retains ownership of the technology, know-how, software, algorithms, data, and intellectual property it owned before
+the date of this Agreement or developed independently outside the Project, and nothing in this Agreement transfers such
+ownership to the other party.
+
+8. Use, Copying, and Management of Materials
+1. The Receiving Party may copy Confidential Information only to the extent necessary for the performance of this project. All
+copies remain the property of the Disclosing Party.
+2. The Receiving Party shall establish a reasonable information access authorization management system and restrict access to
+those personnel who require the Confidential Information for the Project.
+3. The Receiving Party shall not upload Confidential Information to any public code repository, public collaboration platform, or
+external generative AI service.
+4. If the Receiving Party discovers any leakage, loss, unauthorized access, or risk of leakage of Confidential Information, it shall
+notify the Disclosing Party in writing without undue delay.
+
+9. Intellectual Property and Ownership
+1. Disclosure of Confidential Information by the Disclosing Party shall not be deemed to transfer, license, or grant to the Receiving
+Party any right in such Confidential Information.
+2. Each party retains ownership of the technology, materials, drawings, code, SDK, API, Protocol, software, algorithms, data, and
+intellectual property that it owned before this Agreement or that it developed independently, and no license is granted by
+implication.
+3. Ownership of any development results, deliverables, improvements, modifications, derivative technology, or interface adaptation
+created in the course of the Project shall be determined by a separate development agreement or other separate written agreement
+to be concluded between the parties, and shall not be determined by this Agreement.
+4. This Agreement does not create any purchase, development, exclusive cooperation, or mass-production obligation. Each party
+remains free to conduct its own research, development, and business activities.
+
+10. Exceptions to Confidential Information
+1. The following information shall not be subject to the confidentiality obligations under this Agreement, provided that the
+Receiving Party bears the burden of proof:
+2. Information that was already publicly known at the time of disclosure;
+3. Information that becomes public other than through a breach of this Agreement by the Receiving Party;
+4. Information that the Receiving Party legally possessed without confidentiality obligations before disclosure by the Disclosing
+Party;
+5. Information lawfully obtained by the Receiving Party from a third party who has the right to disclose such information;
+6. Information independently developed by the Receiving Party without using the Disclosing Party's Confidential Information;
+7. Information that must be disclosed pursuant to the requirements of law, court, governmental authority, or regulatory body.
+
+11. Return and Destruction of Materials
+1. If the cooperation is terminated, the project is canceled, the Disclosing Party makes a written request, or this Agreement is
+terminated, the Receiving Party shall return or destroy the Confidential Information in its possession.
+2. For information that cannot be immediately destroyed due to system backups, compliance retention, or legal requirements, the
+Receiving Party may retain such information for the minimum period required, and the confidentiality obligations under this
+Agreement shall continue to apply to the retained information during that period.
+3. The Disclosing Party has the right to request a written destruction confirmation from the Receiving Party.
+
+12. Term of Confidentiality
+1. This Agreement shall become effective as of the date of signature by both parties.
+2. The confidentiality obligations for general Confidential Information shall remain in effect for five (5) years from the date each
+item of Confidential Information is disclosed.
+3. For information qualifying as a trade secret under applicable law, the confidentiality obligations shall continue for as long as the
+information retains its status as a trade secret.
+4. Even if the cooperation relationship, business contract, development contract, or this Agreement is terminated, the Receiving
+Party shall continue to perform the obligations that by their nature survive termination.
+
+13. Liability for Breach
+1. If the Receiving Party breaches this Agreement and causes the Disclosing Party's Confidential Information to be leaked,
+misappropriated, or used beyond the permitted scope, the Receiving Party shall compensate the Disclosing Party for the resulting
+damage.
+2. Recoverable damages shall be limited to direct damages that have a proximate causal relationship to the breach and are
+reasonably foreseeable, and indirect, special, incidental, and consequential damages shall be excluded.
+3. If the Receiving Party's breach may cause irreparable harm to the Disclosing Party, the Disclosing Party has the right to require
+the Receiving Party to cease the breach and to seek injunctive relief.
+4. If the Receiving Party breaches this Agreement, the Disclosing Party has the right to suspend or terminate relevant technical
+cooperation and the supply of materials.
+
+14. Data Security and Personal Information
+1. If user data, sleep data, health-related data, APP user information, server data, or other personal information is involved during
+the Project, both parties shall comply with the applicable laws of the Republic of Korea and the People's Republic of China
+concerning the protection of personal information.
+2. Without authorization from the data subject and written confirmation by both parties, neither party shall arbitrarily collect, use,
+transfer, or provide such data to any third party.
+3. The parties shall enter into a separate written technical agreement or data processing agreement regarding server construction,
+data storage location, cross-border transfer, and the allocation of roles between controller and processor before any personal
+information is actually processed.
+
+15. Governing Law and Dispute Resolution
+1. The formation, validity, interpretation, and performance of this Agreement shall be governed by the laws of the Republic of
+Korea, without regard to its conflict of laws rules.
+2. Any dispute arising out of or in connection with this Agreement shall first be resolved through good-faith consultation. If not
+resolved within thirty (30) days, the dispute shall be finally settled by arbitration in Seoul under the rules of the Korean
+Commercial Arbitration Board, and the arbitral award shall be final and binding on both parties.
+3. During the dispute resolution period, except for the matters in dispute, the parties shall continue to perform their obligations
+under this Agreement.
+
+16. Miscellaneous
+1. This Agreement constitutes the entire agreement between the parties regarding confidentiality matters and supersedes any
+prior understanding on the same subject.
+2. Any amendment, supplement, or change to this Agreement shall become effective only after it is signed in writing by the
+authorized representatives of both parties.
+3. If any provision of this Agreement is deemed invalid, illegal, or unenforceable, the validity of the remaining provisions shall not
+be affected.
+4. This Agreement shall be prepared and signed in three versions: Chinese, English, and Korean.
+5. If there is any unclear, ambiguous, or conflicting wording or meaning among the Chinese, English, and Korean versions, the
+English version shall prevail for the purpose of interpretation.
+6. This Agreement is executed in two counterparts, with each party holding one counterpart, and each counterpart shall have the
+same legal effect.
+
+IN WITNESS WHEREOF, the parties have executed this Agreement as of the date last written below.
+
+Party A: Hanwool Living Co., Ltd.          Party B: Beihai Motion Technology Co., Ltd.
+Signature: ______________________          Signature: ______________________
+Date: ______________________               Date: ______________________
