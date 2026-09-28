@@ -3874,13 +3874,53 @@ def build_clause_level_result(
                 _construction_role_override["was"], _our_bucket,
             )
 
-    from runtime.review.legal_map_role_override import apply_legal_map_role_override
-    _canonical_profile, party, _role_override_audit = apply_legal_map_role_override(
-        canonical_profile=_canonical_profile,
-        party=party,
-        legal_map_dict=_legal_map.to_dict(),
-        legal_map_source=_legal_map.source,
+    # ── [Employee NDA 거래모델 — 당사자 지위 선확정] (2026-09-28 지시 1항) ───
+    # 임직원 비밀유지계약이면 우리 회사는 사용자(employer), 상대방은 직원
+    # (employee)이다. AI Legal Map 이 이것을 공급자/구매자로 덮어쓰던 것이
+    # 실측됐다(supplier/buyer) — 그러면 공급계약용 판단이 따라 들어온다.
+    # 확정되면 Legal Map 역할 override 를 건너뛴다.
+    _employee_nda_model = None
+    try:
+        from runtime.review.employee_nda_model import (
+            resolve_employee_nda_model as _resolve_employee_nda,
+        )
+        _employee_nda_model = _resolve_employee_nda(
+            contract_text=str(text or ""),
+            user_description=str(review_focus or ""),
+            entity=str(entity or ""),
+            contract_type_code=str(_canonical_profile.contract_type or ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - 거래모델 판정 실패가 검토를 막지 않는다
+        logger.warning("employee nda model failed: %s", exc)
+        _employee_nda_model = None
+    _employee_nda_locked = bool(
+        _employee_nda_model is not None
+        and _employee_nda_model.is_employee_nda and _employee_nda_model.confident
     )
+    if _employee_nda_locked:
+        from runtime.review.party_role import PartyRole as _PartyRoleE
+        party = _PartyRoleE(
+            our_role="employer",
+            counterparty_role="employee",
+            our_label=_employee_nda_model.employer_label or party.our_label,
+            counterparty_label=_employee_nda_model.employee_label or party.counterparty_label,
+            counterparty_is_large_standard_provider=False,
+            signals=list(party.signals) + ["employee_nda_model_role"],
+        )
+        _role_override_audit = {
+            "stage": "legal_map_role_override",
+            "skipped": "employee_nda_model",
+            "our_role": "employer",
+            "counterparty_role": "employee",
+        }
+    else:
+        from runtime.review.legal_map_role_override import apply_legal_map_role_override
+        _canonical_profile, party, _role_override_audit = apply_legal_map_role_override(
+            canonical_profile=_canonical_profile,
+            party=party,
+            legal_map_dict=_legal_map.to_dict(),
+            legal_map_source=_legal_map.source,
+        )
     # ── [Canonical State 확정 — 이후 재추론 금지] (3차 지시 1항) ───────────
     # 여기까지 오면 계약유형(구조 판정으로 화해 완료)과 당사자 지위(Legal Map
     # override 반영 완료)가 정해졌다. 이 시점에 문서계층과 거래구조까지 함께
@@ -3976,6 +4016,44 @@ def build_clause_level_result(
         _canonical_state = _dc_replace2(
             _canonical_state, party_role_direction=_legal_state.our_role_direction,
         )
+
+    # ── [Employee NDA 거래모델] (2026-09-28 지시 1항) ─────────────────────────
+    # 'NDA' 라는 큰 분류 안에서 사업자 간 NDA 와 임직원 비밀유지 서약을 가른다.
+    # 확정되면 canonical_state 에 당사자 명칭·관계를 싣고, 이후 필수 검토항목·
+    # 사용자 요청 답변은 이 모델로만 만든다. 사전질문 생성기도 같은 함수를
+    # 부르므로 질문과 리포트가 다른 계약을 말하지 않는다. 확신하지 못하면
+    # 아무것도 바꾸지 않는다.
+    # 모델은 역할 override 앞에서 이미 확정했다. 유형이 비밀유지 계열에서
+    # 벗어났으면(legal_state 교정) 적용하지 않는다.
+    if _employee_nda_locked and str(_canonical_state.contract_type or "") != "nda_confidentiality":
+        _employee_nda_locked = False
+        _employee_nda_model = None
+    try:
+        if _employee_nda_locked and _employee_nda_model is not None:
+            from dataclasses import replace as _dc_replace3
+            _canonical_state = _dc_replace3(
+                _canonical_state,
+                contract_type_label=_employee_nda_model.label,
+                party_role="employer",
+                counterparty_role="employee",
+                party_label=_employee_nda_model.employer_label or _canonical_state.party_label,
+                counterparty_label=(
+                    _employee_nda_model.employee_label or _canonical_state.counterparty_label
+                ),
+                governing_transaction={
+                    **_canonical_state.governing_transaction,
+                    "subtype": _employee_nda_model.subtype,
+                    "relationship": _employee_nda_model.relationship,
+                    "our_side": _employee_nda_model.our_side,
+                    "counterparty_role": _employee_nda_model.counterparty_role,
+                    "governing_law": _employee_nda_model.governing_law,
+                    "personal_data_structure": _employee_nda_model.personal_data_structure,
+                },
+                audit={**_canonical_state.audit, "employee_nda_model": _employee_nda_model.reason},
+            )
+    except Exception as exc:  # noqa: BLE001 - 거래모델 판정 실패가 검토를 막지 않는다
+        logger.warning("employee nda model failed: %s", exc)
+        _employee_nda_model = None
 
     logger.info(
         "canonical state: type=%s family=%s our=%s(%s) counterparty=%s txn=%s",
@@ -6902,8 +6980,14 @@ def build_clause_level_result(
         rule_confidence=_type_resolution.confidence,
         rule_uncertain=bool(_type_resolution.uncertain),
         ai_type_text=str((_legal_map.fields or {}).get("contract_purpose") or ""),
-        ai_role_text=str((_legal_map.fields or {}).get("our_role_direction") or ""),
-        rule_role=str(getattr(party, "our_role", "") or ""),
+        # 임직원 비밀유지계약의 지위는 고용관계(사용자/직원)로 확정된다 — 급부
+        # 제공자/수령자 축으로 다시 비교하면 존재하지 않는 충돌이 생긴다
+        # (2026-09-28 실측: REVIEW_FAILED_CANONICAL_ROLE_CONFLICT).
+        ai_role_text=(
+            "" if _employee_nda_locked
+            else str((_legal_map.fields or {}).get("our_role_direction") or "")
+        ),
+        rule_role="" if _employee_nda_locked else str(getattr(party, "our_role", "") or ""),
         declared_type_code="",
     )
 
@@ -7331,6 +7415,8 @@ def build_clause_level_result(
     meta["statute_linkage"] = _statute_linkage
     # canonical state 는 리포트·UI·DOCX·PDF 가 모두 여기서 읽는다.
     meta["canonical_state"] = _canonical_state.to_dict()
+    if _employee_nda_model is not None and _employee_nda_model.is_employee_nda:
+        meta["employee_nda_model"] = _employee_nda_model.to_dict()
     # ── [Contract Model — 7개 축] (2026-09-21 지시 1항) ──────────────────────
     # 이미 확정된 값을 지시가 요구한 모양으로 모아 하나의 기록으로 남긴다.
     # 여기서 새로 분류하지 않는다 — 판단 주체를 늘리면 어긋날 자리가 는다.
@@ -7570,16 +7656,28 @@ def build_clause_level_result(
     # 필요/별도계약 필요 중 하나로 반드시 답변되어야 한다. 하나라도 답변되지
     # 않으면 REVIEW_FAILED_USER_SCOPE_NOT_COVERED.
     from runtime.review.mandatory_review_issues import (
-        answer_mandatory_review_issues,
         check_all_issues_answered,
-        derive_mandatory_review_issues,
         REVIEW_FAILED_USER_SCOPE_NOT_COVERED,
     )
-    _mandatory_issues = derive_mandatory_review_issues(
-        contract_type_code=_scope_type_code, review_focus=review_focus,
-    )
-    _mandatory_issue_answers = answer_mandatory_review_issues(
-        _mandatory_issues, clause_results=clause_results, full_text=str(text or ""),
+    # 원문을 넘겨 기본 이슈맵의 `requires` 를 확인한다 — 기술협업 NDA 의
+    # 사용자 요청(AI 학습 제한·음성·수면·건강 정보·Foreground IP)이 모든 NDA 의
+    # '사용자 검토항목' 으로 나가던 계약 간 오염(2026-09-28 실측)의 원인이다.
+    # 임직원 비밀유지계약은 전용 이슈맵으로 답하고, 사용자 요청(관할 고용법
+    # 적법성·계열사 보호)은 조항 검색이 아니라 판단으로 직접 답한다. 다운로드
+    # 경로도 같은 함수를 부른다.
+    from runtime.review.employee_nda_review import compute_mandatory_review_answers
+    _mandatory_issue_answers, _employee_nda_review = compute_mandatory_review_answers(
+        contract_type_code=_scope_type_code,
+        review_focus=review_focus,
+        contract_text=str(text or ""),
+        clauses=clauses,
+        clause_results=clause_results,
+        entity=str(entity or ""),
+        model=(
+            _employee_nda_model
+            if (_employee_nda_model is not None and _employee_nda_model.is_employee_nda)
+            else None
+        ),
     )
 
     # ── [User Review Request 의미 파싱] (2026-09-08 지시, 자유서술 보완) ─────
@@ -7617,6 +7715,11 @@ def build_clause_level_result(
     # 사용자가 직접 요청한 쟁점은 계약유형 기본 이슈맵의 같은 항목보다
     # 우선한다 — 같은 쟁점을 아우리봇의 문구와 사용자의 문구로 두 번
     # 보고하지 않도록 기본 이슈맵 쪽에 표시만 남긴다(판단 자체는 유지).
+    if _employee_nda_review is not None:
+        from runtime.review.employee_nda_review import apply_to_user_review_coverage
+        _user_request_coverage = apply_to_user_review_coverage(
+            _user_request_coverage, _employee_nda_review["user_requests"],
+        )
     _superseded = superseded_catalog_codes(_user_request_parse.issues)
     for _a in _mandatory_issue_answers:
         if str(_a.get("code") or "") in _superseded:
@@ -7624,6 +7727,12 @@ def build_clause_level_result(
 
     meta["mandatory_review_issues"] = _mandatory_issue_answers
     meta["user_review_request_parse"] = _user_request_parse.to_dict()
+    if _employee_nda_review is not None:
+        from runtime.review.employee_nda_review import all_requests_answered_by_review
+        if all_requests_answered_by_review(_user_request_coverage):
+            # 요청마다 판단형 직접 답을 냈으므로 "의미 분석하지 못했다" 는
+            # 안내는 사실이 아니다. 파싱 기록 자체(status/degraded)는 남긴다.
+            meta["user_review_request_parse"]["degraded_notice"] = ""
     meta["user_review_coverage"] = _user_request_coverage
     # legal_state 의 11번 축(user_review_scope) 완성 — 사용자가 **실제로**
     # 요청한 쟁점만 담는다(지시 항목 4).
@@ -7969,13 +8078,60 @@ def build_clause_level_result(
     except Exception as exc:  # noqa: BLE001 - 판단 실패가 검토를 막지 않는다
         logger.warning("overcorrection guard failed: %s", exc)
 
+    # ── [Employee NDA — 실질 공백 최소수정 + 최종 감사] (2026-09-28 2차 지시) ──
+    # 모든 finding(룰·AI·사내변호사 패스)이 만들어진 **뒤**에 건다(v11 교훈 5 —
+    # 앞쪽에서만 걸면 뒤에 생긴 논점이 빠져나간다).
+    #   1) 계열사·강행법 carve-out·직원 개인정보의 실질 공백에만 최소 추가문안
+    #   2) 다른 계약유형 축·다른 지위로 부른 finding 제거
+    #   3) 이미 보호된 축을 다시 고치자는 finding → KEEP_EXISTING_CLAUSE
+    #   4) 원문과 같은 제안 → REVIEW_FAILED_NO_OP_REDLINE 기록 후 KEEP
+    _employee_nda_gate: dict[str, Any] = {"applied": False}
+    if _employee_nda_locked and _employee_nda_model is not None:
+        try:
+            from runtime.review.checklists.employee_nda import (
+                apply_employee_nda_final_gate as _apply_enda_gate,
+                check_party_roles as _check_enda_roles,
+                run_employee_nda_checklist as _run_enda_checklist,
+            )
+            _enda_items = _run_enda_checklist(
+                _employee_nda_model, contract_text=str(text or ""), clauses=clauses,
+                review_focus=str(review_focus or ""),
+            )
+            _enda_existing = {str(c.get("clause_id") or "") for c in clause_results if isinstance(c, dict)}
+            for _it in _enda_items:
+                if str(_it.get("clause_id") or "") not in _enda_existing:
+                    clause_results.append(_it)
+            _employee_nda_gate = _apply_enda_gate(
+                clause_results, model=_employee_nda_model,
+                contract_text=str(text or ""), clauses=clauses,
+            )
+            _employee_nda_gate["checklist"] = [str(i.get("clause_id")) for i in _enda_items]
+            from runtime.review.checklists.employee_nda import (
+                build_employee_nda_legal_map as _build_enda_map,
+            )
+            meta["employee_nda_legal_map"] = _build_enda_map(
+                _employee_nda_model, contract_text=str(text or ""), clauses=clauses,
+            )
+            _enda_roles = _check_enda_roles(_canonical_state.to_dict(), _employee_nda_model)
+            _employee_nda_gate["party_roles"] = _enda_roles
+            if _enda_roles.get("status") and not meta.get("review_status"):
+                meta["review_status"] = _enda_roles["status"]
+                meta["review_status_detail"] = _enda_roles.get("detail") or ""
+            if _employee_nda_gate.get("no_op"):
+                # 제거(KEEP 전환)에 성공한 no-op 은 전체 검토를 실패로 올리지 않는다
+                # (v7 원칙 — 삭제가 곧 시정). 기록만 남긴다.
+                logger.info("employee nda no-op redlines kept: %s", _employee_nda_gate["no_op"])
+        except Exception as exc:  # noqa: BLE001 - 감사 실패가 검토를 막지 않는다
+            logger.warning("employee nda final gate failed: %s", exc)
+    meta["employee_nda_gate"] = _employee_nda_gate
+
     # 두 게이트가 등급을 내렸으면 UI/DOCX 공유 원본을 다시 만든다 — 다시
     # 만들지 않으면 화면에는 없는 항목이 문서에는 남는다(실측: 광고 파이프라인
     # 회귀 테스트가 "최종 결과에 있는데 clause_results 에 없는 finding" 으로
     # 잡아냈다).
     if (meta.get("prior_revision_keep") or {}).get("kept") or (
         meta.get("overcorrection_guard") or {}
-    ).get("withdrawn"):
+    ).get("withdrawn") or bool(_employee_nda_gate.get("applied")):
         try:
             from runtime.review.output_filter import build_final_findings as _bff_keep2
             meta["final_findings"] = _bff_keep2(
@@ -8152,6 +8308,27 @@ def build_clause_level_result(
             meta["review_status_detail"] = _question_fit.detail
     except Exception as exc:  # noqa: BLE001 - 점검 실패가 검토를 막지 않는다
         logger.warning("question model fit check failed: %s", exc)
+
+    # ── [사전질문 계약 간 오염 hard gate] (2026-09-28 지시 8항) ─────────────
+    # 비밀유지 계열에서 원문 근거 없는 계약단가·부가가치세·특수관계인·경영간섭·
+    # 공사대금·검수·광고매체·위탁수수료 질문이 **실제로 나갔는지** 본다. 생성
+    # 단계에서 제거에 성공했으면 여기서 걸릴 것이 없다.
+    try:
+        from runtime.questions.employee_nda_questions import (
+            check_question_contamination as _check_q_contamination,
+        )
+        _q_contamination = _check_q_contamination(
+            asked_questions,
+            contract_text=str(text or ""),
+            contract_type_code=str(_canonical_state.contract_type or ""),
+            employee_nda=bool(_employee_nda_model and _employee_nda_model.is_employee_nda),
+        )
+        meta["question_contamination_gate"] = _q_contamination
+        if _q_contamination.get("status") and not meta.get("review_status"):
+            meta["review_status"] = _q_contamination["status"]
+            meta["review_status_detail"] = _q_contamination.get("detail") or ""
+    except Exception as exc:  # noqa: BLE001 - 점검 실패가 검토를 막지 않는다
+        logger.warning("question contamination check failed: %s", exc)
 
     # ── [사용자 요청 ↔ 관련조항 의미 일치] (2026-09-21 지시 12항) ───────────
     # "검수 질문에 안전·산재 finding 을 연결하는 식의 오매핑 금지." 실측:

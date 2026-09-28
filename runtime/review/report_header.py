@@ -120,7 +120,14 @@ def build_section1_rows(
     _our_role = str(cs.get("party_label") or "").strip() or our_role_label(
         format_val(dp.get("our_legal_role")))
     rows.append(HeaderRow(f"우리 측 지위: {_our_role}"))
+    _gt = cs.get("governing_transaction") if isinstance(cs.get("governing_transaction"), dict) else {}
+    # 임직원 비밀유지계약 — 사업자 간 NDA 의 구조 필드(Background/Foreground IP,
+    # 허용 수령자, 개인정보 처리 '별도 계약')는 이 계약에 성립하지 않는다
+    # (2026-09-28 실측: 직원 서약서 리포트 상단에 그대로 나갔다).
+    _employee_nda = str(_gt.get("subtype") or "") == "employee_nda"
     _counterparty = format_val(dp.get("counterparty"))
+    if _employee_nda and str(_counterparty or "").strip() in ("", "상대방", "미확정", "미상"):
+        _counterparty = str(cs.get("counterparty_label") or "") or _counterparty
     rows.append(HeaderRow(f"상대방: {_counterparty}"))
     _type_label = str(cs.get("contract_type_label") or "").strip() or contract_type_label(
         format_val(dp.get("contract_type") or contract_type))
@@ -136,10 +143,23 @@ def build_section1_rows(
         or contract_type_code
         or str(dp.get("contract_type") or contract_type or "")
     )
-    for r in _structure_rows(struct_code, dp, include_missing=True):
-        if r["key"] in ("our_party", "counterparty", "contract_type"):
-            continue  # 위에서 이미 출력했다
-        rows.append(HeaderRow(f"{r['label']}: {r['value']}", is_high_risk=bool(r["is_high_risk"])))
+    if _employee_nda:
+        from runtime.review.employee_nda_model import PD_LABELS as _PD_LABELS
+
+        _rel = {"employer_employee": "사용자(회사) – 직원(고용관계)"}.get(
+            str(_gt.get("relationship") or ""), str(_gt.get("relationship") or "")
+        )
+        if _rel:
+            rows.append(HeaderRow(f"당사자 관계: {_rel}"))
+        rows.append(HeaderRow(f"준거법: {_gt.get('governing_law') or '미기재 — 근무지 관할 확인 필요'}"))
+        _pd = _PD_LABELS.get(str(_gt.get("personal_data_structure") or ""), "")
+        if _pd:
+            rows.append(HeaderRow(f"개인정보 취급 구조: {_pd}"))
+    else:
+        for r in _structure_rows(struct_code, dp, include_missing=True):
+            if r["key"] in ("our_party", "counterparty", "contract_type"):
+                continue  # 위에서 이미 출력했다
+            rows.append(HeaderRow(f"{r['label']}: {r['value']}", is_high_risk=bool(r["is_high_risk"])))
 
     conf = dp.get("confidence")
     if conf is not None:
@@ -148,9 +168,11 @@ def build_section1_rows(
         except (TypeError, ValueError):
             pass
 
+    # 직원 서약서는 사용자(회사)가 직원에게 받는 문서다 — 상대방 양식이 아니다.
     rows.append(HeaderRow(
         "고객사(상대방) 양식 여부: "
-        + ("고객사(상대방) 양식" if is_counterparty_form else "당사 표준 양식")
+        + ("당사 양식(사용자가 직원에게 받는 서약서)" if _employee_nda
+           else ("고객사(상대방) 양식" if is_counterparty_form else "당사 표준 양식"))
     ))
 
     approval_count = sum(1 for i in (high_issues or []) if _issue_attr(i, "approval_required") not in ("", "False", "0"))

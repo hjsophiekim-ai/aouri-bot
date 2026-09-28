@@ -784,7 +784,7 @@ def assess_statutes(
     `transaction_type` 은 `legal_state` 가 확정한 거래 원형이다. 있으면
     텍스트 휴리스틱보다 우선한다 — 같은 판단을 두 번 하지 않기 위함이다.
     """
-    return [
+    decisions = [
         assess_subcontract_act(
             entity=entity, text=text, contract_type_code=contract_type_code,
             construction_model=construction_model,
@@ -799,6 +799,59 @@ def assess_statutes(
         assess_large_retail_act(text=text),
         assess_advertising_act(text=text),
     ]
+    return _settle_for_employee_nda(decisions, entity=entity, text=text, contract_type_code=contract_type_code)
+
+
+def _settle_for_employee_nda(
+    decisions: list[StatuteDecision], *, entity: str, text: str, contract_type_code: str,
+) -> list[StatuteDecision]:
+    """임직원 비밀유지계약이면 사업자 간 위탁거래 법률의 판단을 확정한다.
+
+    직원 서약서에는 위탁 대상 업무가 없으므로, 하도급법 판단이 '위탁 업무를
+    특정하지 못해 사실확인 필요' 로 떨어졌다(2026-09-28 실측). 그것은 사실이
+    부족해서가 아니라 **위탁관계 자체가 없기** 때문이다.
+    """
+    try:
+        from runtime.review.employee_nda_model import (
+            PD_EMPLOYEE_INTERNAL,
+            resolve_employee_nda_model,
+        )
+
+        model = resolve_employee_nda_model(
+            contract_text=str(text or ""), entity=str(entity or ""),
+            contract_type_code=str(contract_type_code or ""),
+        )
+    except Exception:  # noqa: BLE001
+        return decisions
+    if not (model.is_employee_nda and model.confident):
+        return decisions
+    out: list[StatuteDecision] = []
+    for d in decisions:
+        if d.statute == "하도급법":
+            d = StatuteDecision(
+                statute="하도급법",
+                conclusion=CONCLUSION_NOT_APPLICABLE,
+                reason=(
+                    "사용자(회사)와 직원 사이의 비밀유지 서약으로, 사업자가 다른 사업자에게 제조·수리·"
+                    "건설·용역을 위탁하는 거래가 아닙니다(법 제2조). 하도급법이 적용되지 않습니다."
+                ),
+                disabled_topics=list(SUBCONTRACT_ACT_TOPICS),
+            )
+        elif d.statute == "개인정보보호법" and model.personal_data_structure == PD_EMPLOYEE_INTERNAL:
+            d = StatuteDecision(
+                statute=d.statute,
+                conclusion=d.conclusion,
+                reason=(
+                    "직원이 사용자 내부에서 업무상 개인정보에 접근하는 구조입니다(처리위탁·제3자 제공 아님). "
+                    "이 서약서로 개인정보의 위탁·제공 관계가 새로 생기지 않으며, 직원의 접근통제·목적 외 "
+                    "이용 금지·보안의무는 필수 검토항목에서 확인합니다."
+                    + (f" 준거법은 {model.governing_law}입니다." if model.governing_law else "")
+                ),
+                disabled_topics=list(d.disabled_topics),
+                facts_needed=list(d.facts_needed),
+            )
+        out.append(d)
+    return out
 
 
 def blocked_topics(decisions: list[StatuteDecision]) -> list[str]:

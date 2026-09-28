@@ -239,13 +239,35 @@ def build_legal_review_pdf(
         _body(pdf, "\n".join(_rows))
 
     # 사용자 검토항목 답변 (2026-09-08 지시 항목 2) — DOCX의 0-2절과 동일 내용.
+    # 담당자가 직접 요청한 항목과 계약유형 기본 항목을 나눠 적는다(2026-09-28).
     if mandatory_review_issues:
         _heading(pdf, "0-2. 사용자 검토항목 답변")
-        _issue_rows = [
-            f"- {str(a.get('title') or a.get('code') or '')}: {str(a.get('verdict') or '미답변')}"
-            for a in mandatory_review_issues if isinstance(a, dict)
-        ]
-        _body(pdf, "\n".join(_issue_rows))
+
+        def _pdf_issue_rows(rows: list[dict]) -> list[str]:
+            out: list[str] = []
+            for a in rows:
+                line = f"- {str(a.get('title') or a.get('code') or '')}: {str(a.get('verdict') or '미답변')}"
+                _paths = [str(x) for x in (a.get("evidence_clause_paths") or []) if str(x).strip()]
+                if _paths:
+                    line += "\n  근거 조항: " + ", ".join(_paths)
+                if str(a.get("direct_answer") or "").strip():
+                    line += "\n  판단: " + str(a["direct_answer"])
+                for _fc in a.get("fix_clauses") or []:
+                    if str(_fc).strip():
+                        line += "\n  추가 문안: " + str(_fc)
+                out.append(line)
+            return out
+
+        _all_issue_rows = [a for a in mandatory_review_issues if isinstance(a, dict)]
+        _user_issue_rows = [a for a in _all_issue_rows if str(a.get("source") or "") == "user_request"]
+        _default_issue_rows = [a for a in _all_issue_rows if str(a.get("source") or "") != "user_request"]
+        _body(pdf, "\n".join(_pdf_issue_rows(_user_issue_rows)) or "담당자가 별도로 요청한 검토항목이 없습니다.")
+        if _default_issue_rows:
+            _body(
+                pdf,
+                "계약유형 기본 검토항목 (담당자 요청이 아니라, 이 계약유형에서 반드시 확인하는 항목)\n"
+                + "\n".join(_pdf_issue_rows(_default_issue_rows)),
+            )
 
     # 사용자 요청사항 검토 결과 (2026-09-08 지시 항목 7) — DOCX의 0-3절과 동일.
     if user_review_coverage:
@@ -264,6 +286,9 @@ def build_legal_review_pdf(
                 f"  판단: {str(r.get('review_status') or '미답변')}"
                 f" / 수정 필요 여부: {'예' if r.get('needs_revision') else '아니오'}\n"
                 f"  결론: {str(r.get('conclusion') or '')}"
+                + "".join(
+                    f"\n  추가 문안: {str(pc)}" for pc in (r.get("proposed_clauses") or []) if str(pc).strip()
+                )
             )
         _body(pdf, "\n\n".join(_cov_rows))
 

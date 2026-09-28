@@ -2690,17 +2690,24 @@ def create_handler(service: RuleQueryService):
                     # 검증한다.
                     from runtime.review.mandatory_review_issues import (
                         REVIEW_FAILED_USER_SCOPE_NOT_COVERED as _USER_SCOPE_FAIL,
-                        answer_mandatory_review_issues as _answer_issues_docx,
                         check_all_issues_answered as _check_issues_docx,
-                        derive_mandatory_review_issues as _derive_issues_docx,
                     )
-                    _issue_answers_docx = _answer_issues_docx(
-                        _derive_issues_docx(
-                            contract_type_code=_ct_code,
-                            review_focus=(review_focus if isinstance(review_focus, str) else None),
-                        ),
+                    # 검토 파이프라인과 **같은 함수**로 만든다. 종전에는 이 경로가
+                    # 원문·거래모델 없이 이슈맵을 다시 만들어, 검토에서 걸러낸
+                    # 다른 NDA 의 요청사항(AI 학습 제한·음성·수면·건강 정보 등)이
+                    # 수정본 워드파일의 0-2절에 다시 나갔다(2026-09-28 실측).
+                    from runtime.review.employee_nda_review import (
+                        all_requests_answered_by_review as _all_answered_docx,
+                        apply_to_user_review_coverage as _apply_enda_coverage_docx,
+                        compute_mandatory_review_answers as _compute_issue_answers_docx,
+                    )
+                    _issue_answers_docx, _enda_review_docx = _compute_issue_answers_docx(
+                        contract_type_code=_ct_code,
+                        review_focus=(review_focus if isinstance(review_focus, str) else None),
+                        contract_text=str(text or ""),
+                        clauses=original_clauses,
                         clause_results=_all_results,
-                        full_text=str(text or ""),
+                        entity=str(entity or ""),
                     )
                     # [사용자 자유서술 요청 coverage, 2026-09-08 지시]
                     # 최초 검토에서 이미 의미 파싱해 둔 쟁점을 복원해, 이
@@ -2728,9 +2735,15 @@ def create_handler(service: RuleQueryService):
                         # 사용자 법률 질문의 답으로 그대로 쓴다(2026-09-10).
                         statute_decisions=[d.to_dict() for d in _statute_decisions_docx],
                     )
+                    if _enda_review_docx is not None:
+                        _user_coverage_docx = _apply_enda_coverage_docx(
+                            _user_coverage_docx, _enda_review_docx["user_requests"],
+                        )
                     _user_parse_notice_docx = str(
                         (_user_parse_meta_docx or {}).get("degraded_notice") or ""
                     )
+                    if _all_answered_docx(_user_coverage_docx):
+                        _user_parse_notice_docx = ""
                     _unanswered_issues_docx = (
                         _check_issues_docx(_issue_answers_docx)
                         + _check_user_coverage_docx(_user_coverage_docx)
@@ -3280,6 +3293,15 @@ def create_handler(service: RuleQueryService):
             except Exception as exc:
                 _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {"error": sanitize_error_message(str(exc))})
                 return
+            # 유형 기반 질문 게이트는 canonical 유형으로 부른다(v17 원칙) — 방금
+            # 돌린 검토가 확정한 값이 있으면 분류기 코드보다 그것이 먼저다.
+            _cs_for_q = (
+                clause_bundle.meta.get("canonical_state")
+                if isinstance(clause_bundle.meta, dict) else None
+            )
+            if isinstance(_cs_for_q, dict) and str(_cs_for_q.get("contract_type") or "").strip():
+                _canonical_type_code = str(_cs_for_q["contract_type"])
+            _question_gate: dict[str, Any] = {}
             try:
                 questions = generate_questions(
                     str(entity),
@@ -3291,6 +3313,7 @@ def create_handler(service: RuleQueryService):
                     max_questions=5,
                     review_focus=(review_focus if isinstance(review_focus, str) else None),
                     contract_type_code=_canonical_type_code,
+                    gate_report=_question_gate,
                     question_plan=_build_question_plan(
                         entity=entity, contract_type=contract_type, text=text,
                         review_focus=review_focus, max_questions=5,
@@ -3349,6 +3372,27 @@ def create_handler(service: RuleQueryService):
                 except Exception:
                     pass
             if isinstance(q_items, list):
+                # AI 가 문장을 다듬은 뒤에도 거래모델 게이트를 다시 건다 —
+                # 확정된 모델을 뒤의 단계가 뒤집지 못하게 한다(2026-09-28 지시).
+                try:
+                    from runtime.questions.employee_nda_questions import filter_question_dicts
+                    from runtime.review.employee_nda_model import resolve_employee_nda_model
+
+                    q_items, _post_rejected = filter_question_dicts(
+                        q_items,
+                        contract_text=str(text or ""),
+                        contract_type_code=_canonical_type_code,
+                        model=resolve_employee_nda_model(
+                            contract_text=str(text or ""),
+                            user_description=str(review_focus or ""),
+                            entity=str(entity or ""),
+                            contract_type_code=_canonical_type_code,
+                        ),
+                    )
+                    if _post_rejected:
+                        _question_gate.setdefault("post_polish_rejected", []).extend(_post_rejected)
+                except Exception:
+                    pass
                 q_items = q_items[:5]
             try:
                 session_doc = create_text_session(
@@ -3374,6 +3418,7 @@ def create_handler(service: RuleQueryService):
                     "detected_rule_ids": detected_rule_ids,
                     "count": len(q_items) if isinstance(q_items, list) else 0,
                     "questions": q_items,
+                    "question_gate": _question_gate,
                     "law_search": law_search,
                     "ai": ai_meta,
                 },

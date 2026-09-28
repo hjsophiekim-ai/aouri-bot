@@ -112,6 +112,11 @@ def create_session(
     detected_ids = [r.get("rule_id") for r in pre.get("matched_rules", []) if isinstance(r.get("rule_id"), str)]
     _detailed_profile = bundle.meta.get("detailed_contract_profile") if isinstance(bundle.meta, dict) else None
     _canonical_type_code = str(_detailed_profile.get("contract_type") or "") if isinstance(_detailed_profile, dict) else ""
+    # 유형 기반 질문 게이트는 canonical 유형으로 부른다(v17 원칙).
+    _cs = bundle.meta.get("canonical_state") if isinstance(bundle.meta, dict) else None
+    if isinstance(_cs, dict) and str(_cs.get("contract_type") or "").strip():
+        _canonical_type_code = str(_cs["contract_type"])
+    _question_gate: dict[str, Any] = {}
     qs = generate_questions(
         entity=entity,
         contract_type=contract_type,
@@ -122,6 +127,7 @@ def create_session(
         max_questions=5,
         review_focus=review_focus,
         contract_type_code=_canonical_type_code,
+        gate_report=_question_gate,
     )
 
     now = _utc_now_iso()
@@ -138,6 +144,7 @@ def create_session(
         "classification": dict(classification),
         "detected_rule_ids": detected_ids,
         "questions": [question_to_dict(q) for q in qs],
+        "question_gate": _question_gate,
         "answers": {},
         "review_result": None,
         "original_clauses": original_clauses,

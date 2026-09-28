@@ -89,6 +89,9 @@ PARSE_STATUS_NO_AI = "no_ai_fallback_keyword"
 PARSE_STATUS_AI_FAILED = "ai_call_failed_fallback_keyword"
 PARSE_STATUS_EMPTY = "no_user_request"
 
+#: `questions/storage._merge_review_focus_with_answers` 가 붙이는 답변 블록 머리말.
+ANSWER_BLOCK_MARKER = "[사용자 확인 답변]"
+
 DEGRADED_NOTICE = "사용자 자유서술 요청 일부를 의미 분석하지 못했습니다"
 
 _RX_CLAUSE_CITATION = re.compile(
@@ -359,7 +362,11 @@ def parse_user_review_request(
     ai_temperature: float | None = None,
 ) -> UserRequestParseResult:
     """자유서술 검토요청을 구조화된 쟁점 목록으로 변환한다."""
-    focus = str(review_focus or "").strip()
+    # 사전질문 답변 블록은 **요청이 아니라 사실**이다. `storage` 가 답변을
+    # review_focus 뒤에 붙이므로, 떼지 않으면 "[사용자 확인 답변]" 머리말과 답변
+    # 한 줄 한 줄이 새 검토요청으로 세어져 '사실관계 추가확인' 행이 생긴다
+    # (2026-09-28 실측). 답변은 거래모델·AI 검토 프롬프트가 따로 읽는다.
+    focus = str(review_focus or "").split(ANSWER_BLOCK_MARKER, 1)[0].strip()
     if not focus:
         return UserRequestParseResult(issues=[], status=PARSE_STATUS_EMPTY, degraded=False)
 

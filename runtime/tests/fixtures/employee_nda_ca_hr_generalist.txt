@@ -1,0 +1,29 @@
+EMPLOYEE CONFIDENTIALITY AGREEMENT
+
+This Employee Confidentiality Agreement ("Agreement") is made as of [DATE] by and between SIDIZ America, Inc., a California corporation (the "Company"), and [NAME] ("Employee"), who is employed by the Company in the position of HR Generalist.
+
+Recitals. In the course of Employee's employment, Employee will have access to personnel files, compensation data, benefits enrollment records, and other confidential information of the Company. In consideration of Employee's employment with the Company, the parties agree as follows.
+
+1. Confidential Information
+"Confidential Information" means all non-public information of the Company that Employee receives during employment, including personnel records, payroll and compensation data, employee medical leave and benefits information, recruiting pipelines, and customer lists.
+
+2. Obligations
+Employee will hold Confidential Information in strict confidence, will access it only to the extent necessary for Employee's job duties, and will not disclose it to any person or entity outside the Company without written authorization.
+
+3. Exceptions
+Confidential Information does not include information that is publicly available through no fault of Employee or that Employee independently developed without use of Confidential Information.
+
+4. Permitted Disclosures
+Nothing in this Agreement prevents Employee from making a disclosure required by law or court order, or from reporting a possible violation of law to a government agency.
+
+5. Return of Materials
+Upon termination of employment, Employee will return all Company materials and permanently delete any copies from personal devices.
+
+6. Term
+Employee's obligations continue during employment and survive termination of employment for so long as the information remains confidential.
+
+7. Governing Law
+This Agreement is governed by the laws of the State of California.
+
+EMPLOYEE                                SIDIZ AMERICA, INC.
+Signature: ______________               Signature: ______________

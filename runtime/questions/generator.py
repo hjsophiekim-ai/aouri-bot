@@ -241,6 +241,7 @@ def generate_questions(
     contract_type_code: str = "",
     question_plan: ContractQuestionPlan | None = None,
     transaction_type: str = "",
+    gate_report: dict[str, Any] | None = None,
 ) -> list[Question]:
     """Public entry point. Always leads with the classification-confirmation
     questions (Q-TYPE-001/Q-ROLE-001) when auto-classification confidence is
@@ -433,6 +434,43 @@ def generate_questions(
                     ]
                     if len(out) > max_questions:
                         out = sorted(out, key=lambda q: not q.required)[:max_questions]
+        except Exception:  # noqa: BLE001 - 질문 생성이 실패해도 검토는 계속된다
+            pass
+
+    # [비밀유지 계열 — 거래모델 확정 후 질문 whitelist·오염 차단, 2026-09-28 지시]
+    # 반드시 **마지막**에 건다. 앞 단계(법률효과 질문·광고·건설 묶음)가 무엇을
+    # 채웠든, 확정된 거래모델을 뒤집는 질문은 여기서 걸러진다. 실측: 신규 입사자
+    # 비밀유지계약에 "대가(금액·단가) 산정 근거 — 부가가치세·특수관계인",
+    # "최대 손해 규모(계약 대가 기준)" 가 나갔다.
+    if contract_text:
+        try:
+            from runtime.questions.employee_nda_questions import apply_nda_question_policy
+            from runtime.review.employee_nda_model import resolve_employee_nda_model
+
+            _nda_model = resolve_employee_nda_model(
+                contract_text=str(contract_text),
+                user_description=str(review_focus or ""),
+                entity=str(entity or ""),
+                contract_type_code=str(contract_type_code or ""),
+            )
+            _nda_report = apply_nda_question_policy(
+                out,
+                model=_nda_model,
+                contract_text=str(contract_text),
+                contract_type_code=str(contract_type_code or ""),
+                answered_topics=str(review_focus or ""),
+                max_questions=max_questions,
+            )
+            out = _nda_report["questions"]
+            if isinstance(gate_report, dict):
+                gate_report["nda_question_policy"] = {
+                    "applied": bool(_nda_report.get("applied")),
+                    "employee_mode": bool(_nda_report.get("employee_mode")),
+                    "rejected": list(_nda_report.get("rejected") or []),
+                    "topic_state": dict(_nda_report.get("topic_state") or {}),
+                }
+                if _nda_model.is_employee_nda:
+                    gate_report["employee_nda_model"] = _nda_model.to_dict()
         except Exception:  # noqa: BLE001 - 질문 생성이 실패해도 검토는 계속된다
             pass
     return out

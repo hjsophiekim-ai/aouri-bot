@@ -734,9 +734,13 @@ def _parse_kr_article_hierarchy(
 
 #: 영문 조 제목의 모양. 제목은 **부르는 이름**이지 문장이 아니다.
 #: (2026-09-21 5차 지시 2항)
+#: 하이픈으로 붙은 낱말의 일부는 동사가 아니다 — "No Effect on At-Will
+#: Employment" 의 "Will" 을 동사로 읽어 제9조를 제목에서 탈락시켰고, 제목 번호가
+#: 1부터 차례로 올라가야 하는 규칙 때문에 제10~13조(준거법 포함)까지 통째로
+#: 제8조 본문에 흡수됐다(2026-09-28, 신규 입사자 비밀유지계약 실측).
 _RX_EN_SENTENCE_VERB = re.compile(
-    r"\b(?:shall|will|must|may|is|are|has|have|does|do|means|includes?|agrees?"
-    r"|undertakes?|acknowledges?|represents?|warrants?|shall\s+not)\b",
+    r"(?<![-\w])(?:shall|will|must|may|is|are|has|have|does|do|means|includes?|agrees?"
+    r"|undertakes?|acknowledges?|represents?|warrants?|shall\s+not)(?![-\w])",
     re.IGNORECASE,
 )
 

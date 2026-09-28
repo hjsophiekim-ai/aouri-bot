@@ -701,21 +701,50 @@ def build_legal_review_docx(
     # 반드시 답변해야 할 항목이다. 각 쟁점을 적정 / 수정 필요 / 별도계약 필요
     # 중 하나로 표시한다. 하나라도 비면 REVIEW_FAILED_USER_SCOPE_NOT_COVERED
     # 게이트가 다운로드 자체를 막으므로, 이 표는 항상 완전히 채워진다.
+    #
+    # [출처 구분, 2026-09-28] 계약유형 기본 이슈맵 항목을 '사용자 검토항목' 제목
+    # 아래에 섞어 두면 담당자는 자기가 요청하지 않은 항목(다른 NDA 의 요청이었던
+    # "범용 AI 학습 제한", "음성·수면·건강 정보")을 자기 요청으로 읽는다.
+    # 담당자가 직접 요청한 항목만 이 제목 아래에 두고, 기본 항목은 따로 적는다.
     if mandatory_review_issues:
-        _heading1(body, "0-2. 사용자 검토항목 답변")
         _verdict_color = {
             "수정 필요": COLOR_HIGH,
             "별도계약 필요": COLOR_MEDIUM,
             "적정": COLOR_LOW,
         }
-        for a in mandatory_review_issues:
-            if not isinstance(a, dict):
-                continue
-            verdict = str(a.get("verdict") or "미답변")
-            title = str(a.get("title") or a.get("code") or "")
-            p_row = _p(body)
-            r_row = _r(p_row, bold=True, color=_verdict_color.get(verdict, COLOR_HIGH))
-            _t(r_row, f"- {title}: {verdict}")
+        _issue_rows = [a for a in mandatory_review_issues if isinstance(a, dict)]
+        _user_rows = [a for a in _issue_rows if str(a.get("source") or "") == "user_request"]
+        _default_rows = [a for a in _issue_rows if str(a.get("source") or "") != "user_request"]
+
+        def _issue_block(rows: list[dict[str, Any]]) -> None:
+            for a in rows:
+                verdict = str(a.get("verdict") or "미답변")
+                title = str(a.get("title") or a.get("code") or "")
+                p_row = _p(body)
+                r_row = _r(p_row, bold=True, color=_verdict_color.get(verdict, COLOR_HIGH))
+                _t(r_row, f"- {title}: {verdict}")
+                _paths = [str(x) for x in (a.get("evidence_clause_paths") or []) if str(x).strip()]
+                if _paths:
+                    _para(body, "  근거 조항: " + ", ".join(_paths))
+                if str(a.get("direct_answer") or "").strip():
+                    _para(body, "  판단: " + str(a["direct_answer"]))
+                for _fc in a.get("fix_clauses") or []:
+                    if str(_fc).strip():
+                        _para(body, "  추가 문안: " + str(_fc))
+
+        _heading1(body, "0-2. 사용자 검토항목 답변")
+        if _user_rows:
+            _issue_block(_user_rows)
+        else:
+            _para(body, "담당자가 별도로 요청한 검토항목이 없습니다.")
+        if _default_rows:
+            _blank(body)
+            _para(
+                body,
+                "계약유형 기본 검토항목 (담당자 요청이 아니라, 이 계약유형에서 반드시 확인하는 항목)",
+                bold=True,
+            )
+            _issue_block(_default_rows)
         _blank(body)
         _separator(body)
 
@@ -749,6 +778,9 @@ def build_legal_review_docx(
             _t(r_v, f"판단: {verdict} / 수정 필요 여부: {'예' if r.get('needs_revision') else '아니오'}")
             if r.get("conclusion"):
                 _para(body, f"결론: {str(r.get('conclusion'))}")
+            for _pc in r.get("proposed_clauses") or []:
+                if str(_pc).strip():
+                    _para(body, f"추가 문안: {str(_pc)}")
             _blank(body)
         _separator(body)
 
