@@ -96,6 +96,8 @@ class GroupEntityRegistryTest(unittest.TestCase):
         advisories = entity_advisories("공급자: 데스커")
         self.assertTrue(any("데스커" == a["entity"] for a in advisories))
         self.assertIn("법인명", " ".join(a["detail"] for a in advisories))
+        # 2026-09-29: 데스커는 주식회사 일룸의 브랜드다 — 당사자 법인을 알려 준다.
+        self.assertIn("주식회사 일룸", " ".join(a["detail"] for a in advisories))
 
     def test_overseas_affiliate_raises_an_english_name_check(self) -> None:
         advisories = entity_advisories("Party A: 퍼시스 베트남")

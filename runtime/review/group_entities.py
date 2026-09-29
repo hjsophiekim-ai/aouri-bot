@@ -16,12 +16,22 @@
 이 표는 "우리 편인가"를 판단할 뿐, 계약 당사자의 **법적 명칭**을 단정하지
 않는다. 세 가지는 반드시 사실확인으로 넘긴다.
 
-  · 데스커 — 브랜드 표기와 계약 당사자 법인이 다를 수 있다.
   · 레터스/바로스 — 같은 법인의 변경 전·후 명칭인지 문서 일자·등기로 가린다.
   · 해외법인 — 정확한 영문 법인명과 당사자성을 별도로 확인한다.
 
 계열사 간 계약과 외부 제3자 계약도 구분한다. 양쪽 모두 우리 그룹이면 협상
 기준을 기계적으로 적용하지 않고 이해상충 관점으로 본다.
+
+브랜드·그룹명은 계약 당사자가 될 수 없다 (2026-09-29 지시)
+─────────────────────────────────────────────────
+  · 알로소는 주식회사 시디즈의 브랜드다 — "주식회사 알로소"는 틀린 표현이다.
+  · 슬로우는 주식회사 일룸의 브랜드다 — "주식회사 슬로우"는 틀린 표현이다.
+  · 데스커도 주식회사 일룸의 브랜드다 — "주식회사 데스커"는 틀린 표현이다.
+    (그래서 데스커는 별도 계열사가 아니라 일룸 항목의 브랜드로 둔다.)
+  · 퍼시스그룹(FURSYS GROUP)은 법적 엔터티가 아니다 — 당사자로 쓰였으면
+    실제 계약 주체 법인(기본: 주식회사 퍼시스)으로 고친다.
+브랜드명 자체(상품·매장 표기)는 틀린 것이 아니다. 법인격 표기가 붙거나
+당사자 자리에 쓰였을 때만 고친다 — 그 판단은 `entity_name_correction` 이 한다.
 """
 from __future__ import annotations
 
@@ -55,9 +65,21 @@ class GroupEntity:
     #: 계약서상 법적 당사자 명칭을 별도로 확인해야 하는가.
     verify_legal_name: bool = False
     note: str = ""
+    #: 계약서에 적어야 하는 법적 당사자 명칭. 모르면 비워 둔다(추측 금지).
+    legal_name_ko: str = ""
+    legal_name_en: str = ""
+    #: 이 법인의 브랜드. 브랜드는 법인이 아니므로 "주식회사 <브랜드>" 는 틀린
+    #: 표현이다 — `entity_name_correction` 이 이 법인명으로 고친다.
+    brands: tuple[str, ...] = ()
+    brands_en: tuple[str, ...] = ()
 
     def all_names(self) -> tuple[str, ...]:
-        return (self.name,) + tuple(self.aliases) + tuple(self.former_names)
+        # 영문 브랜드("SLOU")는 넣지 않는다 — 정규화 후 부분일치라 "slouch" 같은
+        # 일반 단어에 걸린다. 한글 브랜드는 우리 편 인식에 쓴다.
+        return (
+            (self.name,) + tuple(self.aliases) + tuple(self.former_names)
+            + tuple(self.brands)
+        )
 
 
 #: 퍼시스그룹 계열사. 상호가 바뀌면 **이 표만** 고친다.
@@ -65,20 +87,20 @@ GROUP_ENTITIES: tuple[GroupEntity, ...] = (
     GroupEntity(
         key="fursys", name="퍼시스",
         aliases=("퍼시스 주식회사", "주식회사 퍼시스", "Fursys", "FURSYS"),
+        legal_name_ko="주식회사 퍼시스", legal_name_en="Fursys Inc.",
     ),
     GroupEntity(
         key="iloom", name="일룸",
-        aliases=("일룸 주식회사", "주식회사 일룸", "iloom", "ILOOM"),
-    ),
-    GroupEntity(
-        key="desker", name="데스커",
-        aliases=("Desker", "DESKER"),
-        verify_legal_name=True,
-        note="브랜드 표기다. 계약서상 법적 당사자 법인명을 먼저 확인한다.",
+        # 영문 "Desker" 는 일반 단어와 겹치지 않아 우리 편 인식에 그대로 쓴다.
+        aliases=("일룸 주식회사", "주식회사 일룸", "iloom", "ILOOM", "Desker", "DESKER"),
+        legal_name_ko="주식회사 일룸", legal_name_en="Iloom Inc.",
+        brands=("슬로우", "데스커"), brands_en=("SLOU", "DESKER"),
     ),
     GroupEntity(
         key="sidiz", name="시디즈",
         aliases=("시디즈 주식회사", "주식회사 시디즈", "SIDIZ", "Sidiz"),
+        legal_name_ko="주식회사 시디즈", legal_name_en="Sidiz Inc.",
+        brands=("알로소",), brands_en=("ALLOSO",),
     ),
     GroupEntity(
         key="letus", name="레터스",
@@ -132,6 +154,16 @@ GROUP_ENTITIES: tuple[GroupEntity, ...] = (
 )
 
 _BY_KEY: dict[str, GroupEntity] = {e.key: e for e in GROUP_ENTITIES}
+
+#: 그룹 자체의 명칭. 법적 엔터티가 아니므로 계약 당사자가 될 수 없다.
+GROUP_NAMES_KO: tuple[str, ...] = ("퍼시스그룹", "퍼시스 그룹")
+GROUP_NAMES_EN: tuple[str, ...] = ("FURSYS GROUP", "Fursys Group")
+#: 그룹명이 당사자로 쓰였는데 실제 계약 주체를 특정할 수 없을 때의 기본값.
+DEFAULT_GROUP_PARTY_KEY = "fursys"
+
+
+def entity_by_key(key: str) -> GroupEntity | None:
+    return _BY_KEY.get(key)
 
 #: 공백·괄호·법인격 표기를 지운 형태로 맞춘다("(주) 퍼시스" == "퍼시스").
 _RX_NOISE = re.compile(
@@ -256,6 +288,23 @@ def entity_advisories(
     body = str(text or "")
     advisories: list[dict[str, str]] = []
     for item in entities:
+        # 브랜드는 법인이 아니다. 본문에 브랜드가 보이면 계약 당사자 법인을
+        # 알려 둔다 — 법인격 표기가 붙은 오기 자체는 `entity_name_correction`
+        # 이 finding 으로 고친다 (2026-09-29 지시).
+        for brand in item.brands:
+            if brand in body and item.legal_name_ko:
+                _last = item.legal_name_ko[-1]
+                _code = ord(_last) - 0xAC00 if "가" <= _last <= "힣" else 0
+                # 받침이 없거나 ㄹ 받침이면 "로", 그 밖의 받침이면 "으로".
+                _ro = "로" if _code % 28 in (0, 8) else "으로"
+                advisories.append({
+                    "entity": brand,
+                    "kind": "brand",
+                    "detail": (
+                        f"{brand}는 {item.legal_name_ko}의 브랜드이며 법인이 아닙니다. "
+                        f"계약 당사자 법인명은 {item.legal_name_ko}{_ro} 적어야 합니다."
+                    ),
+                })
         if not item.verify_legal_name:
             continue
         detail = item.note

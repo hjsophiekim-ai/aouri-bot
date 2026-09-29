@@ -291,6 +291,23 @@ def cmd_install_task() -> int:
 
     print(f"작업 스케줄러에 등록했습니다: {TASK_NAME} (로그온 시 자동 기동)")
 
+    # schtasks /create 의 기본값은 "배터리면 시작 안 함·배터리 전환 시 중지·
+    # 72시간 후 강제 종료"다. 실측(2026-09-29): 노트북이 배터리로 돌 때 작업이
+    # 'Queued' 에 멈춰 서버가 뜨지 않았다. schtasks 에는 이 설정 플래그가
+    # 없으므로 PowerShell 로 덮어쓴다.
+    fixed = subprocess.run(  # noqa: S603,S607
+        [
+            "powershell", "-NoProfile", "-NonInteractive", "-Command",
+            "$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries "
+            "-DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero); "
+            f"Set-ScheduledTask -TaskName '{TASK_NAME}' -Settings $s | Out-Null",
+        ],
+        capture_output=True, text=True, check=False,
+    )
+    if fixed.returncode != 0:
+        print("경고: 배터리·실행시간 제한 해제 실패 — 배터리 사용 중에는 서버가 뜨지 않을 수 있습니다.")
+        print((fixed.stdout or "") + (fixed.stderr or ""))
+
     # 이미 떠 있으면 중복 기동하지 않는다.
     if _health() is not None:
         print(f"이미 실행 중입니다 — http://{HOST}:{PORT}/demo")

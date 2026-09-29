@@ -56,6 +56,7 @@ from typing import Any
 from runtime.ai.enhance import _build_request, _try_json
 from runtime.ai.provider import AIProvider
 from runtime.ai.safe import sanitize_error_message
+from runtime.review.entity_name_correction import LEGAL_NAME_PROMPT_KO
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +244,7 @@ _ISSUE_SYSTEM = """당신은 한국 대기업의 사내변호사다. 계약 검�
    어느 조문에 어떻게 저촉되는지를 legal_basis 에 명시한다.
    반대로 유리하면서 적법한 조항은 건드리지 않는다 — 상대방 청구권을 굳이
    새로 열어주는 수정안은 만들지 않는다.
+8. """ + LEGAL_NAME_PROMPT_KO + """
 
 출력은 JSON 하나만. 설명·마크다운·코드펜스 금지."""
 

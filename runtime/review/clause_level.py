@@ -34,6 +34,10 @@ from runtime.review.clause_conflicts import detect_clause_conflicts
 from runtime.review.executive_summary import generate_executive_summary
 from runtime.review.legal_effect_taxonomy import LEGAL_EFFECT_TAGS, effects_overlap
 from runtime.review.delivery_gate import is_advisory_only as _is_advisory_only
+from runtime.review.entity_name_correction import (
+    LEGAL_NAME_PROMPT_EN as _LEGAL_NAME_PROMPT_EN,
+    LEGAL_NAME_PROMPT_KO as _LEGAL_NAME_PROMPT_KO,
+)
 
 # ─── [Phase 2] 지능형 법무검토 시스템 프롬프트 ──────────────────────────────────
 CLAUSE_REVIEW_SYSTEM = (
@@ -49,7 +53,8 @@ CLAUSE_REVIEW_SYSTEM = (
     "7. indemnify/면책 조항이 수동태('shall be indemnified'/'면책된다')로만 되어 있고 "
     "그 의무를 실제로 부담하는 당사자(주체)가 명시되어 있지 않다면, 퍼시스(우리 회사)가 그 의무를 "
     "부담한다고 임의로 단정하지 마라 — '누가 면책하는지 불명확하다' 자체를 문제로 지적하고, "
-    "각 당사자가 자신의 귀책사유로 발생한 청구에 대해서만 책임지도록 명확화할 것을 제안하라.\n\n"
+    "각 당사자가 자신의 귀책사유로 발생한 청구에 대해서만 책임지도록 명확화할 것을 제안하라.\n"
+    "8. " + _LEGAL_NAME_PROMPT_KO + "\n\n"
     "출력 형식: 반드시 첫 글자 '[' 로 시작하는 JSON 배열만 출력하라. "
     "각 원소 형식: clause_id / rewrite_reason / suggested_rewrite / changed_segments / "
     "risk_tier / must_fix / worst_case_scenario / negotiation_strategy\n"
@@ -71,7 +76,8 @@ EN_NDA_CLAUSE_REVIEW_SYSTEM = (
     "7. If an indemnify/hold-harmless clause is passive ('shall be indemnified') and does not name "
     "which party actually bears that obligation, do NOT assume Fursys bears it by default — flag the "
     "ambiguity of the obligor itself as the issue, and propose clarifying that each party is liable "
-    "only for claims arising from its own fault.\n\n"
+    "only for claims arising from its own fault.\n"
+    "8. " + _LEGAL_NAME_PROMPT_EN + "\n\n"
     "Output format: ONLY a JSON array starting with '['. Each element:\n"
     "clause_id / rewrite_reason / suggested_rewrite / changed_segments / "
     "risk_tier / must_fix / worst_case_scenario / negotiation_strategy\n"
@@ -2683,7 +2689,9 @@ def _apply_zero_hallucination_guardrail(
 
         # ── 규칙 1: 제1·2·3조 절대 보호 (목적·원칙·정의 조항) ──────────────
         a_i = _article_int_from_cr(cr)
-        if a_i is not None and a_i in (1, 2, 3):
+        # 당사자 법인명 오기 정정은 조항 내용을 바꾸지 않는다 — 제1~3조(당사자
+        # 정의가 흔히 있는 자리)라도 막지 않는다 (2026-09-29 지시).
+        if a_i is not None and a_i in (1, 2, 3) and not cr.get("is_entity_name_correction"):
             cr["suggested_rewrite"] = None
             cr["changed_segments"] = []
             cr["risk_tier"] = "LOW"
@@ -5628,6 +5636,19 @@ def build_clause_level_result(
         logger.info("effect baseline review produced %d findings", len(_baseline_findings))
         clause_results.extend(_baseline_findings)
 
+    # ── [당사자 법인명 정정] (2026-09-29 지시) ────────────────────────────────
+    # 브랜드(알로소·슬로우)나 그룹명(퍼시스그룹·FURSYS GROUP)은 법인이 아니므로
+    # 계약 당사자가 될 수 없다. 계약유형과 무관하게 모든 계약에서 돈다.
+    from runtime.review.entity_name_correction import (
+        build_name_correction_findings as _build_name_fixes,
+    )
+    _name_fix_findings = _build_name_fixes(
+        clauses, full_text=str(text or ""), entity=str(entity or ""),
+    )
+    if _name_fix_findings:
+        logger.info("entity name corrections: %d", len(_name_fix_findings))
+        clause_results.extend(_name_fix_findings)
+
     # ── [리스크 사슬 검토] (2026-09-10 지시 항목 1) ────────────────────────────
     # 조항별 나열이 아니라 거래위험을 사슬로 연결해 본다. 특히 선이행 구조는
     # 선제공 → 소유권 이전 → 상대방 미이행 → 반환·환수 → 손해배상 → 담보까지
@@ -7630,6 +7651,35 @@ def build_clause_level_result(
     # 계열사 인식·상호변경·해외법인 명칭은 계약서만으로 단정할 수 없다.
     # 사람이 등기로 확인할 항목으로 분리해 남긴다(2026-09-11 지시).
     meta["group_entity_checks"] = _entity_checks
+    # [당사자 법인명 정정, 2026-09-29 지시] 다른 finding 의 수정문안이 원문을
+    # 옮기면서 "주식회사 알로소"·"퍼시스그룹" 같은 오기를 되살리면, 같은 조항에
+    # 정정 finding 과 서로 다른 법인명이 나란히 남는다. 모든 수정문안을 맞춘다.
+    from runtime.review.entity_name_correction import (
+        correct_entity_names as _correct_names,
+        find_name_hits as _find_name_hits,
+    )
+    _name_fixed_ids: list[str] = []
+    for _cr_nm in clause_results:
+        if not isinstance(_cr_nm, dict) or _cr_nm.get("is_entity_name_correction"):
+            continue
+        _touched = False
+        for _key_nm in ("suggested_rewrite", "recommendation_text", "replace_text", "addition_text"):
+            _val_nm = _cr_nm.get(_key_nm)
+            if isinstance(_val_nm, str) and _find_name_hits(_val_nm, entity=str(entity or "")):
+                # replace_text 는 원문 앵커다 — 원문과 같으면 건드리지 않는다.
+                if _key_nm == "replace_text" and _val_nm.strip() in str(text or ""):
+                    continue
+                _cr_nm[_key_nm] = _correct_names(_val_nm, entity=str(entity or ""))
+                _touched = True
+        if _touched:
+            _name_fixed_ids.append(str(_cr_nm.get("clause_id") or ""))
+    meta["entity_name_corrections"] = {
+        "findings": [
+            str(c.get("clause_id") or "") for c in clause_results
+            if isinstance(c, dict) and c.get("is_entity_name_correction")
+        ],
+        "rewrites_normalized": _name_fixed_ids,
+    }
     meta["internal_control_items"] = _internal_controls
     meta["effect_risk_chains"] = _effect_chains
     meta["amount_estimates_scrubbed"] = _amount_scrubbed
