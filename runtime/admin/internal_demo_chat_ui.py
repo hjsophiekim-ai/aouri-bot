@@ -660,6 +660,31 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       addMsg('bot', '재시도를 위해 “처음으로”에서 다시 검토를 시작해 주세요.');
     }
 
+    // 수정본을 만들 수 없는 이유. 서버(clause_level)의 docx_allowed 판정 근거를
+    // 사람이 읽을 수 있게 옮긴다 — 수정본은 계약서 **원문 조항**을 고치는
+    // 문서라, 원문이 없으면 만들 수 없다.
+    function _docxBlockedReason(meta) {
+      const len = Number((meta && meta.text_length) || 0);
+      const cnt = Number((meta && meta.clause_count) || 0);
+      const w = (meta && Array.isArray(meta.warnings)) ? meta.warnings : [];
+      if (w.indexOf('word_xml_markers_detected_block') >= 0) {
+        return '수정본: 생성 불가 — 추출된 본문에 워드 내부 코드가 섞여 있습니다. 파일을 다시 저장해 첨부해 주세요.';
+      }
+      return '수정본: 생성 불가 — 계약서 원문이 없습니다 (본문 ' + len + '자, 조항 ' + cnt + '개 인식). '
+        + '최종 수정본은 계약서 원문 조항을 고친 문서라, 계약서 파일을 첨부하거나 계약서 전문을 붙여넣어 다시 검토해 주세요. '
+        + '요약·설명만 입력한 경우 검토 의견은 볼 수 있지만 수정본은 만들 수 없습니다.';
+    }
+
+    // 계약서 전문이 아니라 요약·설명으로 보이는가. 서버의 docx_allowed
+    // 기준(120자 미만, 또는 조문 제목 없이 600자 미만)과 같은 선을 쓴다.
+    function _looksLikeSummaryNotContract(text) {
+      const t = String(text || '');
+      if (t.length < 120) return true;
+      const hasHeading = /제\\s*[0-9]+\\s*조|Article\\s*[0-9]+|^\\s*[0-9]+\\s*[.)]/m.test(t);
+      return !hasHeading && t.length < 600;
+    }
+    let _summaryWarnedText = null;
+
     function _setStartMsg(msg, isError) {
       const el = document.getElementById('startError');
       el.style.color = isError ? 'var(--danger)' : 'var(--primary)';
@@ -731,6 +756,17 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
         if (!file && text.length < 5) {
           _setStartMsg('계약서 파일을 첨부하거나, 계약 내용을 입력해 주세요. (최소 5자 이상)', true);
+          return;
+        }
+        // 설명문만으로 1분 넘게 검토한 뒤에야 "수정본 불가"를 알리지 않는다.
+        // 먼저 알리고, 그래도 진행하려면 한 번 더 누르게 한다.
+        if (!file && _looksLikeSummaryNotContract(text) && _summaryWarnedText !== text) {
+          _summaryWarnedText = text;
+          _setStartMsg(
+            '입력한 내용이 계약서 전문이 아니라 요약·설명으로 보입니다 (' + text.length + '자, 조항 번호 없음). '
+            + '이대로 검토하면 검토 의견만 나오고 최종 수정본(.docx/.pdf)은 만들 수 없습니다. '
+            + '계약서 파일을 첨부하거나 계약서 전문을 붙여넣어 주세요. '
+            + '설명만으로 검토하려면 [검토 시작]을 한 번 더 누르세요.', true);
           return;
         }
 
@@ -1531,13 +1567,19 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       if (!analyzeState.deepDone) {
         btnRev.disabled = true;
         btnRevPdf.disabled = true;
-        if (meta && meta.docx_allowed === false) docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
+        if (meta && meta.docx_allowed === false) docxStatus.innerText = _docxBlockedReason(meta);
         else docxStatus.innerText = '수정본: 정밀 검토 진행 중';
       } else {
         if (meta && meta.docx_allowed === false) {
           btnRev.disabled = true;
           btnRevPdf.disabled = true;
-          docxStatus.innerText = '수정본: 생성 불가 (계약서 본문/조항 부족)';
+          // 버튼만 조용히 꺼지면 사용자는 고장으로 안다(2026-09-29 실사례: 계약서
+          // 대신 95자 설명문으로 검토). 이유를 버튼 바로 아래에도 적는다.
+          docxStatus.innerText = _docxBlockedReason(meta);
+          const _cn = document.getElementById('confirmNote');
+          _cn.style.whiteSpace = 'pre-wrap';
+          _cn.style.color = 'var(--danger)';
+          _cn.innerText = _docxBlockedReason(meta);
         } else {
           btnRev.disabled = false;
           btnRevPdf.disabled = false;
