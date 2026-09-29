@@ -116,7 +116,17 @@ def build_section1_rows(
     rows: list[HeaderRow] = []
 
     rows.append(HeaderRow(f"계약명: {filename or '미상'}"))
-    rows.append(HeaderRow(f"우리 회사: {format_val(dp.get('our_party') or entity)}"))
+    # 우리 회사는 **법인** 기준으로 적고 브랜드는 보조 표기로 둔다(2026-09-29
+    # Entity Resolution 지시 6항) — "우리 회사: 알로소" 가 나가면 권리·의무의
+    # 귀속 주체를 브랜드로 읽게 된다.
+    _our_legal = str(cs.get("our_legal_entity") or "").strip()
+    _our_brand = str(cs.get("our_brand") or "").strip()
+    if _our_legal:
+        rows.append(HeaderRow(
+            f"우리 회사: {_our_legal}" + (f" (브랜드: {_our_brand})" if _our_brand else "")
+        ))
+    else:
+        rows.append(HeaderRow(f"우리 회사: {format_val(dp.get('our_party') or entity)}"))
     _our_role = str(cs.get("party_label") or "").strip() or our_role_label(
         format_val(dp.get("our_legal_role")))
     rows.append(HeaderRow(f"우리 측 지위: {_our_role}"))

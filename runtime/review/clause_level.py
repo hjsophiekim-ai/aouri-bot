@@ -5639,11 +5639,24 @@ def build_clause_level_result(
     # ── [당사자 법인명 정정] (2026-09-29 지시) ────────────────────────────────
     # 브랜드(알로소·슬로우)나 그룹명(퍼시스그룹·FURSYS GROUP)은 법인이 아니므로
     # 계약 당사자가 될 수 없다. 계약유형과 무관하게 모든 계약에서 돈다.
+    # [Entity Resolution, 2026-09-29 범용 보정] 법적 계약당사자와 브랜드·상호를
+    # 먼저 분리한다. 담당자가 알려 준 사실("X는 Y의 브랜드")이 registry 보다
+    # 우선한다. 이 결과가 정정 finding·AI 에이전트·서술 정규화·보고서 상단의
+    # "우리 회사" 표기에 모두 쓰인다.
+    from runtime.review.entity_resolution import resolve_entities as _resolve_entities
+    _entity_resolution = _resolve_entities(
+        str(text or ""), entity=str(entity or ""),
+        review_focus=review_focus if isinstance(review_focus, str) else None,
+        answers=answers if isinstance(answers, dict) else None,
+    )
+    if _entity_resolution.mismatches:
+        logger.info("entity resolution mismatches: %d", len(_entity_resolution.mismatches))
     from runtime.review.entity_name_correction import (
         build_name_correction_findings as _build_name_fixes,
     )
     _name_fix_findings = _build_name_fixes(
         clauses, full_text=str(text or ""), entity=str(entity or ""),
+        user_brands=_entity_resolution.user_brands,
     )
     if _name_fix_findings:
         logger.info("entity name corrections: %d", len(_name_fix_findings))
@@ -5708,13 +5721,30 @@ def build_clause_level_result(
                 counsel_issues_to_clause_results as _counsel_to_crs,
                 run_counsel_agent as _run_counsel_agent,
             )
+            # 에이전트에게도 확정된 당사자를 준다 — 브랜드를 독립 당사자로 읽고
+            # "알로소가 부담한다"식 논점을 쓰지 않게 한다(2026-09-29 지시 5·7항).
+            _party_block = "\n".join(
+                f"- {p.label or p.role_in_contract or '당사자'}: 법적 당사자 {p.legal_entity_name}"
+                + (f" (브랜드: {p.brand_name})" if p.brand_name else "")
+                + (" [우리 회사]" if p.is_our_company else "")
+                for p in _entity_resolution.parties if p.legal_entity_name
+            )
+            _focus_for_agent = review_focus if isinstance(review_focus, str) else ""
+            if _party_block:
+                _focus_for_agent = (
+                    (_focus_for_agent + "\n\n" if _focus_for_agent else "")
+                    + "[당사자 확정 — 권리·의무는 아래 법적 당사자에게 귀속된다. "
+                      "브랜드를 별도 당사자로 취급하지 말 것]\n" + _party_block
+                )
             _counsel_report = _run_counsel_agent(
                 provider=ai_provider,
                 model=str(ai_model or ""),
-                entity=str(entity or ""),
+                entity=str(
+                    _entity_resolution.our_company_display() or entity or ""
+                ),
                 contract_type=str(contract_type or ""),
                 text=str(text or ""),
-                review_focus=review_focus if isinstance(review_focus, str) else None,
+                review_focus=_focus_for_agent or None,
                 statute_decisions=[d.to_dict() for d in _statute_decisions],
                 timeout_sec=float(ai_timeout_sec or 120.0),
                 max_tokens=int(ai_max_tokens or 4000),
@@ -7665,21 +7695,38 @@ def build_clause_level_result(
         _touched = False
         for _key_nm in ("suggested_rewrite", "recommendation_text", "replace_text", "addition_text"):
             _val_nm = _cr_nm.get(_key_nm)
-            if isinstance(_val_nm, str) and _find_name_hits(_val_nm, entity=str(entity or "")):
+            if isinstance(_val_nm, str) and _find_name_hits(
+                _val_nm, entity=str(entity or ""), user_brands=_entity_resolution.user_brands,
+            ):
                 # replace_text 는 원문 앵커다 — 원문과 같으면 건드리지 않는다.
                 if _key_nm == "replace_text" and _val_nm.strip() in str(text or ""):
                     continue
-                _cr_nm[_key_nm] = _correct_names(_val_nm, entity=str(entity or ""))
+                _cr_nm[_key_nm] = _correct_names(
+                    _val_nm, entity=str(entity or ""), user_brands=_entity_resolution.user_brands,
+                )
                 _touched = True
         if _touched:
             _name_fixed_ids.append(str(_cr_nm.get("clause_id") or ""))
+    # [Entity Resolution 지시 7항] 검토의견·협상포지션·손해배상·지급주체 서술에서
+    # 브랜드를 권리·의무 주체로 쓰면 법인명을 앞세운다("주식회사 시디즈(알로소)가").
+    from runtime.review.entity_resolution import normalize_findings as _normalize_party_findings
+    _party_normalized = _normalize_party_findings(clause_results, _entity_resolution)
     meta["entity_name_corrections"] = {
         "findings": [
             str(c.get("clause_id") or "") for c in clause_results
             if isinstance(c, dict) and c.get("is_entity_name_correction")
         ],
         "rewrites_normalized": _name_fixed_ids,
+        "narratives_normalized": _party_normalized,
     }
+    meta["entity_resolution"] = _entity_resolution.to_dict()
+    # 보고서 상단 "우리 회사"는 법인 기준으로 적는다(지시 6항). DOCX·PDF 모두
+    # canonical_state 를 헤더에 넘기므로 거기에 싣는다.
+    if isinstance(meta.get("canonical_state"), dict) and _entity_resolution.our_company is not None:
+        meta["canonical_state"]["our_legal_entity"] = _entity_resolution.our_company.legal_entity_name
+        meta["canonical_state"]["our_brand"] = _entity_resolution.our_company.brand_name
+    # review_status 는 반환 직전에 싣는다 — 정정 문안이 함께 나가는 가벼운 결함이라,
+    # 여기서 먼저 차지하면 뒤의 더 무거운 게이트(원문 모순 등)가 상태를 못 적는다.
     meta["internal_control_items"] = _internal_controls
     meta["effect_risk_chains"] = _effect_chains
     meta["amount_estimates_scrubbed"] = _amount_scrubbed
@@ -8712,6 +8759,14 @@ def build_clause_level_result(
     meta["v14_final_self_check"]["failed"] = [
         a["key"] for a in meta["v14_final_self_check"]["axes"] if not a["ok"]
     ]
+
+    # [Entity Resolution] 당사자 법인명 불일치는 다른 게이트가 상태를 적지 않았을
+    # 때만 대표 상태가 된다. 불일치 목록 자체는 meta["entity_resolution"] 에 늘 남는다.
+    if _entity_resolution.status and not meta.get("review_status"):
+        meta["review_status"] = _entity_resolution.status
+        meta["review_status_detail"] = " / ".join(
+            f"[{m.location}] {m.detail}" for m in _entity_resolution.mismatches[:5]
+        )
 
     return ClauseLevelResult(
         review={

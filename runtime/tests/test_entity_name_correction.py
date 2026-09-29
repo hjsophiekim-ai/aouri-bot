@@ -77,7 +77,8 @@ class NameRuleTest(unittest.TestCase):
 
     def test_brand_in_party_definition_is_corrected(self) -> None:
         self.assertEqual(
-            correct_entity_names('알로소(이하 "갑")는'), '주식회사 시디즈(이하 "갑")는',
+            # 브랜드는 정의 괄호 안에 보조 표기로 남긴다(2026-09-29 Entity Resolution 4항).
+            correct_entity_names('알로소(이하 "갑")는'), '주식회사 시디즈(브랜드명: 알로소, 이하 "갑")는',
         )
 
     def test_brand_itself_is_not_wrong(self) -> None:
@@ -187,7 +188,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_rewrites_carry_the_legal_name(self) -> None:
         joined = "\n".join(f["suggested_rewrite"] for f in self._fixes())
-        self.assertIn('주식회사 시디즈(이하 "갑"', joined)
+        self.assertIn('주식회사 시디즈(브랜드명: 알로소, 이하 "갑"', joined)
         self.assertIn("갑: 주식회사 시디즈 대표이사", joined)
         self.assertIn("주식회사 시디즈와 을이", joined)
 

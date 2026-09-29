@@ -110,6 +110,9 @@ REMEDIABLE_STATUSES: frozenset[str] = frozenset({
     # 항목에 근거 조항을 붙여 두었다 — 담당자가 그 조항을 바로 펴 볼 수
     # 있으므로 결함이 해소된다. 전달을 막지 않는다.
     "REVIEW_FAILED_ENGLISH_CLAUSE_GROUNDING",
+    # [2026-09-29 Entity Resolution] 브랜드·그룹명이 당사자로 적힌 오기는 정정
+    # 문안(entity_name_correction)이 함께 나가므로 결함이 해소된다 — 전달한다.
+    "REVIEW_FAILED_LEGAL_ENTITY_MISMATCH",
 })
 
 #: 제거·중화가 불가능해 다운로드를 실제로 막아야 하는 상태.
@@ -129,6 +132,7 @@ NON_REMEDIABLE_STATUSES: frozenset[str] = frozenset({
 
 #: 사용자에게 보여줄 한국어 사유. 없는 코드는 코드 그대로 노출한다.
 STATUS_LABELS: dict[str, str] = {
+    "REVIEW_FAILED_LEGAL_ENTITY_MISMATCH": "계약 당사자 법인명 표기 오류(브랜드·그룹명을 법인으로 기재 등) — 서명 전 정정 문안을 제시함",
     "REVIEW_FAILED_SEMANTIC_MISMATCH": "원문 조항의 법률효과와 제안 문안의 법률효과가 달라 수정문안을 보류함",
     "REVIEW_FAILED_INVALID_CLAUSE_REFERENCE": "계약에 존재하지 않는 조항을 가리켜 수정문안을 보류함",
     "REVIEW_FAILED_INCOMPLETE_REDLINE": "수정 위치 또는 문구가 확정되지 않아 수정문안을 보류함",

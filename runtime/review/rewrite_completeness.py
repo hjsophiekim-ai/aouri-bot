@@ -166,6 +166,11 @@ def enforce_rewrite_completeness(
         if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
             continue
         text = rewrite_text(cr)
+        # 당사자 법인명 정정은 당사자란·서명란 한 줄("주식회사 시디즈(브랜드명:
+        # 알로소)")을 통째로 바꿔 넣는 문안이다 — 규범 어미가 없어도 그대로
+        # 붙여 넣을 수 있는 완성 문구다(2026-09-30 실측: 오탐으로 대표 상태를 차지).
+        if cr.get("is_entity_name_correction") and text:
+            continue
         if not is_descriptive_only(text):
             continue
         cr["incomplete_rewrite"] = True
