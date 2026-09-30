@@ -246,6 +246,9 @@ _RX_SELF_DECLARED: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.IGNORECASE)),
 )
 
+#: 판매·사용에 연동된 권리 이용 대가 — "로열티", "실시료", "사용료".
+_RX_ROYALTY = re.compile(r"로열티|로얄티|royalt(?:y|ies)|실시료|저작권\s*사용료", re.IGNORECASE)
+
 #: 표제·정의 탐색 범위. 계약의 성격 선언은 문서 앞머리에 온다.
 _HEAD_CHARS = 2500
 
@@ -366,6 +369,16 @@ def build_effect_profile(
         archetype, basis = ARCHETYPE_NDA, "대가 구조 없이 비밀유지가 급부의 전부"
     elif n(EFFECT_IP) >= 2 and n(EFFECT_IP) >= n(EFFECT_DELIVERY):
         archetype, basis = ARCHETYPE_LICENSE, "지식재산권 실시허락이 급부의 중심"
+    elif (
+        n(EFFECT_IP) >= 3
+        and _RX_ROYALTY.search(body)
+        and n(EFFECT_IP) * 2 >= n(EFFECT_DELIVERY)
+    ):
+        # 2026-09-30 실측(한글날 제품개발·협업 계약): 시제품 납품 조항이 많아
+        # 인도 효과(18)가 IP 효과(14)를 넘었고, 결과물 소유권 조항 때문에
+        # "물품 공급·매매"로 읽혀 위탁매매 질문이 허용됐다. 대가가 **판매에
+        # 연동된 로열티**이면 급부의 중심은 물건의 매매가 아니라 권리의 이용이다.
+        archetype, basis = ARCHETYPE_LICENSE, "지식재산 이용 대가(로열티) 구조"
     elif n(EFFECT_CHANGE) and n(EFFECT_DELIVERY) and n(EFFECT_SCOPE):
         archetype, basis = ARCHETYPE_WORKS, "설계변경·공정·검수 구조"
     elif n(EFFECT_OWNERSHIP) and n(EFFECT_DELIVERY) and n(EFFECT_PAYMENT):

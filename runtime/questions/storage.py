@@ -21,6 +21,28 @@ from runtime.review.clause_extraction import extract_clauses
 from runtime.review.clause_level import build_clause_level_result
 
 
+def transaction_type_for(clause_meta: dict | None, text: str) -> str:
+    """거래 원형을 하나만 확정해 돌려준다.
+
+    [2026-09-10 아키텍처 지시 항목 1] 검토가 이미 확정해 저장한
+    `legal_state.transaction_type` 이 있으면 **재계산하지 않고** 그것을 쓴다.
+    저장된 값이 없는 경로에서만 효과 프로파일로 계산한다.
+    """
+    if isinstance(clause_meta, dict):
+        stored = clause_meta.get("legal_state")
+        if isinstance(stored, dict) and str(stored.get("transaction_type") or "").strip():
+            return str(stored["transaction_type"])
+    try:
+        from runtime.review.clause_effect import build_effect_profile
+
+        body = str(text or "")
+        if not body.strip():
+            return ""
+        return build_effect_profile(text=body, clauses=extract_clauses(body)[0] or []).archetype
+    except Exception:
+        return ""
+
+
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 SESSIONS_DIR = DATA_DIR / "question_sessions"
 RULES_RESOURCE_PATH = Path(__file__).resolve().parents[1] / "resources" / "review_rules_master.json"
@@ -76,6 +98,7 @@ def create_session(
     review_focus: str | None = None,
     intake: dict[str, Any] | None = None,
     source: str = "upload",
+    question_plan: Any = None,
 ) -> dict[str, Any]:
     bundle = build_clause_level_result(
         service=service,
@@ -128,6 +151,13 @@ def create_session(
         review_focus=review_focus,
         contract_type_code=_canonical_type_code,
         gate_report=_question_gate,
+        # 2026-09-30 — 파일 업로드 경로만 AI 질문 계획과 거래 원형 게이트 없이
+        # 질문을 만들어, 키워드 탐지 하나가 질문을 정했다(한글날 제품개발 계약에
+        # 위탁매매 질문 5개). 텍스트 입력 경로와 같은 두 겹 방어를 건다.
+        question_plan=question_plan,
+        transaction_type=transaction_type_for(
+            bundle.meta if isinstance(bundle.meta, dict) else None, text,
+        ),
     )
 
     now = _utc_now_iso()

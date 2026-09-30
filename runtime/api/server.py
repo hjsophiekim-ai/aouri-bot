@@ -202,21 +202,11 @@ def _transaction_type_for(clause_meta: dict | None, text: str) -> str:
     [2026-09-10 아키텍처 지시 항목 1] 검토가 이미 확정해 세션에 저장한
     `legal_state.transaction_type` 이 있으면 **재계산하지 않고** 그것을 쓴다.
     저장된 값이 없는 경로(업로드 직후 등)에서만 효과 프로파일로 계산한다.
+    업로드 세션(`storage.create_session`)과 같은 함수를 쓴다.
     """
-    if isinstance(clause_meta, dict):
-        stored = clause_meta.get("legal_state")
-        if isinstance(stored, dict) and str(stored.get("transaction_type") or "").strip():
-            return str(stored["transaction_type"])
-    try:
-        from runtime.review.clause_effect import build_effect_profile
-        from runtime.review.clause_extraction import extract_clauses
+    from runtime.questions.storage import transaction_type_for
 
-        body = str(text or "")
-        if not body.strip():
-            return ""
-        return build_effect_profile(text=body, clauses=extract_clauses(body)[0] or []).archetype
-    except Exception:
-        return ""
+    return transaction_type_for(clause_meta, text)
 
 
 def _statute_decisions_for(
@@ -3629,6 +3619,10 @@ def create_handler(service: RuleQueryService):
                         },
                         intake=intake_to_dict(intake),
                         source="ep",
+                        question_plan=_build_question_plan(
+                            entity=cls.entity, contract_type=cls.contract_type,
+                            text=extraction.text, review_focus=None, max_questions=5,
+                        ),
                     )
                     if cls.is_inferred:
                         update_cache(filename, cls.entity, cls.contract_type)
@@ -3845,6 +3839,10 @@ def create_handler(service: RuleQueryService):
                         review_focus=review_focus,
                         intake={},
                         source="upload",
+                        question_plan=_build_question_plan(
+                            entity=cls.entity, contract_type=cls.contract_type,
+                            text=extraction.text, review_focus=review_focus, max_questions=5,
+                        ),
                     )
                     # DOCX 원본이면 redline 생성용 bytes를 세션에 저장
                     if suffix.lower() == ".docx":
