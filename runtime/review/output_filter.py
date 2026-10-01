@@ -88,6 +88,9 @@ class ReviewIssue:
     # 변환 지점이므로, 여기 없으면 build_final_findings()를 거치는 모든
     # 다운로드 경로에서 조용히 사라진다.
     redline_instruction: dict[str, Any] | None = None
+    # 법조문 grounding(2026-10-01 지시) — 관련 계약조항·조문·법률상 이유·실무상 이유.
+    # 여기 없으면 UI/DOCX/PDF 공통 변환에서 사라진다(redline_instruction 과 같은 이유).
+    legal_grounding: dict[str, Any] | None = None
 
     @property
     def display_bucket(self) -> str:
@@ -133,6 +136,7 @@ class ReviewIssue:
             "negotiation_priority_depends_on": self.negotiation_priority_depends_on,
             "negotiation_feasibility": self.negotiation_feasibility,
             "redline_instruction": self.redline_instruction,
+            "legal_grounding": self.legal_grounding,
         }
 
 
@@ -395,6 +399,7 @@ def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
                     negotiation_priority_depends_on=issue.negotiation_priority_depends_on or existing.negotiation_priority_depends_on,
                     negotiation_feasibility=issue.negotiation_feasibility or existing.negotiation_feasibility,
                     redline_instruction=issue.redline_instruction or existing.redline_instruction,
+                    legal_grounding=issue.legal_grounding or existing.legal_grounding,
                 )
             else:
                 # Add new clause_id to existing's related list
@@ -507,7 +512,11 @@ def filter_issues(
     # 실무적으로도 제3자 채무보증·무제한 배상·지체상금 같은 항목이 개수
     # 제한 때문에 보고서에서 사라지는 것은 그 자체로 오답이다.
     def _cap_exempt(i: ReviewIssue) -> bool:
-        return bool(i.is_mandatory) or str(i.clause_id or "") in _HIGH_EXPOSURE_CLAUSE_IDS
+        # 원문을 정규식으로 확인한 당사자 법인명 정정·법률효과 점검(ac_*)도 면제한다 —
+        # AI 논점이 많은 실행에서 개수 상한에 밀려 결정론 판단이 사라졌다(2026-10-01 실측).
+        cid = str(i.clause_id or "")
+        return (bool(i.is_mandatory) or cid in _HIGH_EXPOSURE_CLAUSE_IDS
+                or cid.startswith(("ac_", "ENTITY_NAME")))
 
     medium_exempt = [i for i in medium_all if _cap_exempt(i)]
     medium_other = [i for i in medium_all if not _cap_exempt(i)][:max_medium]
@@ -614,6 +623,7 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             negotiation_priority_depends_on=str(cr.get("negotiation_priority_depends_on") or "").strip(),
             negotiation_feasibility=str(cr.get("negotiation_feasibility") or "").strip(),
             redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
+            legal_grounding=cr.get("legal_grounding") if isinstance(cr.get("legal_grounding"), dict) else None,
         ))
     return out
 

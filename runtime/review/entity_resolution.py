@@ -489,6 +489,36 @@ _RX_BRAND_FACT_AFTER = re.compile(r"(?:은|는|이|가)\s*[^.。\n]{0,30}?의\s*
 _RX_QUOTED = re.compile(r"“[^”]*”|\"[^\"]*\"|‘[^’]*’|「[^」]*」")
 
 
+def collapse_dual_party(text: str | None, res: EntityResolution) -> str:
+    """브랜드와 그 법인을 두 당사자처럼 나란히 쓴 표현을 하나로 합친다
+    (2026-09-30 지시 13항) — "시디즈 및 알로소의 동의" → "주식회사 시디즈(알로소)의 동의",
+    "알로소 법인" → "주식회사 시디즈(알로소)".
+    """
+    s = str(text or "")
+    if not s:
+        return s
+    particle = r"(?P<p>에게|의|에|도|만|은|는|이|가|을|를|과|와)?(?![가-힣A-Za-z])"
+    for brand, legal in res.brand_map().items():
+        core = re.sub(r"주식회사|㈜|\(주\)", "", legal).strip()
+        names = "|".join(re.escape(x) for x in dict.fromkeys((legal, core)) if x)
+        b = re.escape(brand)
+        joiner = r"\s*(?:및|와|과|,|·|또는|그리고)\s*"
+        merged = f"{legal}({brand})"
+
+        def _sub(m: re.Match[str], merged: str = merged, legal: str = legal) -> str:
+            p = m.group("p") or ""
+            if p in ("은", "는", "이", "가", "을", "를", "과", "와"):
+                pairs = {"은": ("은", "는"), "는": ("은", "는"), "이": ("이", "가"), "가": ("이", "가"),
+                         "을": ("을", "를"), "를": ("을", "를"), "과": ("과", "와"), "와": ("과", "와")}
+                p = pairs[p][0] if _batchim(legal) else pairs[p][1]
+            return merged + p
+
+        s = re.sub(rf"(?:{names})(?:\s*\(\s*{b}\s*\))?{joiner}{b}{particle}", _sub, s)
+        s = re.sub(rf"(?<![가-힣A-Za-z]){b}{joiner}(?:{names})(?:\s*\(\s*{b}\s*\))?{particle}", _sub, s)
+        s = re.sub(rf"(?<![가-힣A-Za-z]){b}\s*법인{particle}", _sub, s)
+    return s
+
+
 def normalize_party_narrative(text: str | None, res: EntityResolution) -> str:
     """검토의견·협상포지션 같은 서술 문장에서 브랜드를 권리·의무 주체로 쓰면
     법인명을 앞세운다 — "알로소가 손해배상 책임을 부담한다" →
@@ -558,6 +588,14 @@ def normalize_findings(clause_results: list[dict[str, Any]], res: EntityResoluti
         if not isinstance(cr, dict) or cr.get("is_entity_name_correction"):
             continue
         changed = False
+        # 브랜드와 법인을 두 당사자로 나란히 쓴 표현은 서술·수정문 어디서든 틀리다.
+        for key in NARRATIVE_FIELDS + ("suggested_rewrite", "recommendation_text"):
+            v = cr.get(key)
+            if isinstance(v, str) and v:
+                nv = collapse_dual_party(v, res)
+                if nv != v:
+                    cr[key] = nv
+                    changed = True
         for key in NARRATIVE_FIELDS:
             v = cr.get(key)
             if isinstance(v, str) and v:

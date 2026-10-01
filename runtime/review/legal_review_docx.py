@@ -89,6 +89,7 @@ class ReviewIssue:
     is_checklist_item: bool = False
     is_mandatory_target: bool = False
     redline_instruction: dict[str, Any] | None = None
+    legal_grounding: dict[str, Any] | None = None
 
     @property
     def display_bucket(self) -> str:
@@ -346,7 +347,34 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         related_clauses=[str(r) for r in (d.get("related_clause_ids") or d.get("related_clauses") or [])][:6],
         confidence=float(d.get("confidence") or 0.75),
         redline_instruction=d.get("redline_instruction") if isinstance(d.get("redline_instruction"), dict) else None,
+        legal_grounding=d.get("legal_grounding") if isinstance(d.get("legal_grounding"), dict) else None,
     )
+
+
+def grounding_lines(issue: "ReviewIssue") -> list[tuple[str, str]]:
+    """법조문 grounding 을 보고서용 (라벨, 내용) 줄로 — DOCX·PDF 공통(2026-10-01 지시 8항).
+
+    법률상 이유와 실무상 이유를 한 문장에 섞지 않는다. grounding 이 없는 옛 결과는 빈 목록
+    — 호출자가 종전 "법적/실무상 이유" 한 줄로 되돌아간다.
+    """
+    g = issue.legal_grounding if isinstance(issue.legal_grounding, dict) else None
+    if not g:
+        return []
+    out: list[tuple[str, str]] = []
+    clauses = [str(c) for c in (g.get("contract_clauses") or []) if str(c).strip()]
+    if clauses:
+        out.append(("관련 계약조항", ", ".join(clauses)))
+    statutes = [s for s in (g.get("statutes") or []) if isinstance(s, dict)]
+    if statutes:
+        for st in statutes:
+            out.append(("관련 법령", f"{st.get('citation')}({st.get('title')}) — {st.get('role')}"))
+    elif g.get("statute_note"):
+        out.append(("관련 법령", str(g["statute_note"])))
+    if str(g.get("legal_reason") or "").strip():
+        out.append(("법률상 이유", str(g["legal_reason"]).strip()))
+    if str(g.get("business_reason") or "").strip():
+        out.append(("실무상 이유", str(g["business_reason"]).strip()))
+    return out
 
 
 def _build_review_issues(
@@ -432,6 +460,7 @@ def _build_review_issues(
             is_checklist_item=bool(cr.get("is_checklist_item")),
             is_mandatory_target=bool(cr.get("is_mandatory_review_target") or cr.get("is_mandatory")),
             redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
+            legal_grounding=cr.get("legal_grounding") if isinstance(cr.get("legal_grounding"), dict) else None,
         )
         issues.append(ri)
 
@@ -930,7 +959,12 @@ def build_legal_review_docx(
                 _para(body, f"원문: {safe_truncate(issue.original_text, 300)}", indent=1)
 
             _para(body, f"문제점: {safe_truncate(issue.problem, 350)}", indent=1)
-            _para(body, f"법적/실무상 이유: {safe_truncate(issue.legal_business_reason, 350)}", indent=1)
+            _g_lines = grounding_lines(issue)
+            if _g_lines:
+                for _label, _text in _g_lines:
+                    _para(body, f"[{_label}] {safe_truncate(_text, 420)}", indent=1)
+            else:
+                _para(body, f"법적/실무상 이유: {safe_truncate(issue.legal_business_reason, 350)}", indent=1)
 
             if issue.redline_instruction:
                 _render_redline_instruction(body, issue.redline_instruction, color=COLOR_HIGH)
@@ -976,6 +1010,8 @@ def build_legal_review_docx(
                 _para(body, f"원문: {safe_truncate(issue.original_text, 200)}", indent=1)
 
             _para(body, f"문제점: {safe_truncate(issue.problem, 300)}", indent=1)
+            for _label, _text in grounding_lines(issue):
+                _para(body, f"[{_label}] {safe_truncate(_text, 360)}", indent=1)
             if issue.redline_instruction:
                 _render_redline_instruction(body, issue.redline_instruction, color=COLOR_MEDIUM)
             else:
@@ -991,6 +1027,41 @@ def build_legal_review_docx(
             _blank(body)
 
     # ── Section 5(or 4): LOW 부록 (옵션) ─────────────────────────────────────
+    # ── Triage: 현행 유지(KEEP) 판단 · 재경/세무 확인사항 (2026-10-01 지시 1·7·15항) ──
+    # 번호 없는 칸으로 둔다 — 기존 섹션 번호 체계(필수/권장/참고/제외)를 흔들지 않는다.
+    _keep_items = [c for c in clause_results if isinstance(c, dict) and c.get("keep_as_is")
+                   and c.get("triage") == "KEEP"]
+    _finance_items = [c for c in clause_results if isinstance(c, dict) and c.get("finance_check")
+                      and not c.get("dedup_suppressed")]
+    if _keep_items:
+        _separator(body)
+        _heading1(body, "현행 유지(KEEP) 판단 — 검토했으나 수정하지 않는 조항")
+        for _k in _keep_items:
+            _kg = _k.get("legal_grounding") or {}
+            _kt = ""
+            for _d in _k.get("detected_issue_list") or []:
+                if isinstance(_d, dict) and _d.get("issue_title"):
+                    _kt = str(_d["issue_title"]); break
+            _para(body, f"[KEEP] {_k.get('display_path') or ''} {_kt}".strip(), bold=True, color=COLOR_LOW)
+            if _k.get("keep_reason"):
+                _para(body, f"판단: {safe_truncate(str(_k['keep_reason']), 300)}", indent=1)
+            if _kg.get("contract_clauses"):
+                _para(body, f"[관련 계약조항] {', '.join(_kg['contract_clauses'])}", indent=1)
+            for _st in _kg.get("statutes") or []:
+                _para(body, f"[관련 법령] {_st.get('citation')}({_st.get('title')}) — {_st.get('role')}", indent=1)
+    if _finance_items:
+        _separator(body)
+        _heading1(body, "재경·세무 확인사항 — 법무 수정사항 아님")
+        for _f in _finance_items:
+            _ft = ""
+            for _d in _f.get("detected_issue_list") or []:
+                if isinstance(_d, dict) and _d.get("issue_title"):
+                    _ft = str(_d["issue_title"]); break
+            _para(body, f"[재경 확인] {_f.get('display_path') or ''} {_ft}".strip(), bold=True)
+            _fp = str(_f.get("problem") or _f.get("rewrite_reason") or "")
+            if _fp:
+                _para(body, safe_truncate(_fp, 300), indent=1)
+
     _sec_low = str(5 + _sec_offset)
     if include_low:
         _separator(body)

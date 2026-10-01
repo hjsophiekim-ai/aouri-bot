@@ -90,8 +90,14 @@ _RX_ASYMMETRIC_FORUM = re.compile(
 )
 # 2) 복수의 상충되는 관할/준거법/중재 조항 — 함수 본문에서 별도 계산.
 # 3) 실제 집행 곤란성 — 승인/집행 거부, 상호주의 부재 등 명시적 신호.
+#    "집행 불가능" 단독은 안 된다 — 분리가능성 조항("일부 조항이 무효 또는 집행
+#    불가능한 것으로 판단되더라도 나머지 조항의 효력에는…")이 거의 모든 계약에
+#    있어, 이 한 구절이 관할 상한을 통째로 꺼 국내 관할 조항이 HIGH/MEDIUM 로
+#    남았다(2026-09-30 한글날 계약 실측). 판결·중재판정의 집행을 말할 때만 센다.
 _RX_ENFORCEMENT_DIFFICULTY = re.compile(
-    r"집행(?:이|을)?\s*(?:곤란|어렵|불가능)|승인\s*(?:및|·)?\s*집행.{0,10}(?:곤란|거부)"
+    r"(?:판결|중재\s*판정|판정|award|judgment)[\S ]{0,20}집행(?:이|을)?\s*(?:곤란|어렵|불가능)"
+    r"|(?:외국|해외)[\S ]{0,20}집행(?:이|을)?\s*(?:곤란|어렵|불가능)"
+    r"|승인\s*(?:및|·)?\s*집행.{0,10}(?:곤란|거부)"
     r"|no\s+reciprocal\s+enforcement|difficult\s+to\s+enforce"
     r"|non[- ]recognition\s+of\s+(?:foreign\s+)?judgment(?:s)?"
     r"|not\s+(?:be\s+)?recognized\s+or\s+enforced",
@@ -141,6 +147,41 @@ def _has_conflicting_jurisdiction_clauses(full_text: str) -> bool:
     }
     seats.discard("")
     return len(seats) >= 2
+
+
+_RX_FOREIGN_PARTY = re.compile(
+    r"\b(?:Inc|Ltd|LLC|GmbH|Corp|Corporation|Limited|Pte|S\.A|B\.V|K\.K)\b\.?"
+    r"|(?:미국|중국|일본|베트남|대만|싱가포르|독일|프랑스|영국|홍콩)\s*(?:법인|회사|소재)"
+    r"|외국\s*법인|해외\s*법인",
+    re.IGNORECASE,
+)
+
+
+def dispute_needs_review(full_text: str) -> bool:
+    """관할·준거법이 실제로 검토할 가치가 있는 구조인가 (2026-09-30 지시 8항).
+
+    해외 법인·외국 준거법·국외 관할·비대칭 관할·상충 조항·집행 곤란 중 하나라도
+    있으면 True. 한국 법인끼리 국내 관할(민사소송법상 관할 포함)이면 False —
+    그때의 관할·준거법 문구는 "더 깔끔하게 할 수 있는 선택사항"이다.
+    """
+    ft = _strip_placeholder_brackets(full_text or "")
+    if (
+        _RX_ASYMMETRIC_FORUM.search(ft)
+        or _has_conflicting_jurisdiction_clauses(ft)
+        or _RX_ENFORCEMENT_DIFFICULTY.search(ft)
+        or _RX_ADVERSE_FOREIGN_LITIGATION.search(ft)
+        or _RX_FOREIGN_PARTY.search(ft)
+    ):
+        return True
+    foreign_law = bool(_RX_HAS_GOVERNING_LAW.search(ft)) and not _RX_KOREAN_GOVERNING_LAW.search(ft)
+    domestic_forum = bool(_RX_DOMESTIC_FORUM.search(ft)) or bool(_RX_MUTUAL_AGREED_JURISDICTION.search(ft))
+    foreign_forum = (
+        bool(_RX_HAS_DISPUTE_MECHANISM.search(ft))
+        and not domestic_forum
+        and not _RX_ORDINARY_ARBITRATION.search(ft)
+        and not re.search(r"민사소송법", ft)
+    )
+    return foreign_law or foreign_forum
 
 
 def calibrate_jurisdiction_finding_severity(

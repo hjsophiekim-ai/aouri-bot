@@ -5662,6 +5662,18 @@ def build_clause_level_result(
         logger.info("entity name corrections: %d", len(_name_fix_findings))
         clause_results.extend(_name_fix_findings)
 
+    # [대리 권한·선택형 귀속 점검, 2026-10-01 지시 6·14항] 상대방이 권리자 본인이 아닌
+    # 갤러리·에이전시일 때의 권한 증빙·면책, 귀속 주체 선택란 미선택 — 법률효과 기반.
+    from runtime.review.authority_selection_checks import (
+        run_authority_selection_checks as _run_authority_checks,
+    )
+    _authority_findings = _run_authority_checks(
+        text=str(text or ""), clauses=clauses, entity_resolution=_entity_resolution,
+    )
+    if _authority_findings:
+        logger.info("authority/selection checks: %d", len(_authority_findings))
+        clause_results.extend(_authority_findings)
+
     # ── [리스크 사슬 검토] (2026-09-10 지시 항목 1) ────────────────────────────
     # 조항별 나열이 아니라 거래위험을 사슬로 연결해 본다. 특히 선이행 구조는
     # 선제공 → 소유권 이전 → 상대방 미이행 → 반환·환수 → 손해배상 → 담보까지
@@ -5672,7 +5684,20 @@ def build_clause_level_result(
         build_effect_risk_packages as _build_chains,
         package_findings as _chain_findings,
     )
-    _effect_chains = _build_chains(text=str(text or ""))
+    # 우리 약칭("알로소")을 넘긴다 — "소유권은 알로소에 귀속"은 소유권이 넘어가는
+    # 문장이 아니다. 거래 원형은 선이행 보증 요구가 거래관행상 맞는지를 정한다.
+    _our_party_for_chain = _entity_resolution.our_company
+    _effect_chains = _build_chains(
+        text=str(text or ""),
+        archetype=str(getattr(_legal_state, "transaction_type", "") or ""),
+        our_labels=tuple(
+            x for x in (
+                (_our_party_for_chain.label, _our_party_for_chain.brand_name,
+                 _our_party_for_chain.legal_entity_name)
+                if _our_party_for_chain is not None else ()
+            ) if x
+        ),
+    )
     _last_article_no_for_chain = 0
     for _c_chain in (clauses or []):
         _raw_chain = str(getattr(_c_chain, "article_number", "") or "").strip()
@@ -5736,6 +5761,13 @@ def build_clause_level_result(
                     + "[당사자 확정 — 권리·의무는 아래 법적 당사자에게 귀속된다. "
                       "브랜드를 별도 당사자로 취급하지 말 것]\n" + _party_block
                 )
+                if len([p for p in _entity_resolution.parties if p.label]) >= 3:
+                    # 3자 계약에 양자 계약 규칙을 그대로 대지 않는다(2026-09-30 지시 14항).
+                    _focus_for_agent += (
+                        "\n[3자 계약] 각 논점마다 의무자·권리자·지급자·수령자·승인자·분쟁 "
+                        "책임자를 위 당사자 약칭으로 특정하라. '상대방' 한 낱말로 두 당사자를 "
+                        "뭉뚱그리지 말 것."
+                    )
             _counsel_report = _run_counsel_agent(
                 provider=ai_provider,
                 model=str(ai_model or ""),
@@ -7725,6 +7757,19 @@ def build_clause_level_result(
     if isinstance(meta.get("canonical_state"), dict) and _entity_resolution.our_company is not None:
         meta["canonical_state"]["our_legal_entity"] = _entity_resolution.our_company.legal_entity_name
         meta["canonical_state"]["our_brand"] = _entity_resolution.our_company.brand_name
+    # [복합계약 구성, 2026-09-30 지시 1항] canonical 유형은 그대로 두고, 실제 거래의
+    # 성격과 구성요소를 함께 싣는다(보고서 상단 "계약 성격").
+    from runtime.review.contract_composition import build_contract_composition as _build_composition
+    meta["contract_composition"] = _build_composition(
+        str(text or ""),
+        canonical_label=str((meta.get("canonical_state") or {}).get("contract_type_label") or ""),
+        party_count=len([p for p in _entity_resolution.parties if p.label]),
+    )
+    if isinstance(meta.get("canonical_state"), dict) and meta["contract_composition"]["is_composite"]:
+        meta["canonical_state"]["primary_contract_type"] = meta["contract_composition"]["primary_contract_type"]
+        meta["canonical_state"]["secondary_contract_elements"] = list(
+            meta["contract_composition"]["secondary_contract_elements"]
+        )
     # review_status 는 반환 직전에 싣는다 — 정정 문안이 함께 나가는 가벼운 결함이라,
     # 여기서 먼저 차지하면 뒤의 더 무거운 게이트(원문 모순 등)가 상태를 못 적는다.
     meta["internal_control_items"] = _internal_controls
@@ -7901,6 +7946,8 @@ def build_clause_level_result(
         str(cr.get("clause_id") or "")
         for cr in clause_results
         if isinstance(cr, dict) and not bool(cr.get("dedup_suppressed"))
+        # 현행 유지(KEEP) 판정은 수정문안이 없는 것이 정상이다(2026-10-01 Triage).
+        and not bool(cr.get("keep_as_is"))
         and not _is_advisory_only(cr)
         and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
         and _is_incomplete_redline_final(cr.get("redline_instruction"))
@@ -8630,6 +8677,30 @@ def build_clause_level_result(
             meta["counsel_agent_restored_clause_ids"] = _counsel_restored
         except Exception:
             pass
+
+    # ── [Final Senior Counsel Audit] (2026-09-30 범용 최종보정) ────────────────
+    # 등급을 올리는 마지막 단계(위 에이전트 등급 복원) 뒤에 둔다 — 여기서 내린
+    # 등급·통합이 다시 뒤집히지 않게. 조·항 grounding, 주제↔조항 일치, 우리에게
+    # 불리한 수정안, 관할 boilerplate·선급금 보증 과대평가, HIGH 문턱, 같은 주제
+    # package 통합, 건수 상한을 한 번에 본다.
+    from runtime.review.senior_counsel_audit import run_senior_counsel_audit as _senior_audit
+    try:
+        meta["senior_counsel_audit"] = _senior_audit(
+            clause_results,
+            text=str(text or ""),
+            clauses=clauses,
+            entity_resolution=_entity_resolution,
+            archetype=str(getattr(_legal_state, "transaction_type", "") or ""),
+        )
+        if meta["senior_counsel_audit"]["actions"]:
+            from runtime.review.output_filter import build_final_findings as _bff_audit
+            meta["final_findings"] = _bff_audit(
+                clause_results,
+                contract_type_code=str(_canonical_profile.contract_type or ""),
+                include_low=False,
+            )
+    except Exception as exc:  # noqa: BLE001 - 감사 실패가 검토를 막지 않는다
+        logger.warning("senior counsel audit failed: %s", exc)
 
     # [2차 보정 4항] 앞단 어느 경로에서든 '계약유형 미확정' 이 세워졌더라도,
     # canonical 유형이 확정돼 있으면 그 상태는 성립할 수 없다. 출력 직전에

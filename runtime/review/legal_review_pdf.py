@@ -129,7 +129,14 @@ def _issue_block(pdf: FPDF, issue: ReviewIssue, *, index: int | None = None) -> 
         _body(pdf, issue.original_text)
     _label(pdf, "문제점")
     _body(pdf, issue.problem)
-    if issue.legal_business_reason and issue.legal_business_reason != issue.problem:
+    from runtime.review.legal_review_docx import grounding_lines
+
+    _g_lines = grounding_lines(issue)
+    if _g_lines:
+        for _g_label, _g_text in _g_lines:
+            _label(pdf, _g_label)
+            _body(pdf, _g_text)
+    elif issue.legal_business_reason and issue.legal_business_reason != issue.problem:
         _label(pdf, "법적/실무상 이유")
         _body(pdf, issue.legal_business_reason)
     _label(pdf, "수정문안")
@@ -382,6 +389,36 @@ def build_legal_review_pdf(
         for issue in medium_issues:
             _issue_block(pdf, issue)
     _next_sec += 1
+
+    # Triage — DOCX 와 같은 번호 없는 칸(2026-10-01 지시 1·7·15항).
+    _keep_items = [c for c in clause_results if isinstance(c, dict) and c.get("keep_as_is")
+                   and c.get("triage") == "KEEP"]
+    _finance_items = [c for c in clause_results if isinstance(c, dict) and c.get("finance_check")
+                      and not c.get("dedup_suppressed")]
+
+    def _first_title(c: dict[str, Any]) -> str:
+        for d in c.get("detected_issue_list") or []:
+            if isinstance(d, dict) and d.get("issue_title"):
+                return str(d["issue_title"])
+        return str(c.get("clause_title") or "")
+
+    if _keep_items:
+        _heading(pdf, "현행 유지(KEEP) 판단 — 검토했으나 수정하지 않는 조항")
+        for c in _keep_items:
+            g = c.get("legal_grounding") or {}
+            _label(pdf, f"[KEEP] {c.get('display_path') or ''} {_first_title(c)}".strip())
+            if c.get("keep_reason"):
+                _body(pdf, f"판단: {c['keep_reason']}")
+            if g.get("contract_clauses"):
+                _body(pdf, f"관련 계약조항: {', '.join(g['contract_clauses'])}")
+            for st in g.get("statutes") or []:
+                _body(pdf, f"관련 법령: {st.get('citation')}({st.get('title')}) — {st.get('role')}")
+    if _finance_items:
+        _heading(pdf, "재경·세무 확인사항 — 법무 수정사항 아님")
+        for c in _finance_items:
+            _label(pdf, f"[재경 확인] {c.get('display_path') or ''} {_first_title(c)}".strip())
+            if c.get("problem") or c.get("rewrite_reason"):
+                _body(pdf, str(c.get("problem") or c.get("rewrite_reason")))
 
     section_num = _next_sec
     if include_low:

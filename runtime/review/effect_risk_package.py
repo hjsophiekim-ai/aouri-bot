@@ -265,6 +265,43 @@ def _strip_disposal_prohibitions(text: str) -> str:
     return _RX_DISPOSAL_PROHIBITION.sub(" ", text or "")
 
 
+#: 소유권이 **넘어가지 않는다**는 문장 — 선이행 사슬의 "소유권 이전" 고리가 아니다.
+#: 2026-09-30 실측(한글날 협업계약 제19조 제9항): "제공자료에 관한 소유권 … 은
+#: 알로소에 귀속되며 자료 제공 자체가 협업자에게 해당 권리를 이전하는 것으로
+#: 해석되지 않는다" — 우리를 보호하는 소유권 유지 조항이 "선이행 → 소유권 이전"
+#: HIGH 의 앵커가 됐다.
+_RX_RETENTION = re.compile(
+    r"이전(?:하는|되는)?\s*것으로\s*(?:해석|보)(?:되지|지)\s*(?:않|아니)"
+    r"|이전되지\s*(?:않|아니)|이전하지\s*(?:않|아니)|소유권\s*(?:을|을\s*)?유보"
+    r"|소유권(?:은|이)?[^.\n]{0,20}(?:여전히|계속)[^.\n]{0,10}(?:보유|귀속)",
+)
+_RX_SENTENCE = re.compile(r"[^.\n。]*(?:[.。]|\n|$)")
+
+
+def _strip_retention(text: str, our_labels: tuple[str, ...] = ()) -> str:
+    """소유권이 우리에게 남는다는 문장을 지운 본문."""
+    out: list[str] = []
+    ours = [re.escape(x) for x in our_labels if x]
+    rx_ours = re.compile(rf"(?:{'|'.join(ours)})\s*(?:에게|에)\s*귀속") if ours else None
+    for m in _RX_SENTENCE.finditer(text or ""):
+        s = m.group(0)
+        if "소유권" in s and (_RX_RETENTION.search(s) or (rx_ours and rx_ours.search(s))):
+            out.append(" ")
+        else:
+            out.append(s)
+    return "".join(out)
+
+
+#: 선이행 회수 사슬을 HIGH 로 올릴 수 있는 거래 원형(지시 2026-09-30 9항) —
+#: 물건을 먼저 넘기는 거래. 창작·개발·라이선스 협업에는 보증·담보를 자동으로
+#: 요구하지 않는다(선급금 규모·신용·관행이 확인되지 않았다).
+_PREPERFORMANCE_HIGH_ARCHETYPES = frozenset({
+    "goods_supply", "construction_works", "lease_rental", "distribution_resale",
+    "non_monetary_exchange",
+})
+_PREPERFORMANCE_SKIP_ARCHETYPES = frozenset({"ip_license", "confidentiality_only"})
+
+
 def _present(links: tuple[Link, ...], text: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     present: list[dict[str, str]] = []
     missing: list[dict[str, str]] = []
@@ -274,16 +311,31 @@ def _present(links: tuple[Link, ...], text: str) -> tuple[list[dict[str, str]], 
     return present, missing
 
 
-def build_effect_risk_packages(*, text: str) -> list[dict[str, Any]]:
+def build_effect_risk_packages(
+    *,
+    text: str,
+    archetype: str = "",
+    our_labels: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
     """계약 전체를 보고 사슬별 상태를 판정한다.
 
     계약유형을 인자로 받지 않는다 — 사슬은 법률효과로 정의되므로 유형과
-    무관하게 성립해야 한다.
+    무관하게 성립해야 한다. `archetype` 은 성립한 사슬의 **등급**만 정한다
+    (선이행 보증 요구가 거래관행상 맞는가).
     """
     body = _strip_disposal_prohibitions(str(text or ""))
+    trigger_body = _strip_retention(body, our_labels)
     out: list[dict[str, Any]] = []
     for chain in CHAINS:
-        triggers_present, _ = _present(chain.triggers, body)
+        severity = chain.severity
+        if chain.key == "pre_performance_recovery" and archetype:
+            if archetype in _PREPERFORMANCE_SKIP_ARCHETYPES:
+                continue
+            if archetype not in _PREPERFORMANCE_HIGH_ARCHETYPES:
+                severity = "LOW"
+        triggers_present, _ = _present(
+            chain.triggers, trigger_body if chain.key == "pre_performance_recovery" else body,
+        )
         if len(triggers_present) < chain.min_triggers:
             continue
         links_present, links_missing = _present(chain.links, body)
@@ -291,7 +343,7 @@ def build_effect_risk_packages(*, text: str) -> list[dict[str, Any]]:
         out.append({
             "key": chain.key,
             "label": chain.label,
-            "severity": chain.severity,
+            "severity": severity,
             "triggers_present": triggers_present,
             "links_present": links_present,
             "links_missing": links_missing,
@@ -327,6 +379,9 @@ def _anchor_clause(chain_key: str, clauses: list[Any] | None) -> Any | None:
     for c in clauses:
         body = c.get("text") if isinstance(c, dict) else getattr(c, "text", "")
         body = str(body or "")
+        if chain_key == "pre_performance_recovery":
+            # 소유권이 우리에게 남는다는 조항은 선이행 위험이 발생하는 조항이 아니다.
+            body = _strip_retention(body)
         if not body.strip() or not pattern.search(body):
             continue
         # 같은 조건을 만족하는 조항이 여럿이면 더 구체적으로 규정한 쪽을 쓴다.

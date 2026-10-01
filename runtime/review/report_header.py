@@ -142,6 +142,12 @@ def build_section1_rows(
     _type_label = str(cs.get("contract_type_label") or "").strip() or contract_type_label(
         format_val(dp.get("contract_type") or contract_type))
     rows.append(HeaderRow(f"계약유형: {_type_label}"))
+    # 복합계약은 단일 유형으로 억지 분류하지 않는다(2026-09-30 지시 1항) — 실제
+    # 거래의 성격과 구성요소를 함께 적는다. 규칙·법률 적용은 위 canonical 유형이 정한다.
+    _primary = str(cs.get("primary_contract_type") or "").strip()
+    _elements = [str(x) for x in (cs.get("secondary_contract_elements") or []) if str(x).strip()]
+    if _primary and _elements:
+        rows.append(HeaderRow(f"계약 성격: {_primary} (구성요소: {'·'.join(_elements)})"))
     _counterparty_role = str(cs.get("counterparty_label") or "").strip()
     if _counterparty_role:
         rows.append(HeaderRow(f"상대방 지위: {_counterparty_role}"))
