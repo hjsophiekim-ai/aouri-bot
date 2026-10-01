@@ -179,7 +179,7 @@ class HangulDayBenchmarkTest(unittest.TestCase):
             xml = z.read("word/document.xml").decode("utf-8")
         self.assertIn("현행 유지(KEEP) 판단", xml)
         self.assertIn("[KEEP] 제20조 제1항", xml)
-        self.assertIn("재경·세무 확인사항", xml)
+        self.assertIn("재경·사업부 확인사항", xml)
 
 
 if __name__ == "__main__":

@@ -167,12 +167,19 @@ def triage_one(
         return FINANCE_CHECK, "세금계산서·부가세·원천징수는 계약 효력에 직접 영향이 없는 재경·세무 확인사항", scores
     if axis == "jurisdiction" or cr.get("boilerplate_low_priority"):
         return DROP, "국내 법인 간 관할·통지 등 일반 boilerplate", scores
-    kr = keep_reason(cr, axis, contract_text, article_text)
+    # ac_* 결정론 점검은 이미 "현행 문언으로 부족한 경우"에만 만들어진다 — 정산 세부 KEEP 규칙이
+    # 결제창 Case A/B 정리까지 KEEP 으로 덮지 않게 한다.
+    kr = "" if str(cr.get("clause_id") or "").startswith("ac_") else keep_reason(
+        cr, axis, contract_text, article_text)
     if kr:
         return KEEP, kr, scores
     if is_protected(cr):
         return (MUST_FIX if tier == "HIGH" else SHOULD_FIX if tier == "MEDIUM" else DROP), "", scores
     # 생성형 finding — 점수와 최종 필터(지시 16항)로 판단한다. 등급은 올리지 않는다.
+    if re.search(r"배상\s*(?:책임\s*)?(?:상한|한도)|책임\s*(?:상한|한도)", _title(cr)):
+        # 와이어드 지시 10항 — 상한을 둘지·얼마로 할지는 거래 규모를 보고 사업부가 정한다.
+        # 법무 판단(어떤 책임을 상한에서 뺄지)은 요청 답변의 최소수정문구로 낸다.
+        return FINANCE_CHECK, "손해배상 상한 금액·기준은 거래 규모를 본 사업부 결정 사항", scores
     has_redline = bool(str(cr.get("suggested_rewrite") or "").strip())
     yes = sum([
         scores["money"] + scores["rights"] > 0,      # 실제 손실 가능성

@@ -791,6 +791,7 @@ def build_legal_review_docx(
             "수정 필요": COLOR_HIGH,
             "별도계약 필요": COLOR_MEDIUM,
             "사실관계 추가확인": COLOR_MEDIUM,
+            "사업부 결정 필요": COLOR_MEDIUM,
             "적정": COLOR_LOW,
         }
         for r in user_review_coverage:
@@ -805,6 +806,8 @@ def build_legal_review_docx(
             p_v = _p(body)
             r_v = _r(p_v, bold=True, color=color)
             _t(r_v, f"판단: {verdict} / 수정 필요 여부: {'예' if r.get('needs_revision') else '아니오'}")
+            if r.get("current_text"):
+                _para(body, f"현재 문구: {safe_truncate(str(r.get('current_text')), 260)}", italic=True)
             if r.get("conclusion"):
                 _para(body, f"결론: {str(r.get('conclusion'))}")
             for _pc in r.get("proposed_clauses") or []:
@@ -857,10 +860,16 @@ def build_legal_review_docx(
         p_sg = _p(body)
         r_sg = _r(p_sg, bold=True)
         _t(r_sg, "적용 법률 판단 (조항별 검토의 전제)")
+        # 명백히 관련 없는 법률을 하나씩 "비적용" 으로 장문 나열하지 않는다(2026-10-01
+        # 와이어드 지시 16항) — 이름만 한 줄로 남기고, 적용·사실확인 필요만 펼친다.
+        _not_applicable = [str(_d.get("statute") or "") for _d in statute_gate_decisions
+                           if isinstance(_d, dict) and str(_d.get("conclusion") or "") == "비적용"]
         for _d in statute_gate_decisions:
             if not isinstance(_d, dict):
                 continue
             _concl = str(_d.get("conclusion") or "")
+            if _concl == "비적용":
+                continue
             _c_color = COLOR_HIGH if _concl == "적용" else (COLOR_MEDIUM if _concl == "사실확인 필요" else COLOR_LOW)
             p_d = _p(body)
             r_d = _r(p_d, bold=True, color=_c_color)
@@ -870,6 +879,9 @@ def build_legal_review_docx(
                 _para(body, _reason, indent=1)
             for _f in (_d.get("facts_needed") or [])[:4]:
                 _para(body, f"확인 필요: {_f}", indent=1, italic=True)
+        if _not_applicable:
+            _para(body, f"비적용으로 판단한 법률(상세 생략): {', '.join(x for x in _not_applicable if x)}",
+                  color=COLOR_LOW)
         _blank(body)
 
     _has_legal_applicability = bool(legal_applicability_review) and not _is_dealer_rental_docx
@@ -1051,7 +1063,7 @@ def build_legal_review_docx(
                 _para(body, f"[관련 법령] {_st.get('citation')}({_st.get('title')}) — {_st.get('role')}", indent=1)
     if _finance_items:
         _separator(body)
-        _heading1(body, "재경·세무 확인사항 — 법무 수정사항 아님")
+        _heading1(body, "재경·사업부 확인사항 — 법무 수정사항 아님")
         for _f in _finance_items:
             _ft = ""
             for _d in _f.get("detected_issue_list") or []:

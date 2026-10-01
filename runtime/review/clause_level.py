@@ -3552,12 +3552,33 @@ def build_clause_level_result(
     from runtime.review.ad_transaction_model import (
         resolve_ad_transaction_model as _resolve_ad_model,
     )
+    # ── [온라인 판매·공급 거래 재구성] (2026-10-01 와이어드 Golden Fix 1·2항) ──────
+    # 공급자가 제품을 대고 상대방이 자기 SNS·쇼핑몰에서 공동구매로 파는 계약은
+    # "광고매체 집행"(SNS·프로모션 낱말)도 "단순 구매"(상대방 = 구매자)도 아니다.
+    # 세 신호(공급·판매채널·정산)가 모두 서면 광고 모델보다 먼저 유형을 확정한다.
+    from runtime.review.online_sales_model import (
+        CANONICAL_TYPE as _SALES_TYPE,
+        resolve_online_sales_model as _resolve_sales_model,
+    )
+    _sales_model = _resolve_sales_model(contract_text=str(text or ""), entity=str(entity or ""))
+    _sales_type_override: dict[str, Any] = {}
+    if _sales_model.confident and str(_canonical_profile.contract_type or "") != _SALES_TYPE:
+        _sales_type_override = {
+            "was": str(_canonical_profile.contract_type or ""), "now": _SALES_TYPE,
+            "basis": _sales_model.basis,
+        }
+        _canonical_profile.contract_type = _SALES_TYPE
     _ad_model = _resolve_ad_model(
         contract_text=str(text or ""),
         user_description=str(review_focus or "") if isinstance(review_focus, str) else "",
         contract_type_code=str(_canonical_profile.contract_type or ""),
         answers=answers,
     )
+    if _sales_model.confident:
+        # 판매채널 운영자의 "프로모션·광고" 는 판매행위의 일부다 — 광고매체 체크리스트
+        # (ADM-*)·송출 질문이 붙지 않게 광고 거래모델을 끈다.
+        from runtime.review.ad_transaction_model import AdTransactionModel as _AdModel
+        _ad_model = _AdModel(basis="온라인 판매·공급 거래로 확정 — 광고 거래모델 아님")
     _ad_type_override: dict[str, Any] = {}
     if _ad_model.canonical_contract_type and (
         str(_canonical_profile.contract_type or "") != _ad_model.canonical_contract_type
@@ -3657,6 +3678,8 @@ def build_clause_level_result(
     _contract_type_locked_reason = ""
     if _construction_model.is_construction and _construction_model.construction_confident:
         _contract_type_locked_reason = "건설 거래구조 확정"
+    elif _sales_model.confident:
+        _contract_type_locked_reason = "온라인 판매·공급 거래구조 확정"
 
     if _canonical_profile.contract_type == "testing_inspection_service":
         _contract_class = "testing_service"
@@ -4024,6 +4047,34 @@ def build_clause_level_result(
         _canonical_state = _dc_replace2(
             _canonical_state, party_role_direction=_legal_state.our_role_direction,
         )
+
+    # [온라인 판매·공급 — 당사자·결제 흐름 확정] (2026-10-01 지시 2·6항) 상대방을
+    # "구매자"로 적지 않는다. 정산 대행자는 계약당사자가 아니며 지급책임은 판매자에게 남는다.
+    if _sales_model.confident:
+        from dataclasses import replace as _dc_replace_sales
+        from runtime.review.online_sales_model import (
+            LABEL as _SALES_LABEL,
+            SELLER_ROLE_LABEL as _SELLER_ROLE,
+            SUPPLIER_ROLE_LABEL as _SUPPLIER_ROLE,
+        )
+        _we_supply = _sales_model.our_side != "seller"
+        _canonical_state = _dc_replace_sales(
+            _canonical_state,
+            contract_type=_SALES_TYPE,
+            contract_type_label=_SALES_LABEL,
+            party_role="supplier" if _we_supply else "seller",
+            counterparty_role="seller" if _we_supply else "supplier",
+            party_label=(_sales_model.supplier_label if _we_supply else _sales_model.seller_label),
+            counterparty_label=(_sales_model.seller_label if _we_supply else _sales_model.supplier_label),
+            governing_transaction={
+                **_canonical_state.governing_transaction,
+                "online_sales_model": _sales_model.to_dict(),
+                "our_role_label": _SUPPLIER_ROLE if _we_supply else _SELLER_ROLE,
+                "counterparty_role_label": _SELLER_ROLE if _we_supply else _SUPPLIER_ROLE,
+            },
+            audit={**_canonical_state.audit, "online_sales_model": _sales_model.basis},
+        )
+        _canonical_type_code = _SALES_TYPE
 
     # ── [Employee NDA 거래모델] (2026-09-28 지시 1항) ─────────────────────────
     # 'NDA' 라는 큰 분류 안에서 사업자 간 NDA 와 임직원 비밀유지 서약을 가른다.
@@ -5673,6 +5724,9 @@ def build_clause_level_result(
     if _authority_findings:
         logger.info("authority/selection checks: %d", len(_authority_findings))
         clause_results.extend(_authority_findings)
+    if _sales_model.confident:
+        from runtime.review.online_sales_model import payment_flow_finding as _payment_flow_finding
+        clause_results.extend(_payment_flow_finding(_sales_model, clauses))
 
     # ── [리스크 사슬 검토] (2026-09-10 지시 항목 1) ────────────────────────────
     # 조항별 나열이 아니라 거래위험을 사슬로 연결해 본다. 특히 선이행 구조는
@@ -7765,6 +7819,16 @@ def build_clause_level_result(
         canonical_label=str((meta.get("canonical_state") or {}).get("contract_type_label") or ""),
         party_count=len([p for p in _entity_resolution.parties if p.label]),
     )
+    if _sales_model.confident:
+        # 거래 재구성이 세운 구성요소가 낱말 빈도보다 정확하다(와이어드 지시 1항).
+        from runtime.review.online_sales_model import LABEL as _SALES_PRIMARY
+        meta["contract_composition"] = {
+            "primary_contract_type": _SALES_PRIMARY,
+            "secondary_contract_elements": list(_sales_model.elements),
+            "is_composite": True,
+            "canonical_label": _SALES_PRIMARY,
+        }
+    meta["online_sales_model"] = _sales_model.to_dict()
     if isinstance(meta.get("canonical_state"), dict) and meta["contract_composition"]["is_composite"]:
         meta["canonical_state"]["primary_contract_type"] = meta["contract_composition"]["primary_contract_type"]
         meta["canonical_state"]["secondary_contract_elements"] = list(
@@ -8503,6 +8567,88 @@ def build_clause_level_result(
     except Exception as exc:  # noqa: BLE001 - 점검 실패가 검토를 막지 않는다
         logger.warning("user request mapping check failed: %s", exc)
 
+    # ── [상거래 요청사항 직접 답변] (2026-10-01 와이어드 Golden Fix 3·6·10항) ─────
+    # 최저가·정산 주체·관할·배상 상한 질문에 관련 조항·현재 문구·판단·수정 필요 여부·최소
+    # 수정문구로 답한다. 요청의 조 번호가 이 문서에서 다른 조항이면 내용으로 다시 잇는다.
+    # 배상 상한 질문을 개인정보 조항에 연결했던 행은 고쳐 쓰고 그 사실을 남긴다.
+    try:
+        from runtime.review.commercial_request_review import (
+            merge_into_coverage as _merge_commercial,
+            review_commercial_requests as _review_commercial,
+        )
+        from runtime.review.existing_protection import find_existing_protections as _find_protections
+
+        _commercial_reviews = _review_commercial(
+            review_focus=str(review_focus or "") if isinstance(review_focus, str) else "",
+            clauses=clauses,
+            model=_sales_model if _sales_model.confident else None,
+            protections=_find_protections(clauses),
+        )
+        if _commercial_reviews:
+            _user_request_coverage, _fixed_mappings = _merge_commercial(
+                _user_request_coverage, _commercial_reviews, clauses=clauses,
+            )
+            meta["user_review_coverage"] = _user_request_coverage
+            meta["commercial_request_reviews"] = [r.to_coverage_row() for r in _commercial_reviews]
+            # 같은 쟁점의 finding 에 수정문이 없으면 요청 답변의 최소수정문구를 싣는다 — 본문(A/B)과
+            # 요청 답변이 같은 문안을 말하게 한다(실측: 최저가 논점이 문구 없이 MEDIUM 으로 남음).
+            from runtime.review.commercial_request_review import TOPICS as _COMMERCIAL_TOPICS
+            from runtime.review.effect_risk_package import _attach_chain_edit as _attach_edit
+            for _rv in _commercial_reviews:
+                if _rv.verdict != "수정 필요" or not _rv.proposed:
+                    continue
+                _tp = next(t for t in _COMMERCIAL_TOPICS if t.key == _rv.topic)
+                for _cr_rq in clause_results:
+                    if not isinstance(_cr_rq, dict) or _cr_rq.get("dedup_suppressed") or _cr_rq.get("keep_as_is"):
+                        continue
+                    if str(_cr_rq.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
+                        continue
+                    if str(_cr_rq.get("suggested_rewrite") or "").strip():
+                        continue
+                    _ttl = " ".join(str(d.get("issue_title") or "") for d in (_cr_rq.get("detected_issue_list") or [])
+                                    if isinstance(d, dict)) or str(_cr_rq.get("issue_title") or "")
+                    if not _tp.question.search(_ttl):
+                        continue
+                    _cr_rq["suggested_rewrite"] = _rv.proposed[0]
+                    _cr_rq["recommendation_text"] = _rv.proposed[0]
+                    _cr_rq["rewrite_from_request_answer"] = _rv.topic
+                    _attach_edit(_cr_rq, recommendation=_rv.proposed[0])
+                # 요청 답변이 "수정 필요"인데 본문에 그 쟁점의 finding 이 하나도 없으면 답변으로
+                # 하나 만든다 — AI 실행마다 논점이 달라도 본문(A/B)과 요청 답변이 같은 결론을 낸다.
+                _covered_rq = any(
+                    isinstance(c, dict) and not c.get("dedup_suppressed") and not c.get("keep_as_is")
+                    and str(c.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+                    and _tp.question.search(
+                        " ".join(str(d.get("issue_title") or "") for d in (c.get("detected_issue_list") or [])
+                                 if isinstance(d, dict)) or str(c.get("issue_title") or ""))
+                    for c in clause_results
+                )
+                _anchor_rq = next((c for c in (clauses or [])
+                                   if getattr(c, "display_path", "") in _rv.clauses), None)
+                if not _covered_rq and _anchor_rq is not None:
+                    _new_rq = {
+                        "clause_id": f"ac_request_{_rv.topic}__{getattr(_anchor_rq, 'clause_id', '')}",
+                        "clause_title": str(getattr(_anchor_rq, "title", "") or ""),
+                        "display_path": str(getattr(_anchor_rq, "display_path", "") or ""),
+                        "article_number": str(getattr(_anchor_rq, "article_number", "") or ""),
+                        "paragraph_number": str(getattr(_anchor_rq, "paragraph_number", "") or ""),
+                        "original_text": str(getattr(_anchor_rq, "text", "") or ""),
+                        "risk_tier": "MEDIUM", "severity": "MEDIUM", "confidence": 0.85,
+                        "is_common_legal_risk": True, "is_effect_baseline": True,
+                        "problem": _rv.conclusion, "rewrite_reason": _rv.conclusion,
+                        "legal_business_reason": _rv.conclusion,
+                        "suggested_rewrite": _rv.proposed[0], "recommendation_text": _rv.proposed[0],
+                        "negotiation_position": "담당자 요청사항에 대한 최소 수정문구입니다.",
+                        "detected_issue_list": [{"issue_title": f"[요청사항] {_rv.question[:60]}"}],
+                        "rewrite_from_request_answer": _rv.topic,
+                    }
+                    _attach_edit(_new_rq, recommendation=_rv.proposed[0])
+                    clause_results.append(_new_rq)
+            if _fixed_mappings:
+                meta["user_request_mapping_fixed"] = _fixed_mappings
+    except Exception as exc:  # noqa: BLE001 - 답변 생성 실패가 검토를 막지 않는다
+        logger.warning("commercial request review failed: %s", exc)
+
     # ── [중복 finding 통합] (2026-09-21 2차 지시 8항) ───────────────────────
     # 같은 법률효과를 여러 항목이 반복하면 담당자는 같은 이야기를 세 번 읽고,
     # 어느 문안을 계약서에 넣어야 하는지 알 수 없다. 실측: 유치권이
@@ -8692,7 +8838,8 @@ def build_clause_level_result(
             entity_resolution=_entity_resolution,
             archetype=str(getattr(_legal_state, "transaction_type", "") or ""),
         )
-        if meta["senior_counsel_audit"]["actions"]:
+        # 감사가 아무것도 고치지 않았어도 다시 만든다 — 앞의 요청 답변 단계가 finding 을 더했을 수 있다.
+        if True:
             from runtime.review.output_filter import build_final_findings as _bff_audit
             meta["final_findings"] = _bff_audit(
                 clause_results,
@@ -8701,6 +8848,26 @@ def build_clause_level_result(
             )
     except Exception as exc:  # noqa: BLE001 - 감사 실패가 검토를 막지 않는다
         logger.warning("senior counsel audit failed: %s", exc)
+    # 감사가 내보내지 않기로 한 finding 만 가리키는 실패 상태는 더 이상 성립하지 않는다 —
+    # 실측: 제거된 "이행유보권" 하나 때문에 INCOMPLETE_REWRITE 가 대표 상태로 남았다.
+    _status_now = str(meta.get("review_status") or "")
+    if _status_now in ("REVIEW_FAILED_INCOMPLETE_REWRITE", "REVIEW_FAILED_INCOMPLETE_REDLINE"):
+        _live_ids = {
+            str(c.get("clause_id") or "") for c in clause_results
+            if isinstance(c, dict) and not c.get("dedup_suppressed") and not c.get("keep_as_is")
+            and str(c.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+        }
+        _cited = re.findall(r"[A-Za-z][\w\-]*__[\w\-]+|[a-z]+_[a-z_]+|KR-[\w\-]+",
+                            str(meta.get("review_status_detail") or ""))
+        from runtime.review.rewrite_completeness import is_descriptive_only as _is_desc, rewrite_text as _rw_text
+        _still_incomplete = [
+            c for c in clause_results if isinstance(c, dict) and str(c.get("clause_id") or "") in set(_cited)
+            and str(c.get("clause_id") or "") in _live_ids and _is_desc(_rw_text(c))
+        ]
+        if _cited and not _still_incomplete:
+            meta["review_status_cleared_after_audit"] = {"was": _status_now, "ids": _cited}
+            meta["review_status"] = ""
+            meta["review_status_detail"] = ""
 
     # [2차 보정 4항] 앞단 어느 경로에서든 '계약유형 미확정' 이 세워졌더라도,
     # canonical 유형이 확정돼 있으면 그 상태는 성립할 수 없다. 출력 직전에

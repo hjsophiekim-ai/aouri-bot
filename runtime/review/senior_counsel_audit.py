@@ -79,6 +79,12 @@ TOPICS: tuple[Topic, ...] = (
           _rx(r"선급금\s*보증|보증\s*보험|이행\s*보증|보증\s*증권"),
           _rx(r"선급금|선금|착수금|보증"),
           high_allowed=False),
+    # 와이어드 지시 7항 — 표시·광고는 행정규제 준수 사항이다. 제3자 관리책임이 이미 있으면
+    # 신설 HIGH 를 만들지 않는다(KEEP 은 existing_protection 이 판정).
+    Topic("advertising_disclosure", "표시·광고(경제적 이해관계 표시)",
+          _rx(r"표시\s*[·ㆍ]?\s*광고|경제적\s*이해관계|인플루언서|협찬\s*(?:미)?표시"),
+          _rx(r"광고|표시|홍보|법령"),
+          high_allowed=False),
     Topic("ip", "지식재산·이용권",
           _rx(r"지식재산|저작권|저작물|이용권|이용\s*허락|2차적|복제|초상|퍼블리시티|IP\b"),
           _rx(r"저작권|지식재산|이용권|이용을?\s*허락|복제|2차적|전시|홍보|출판"),
@@ -212,7 +218,10 @@ def _clause_containing(quote: str, index: list[ClauseRef]) -> ClauseRef | None:
 
 _RX_WORD = re.compile(r"[가-힣]{2,}")
 _STOP = frozenset({"계약", "조항", "규정", "경우", "관련", "사항", "책임", "당사자", "상대방", "우리",
-                   "회사", "본계약", "계약서", "없음", "부재", "누락", "공통", "법률리스크", "구조인데"})
+                   "회사", "본계약", "계약서", "없음", "부재", "누락", "공통", "법률리스크", "구조인데",
+                   # 어느 조항에나 나오는 절차어 — 실측: "개인정보 유출 … 통지/대응 점검" 이 제조물책임
+                   # 조항의 "통지" 한 낱말로 그 조항 얘기로 통과됐다.
+                   "통지", "대응", "점검", "명확화", "보완", "불명확", "범위", "확인", "필요", "위험"})
 
 
 def _clause_by_overlap(cr: dict[str, Any], index: list[ClauseRef]) -> ClauseRef | None:
@@ -335,7 +344,11 @@ def _replace_role_noun(s: str, noun: str, term: str) -> str:
 #: 깨진 문구 — 빈 열거 고리, 짝 없는 괄호, 문장 끝이 접속어.
 _RX_BROKEN = re.compile(
     r"·\s*·|\(\s*단\s*,\s*[^)]{0,40}·\s*[^)]{0,20}$|(?:또는|및|그리고|그러나)\s*\.{0,3}\s*$"
-    r"|\(\s*\)|\s·\s*[가-힣]{1,4}(?:의|는|을|를)\s*·",
+    r"|\(\s*\)|\s·\s*[가-힣]{1,4}(?:의|는|을|를)\s*·"
+    # "(단, 서면사전 · 권리 · 10영업일 · 동의한 조건 포함)" — 낱말 조각을 · 로 이어 붙인 괄호
+    r"|\((?:단\s*,\s*)?(?:[^()·]{1,10}\s*·\s*){2,}[^()]{0,16}\)"
+    # "사전 서면사전 서면" — 같은 어절이 붙어서 반복
+    r"|([가-힣]{2,4}\s?[가-힣]{2,4})\1",
 )
 
 
@@ -806,6 +819,7 @@ def _is_generated(cr: dict[str, Any]) -> bool:
 
 def _apply_triage(
     clause_results: list[dict[str, Any]], *, index: list[ClauseRef], text: str, archetype: str, audit: _Audit,
+    clauses: list[Any] | None = None,
 ) -> dict[str, Any]:
     """2026-10-01 지시 — MUST/SHOULD/KEEP/FINANCE_CHECK/DROP. 결과는 제자리에서 고친다."""
     from runtime.review.issue_triage import (
@@ -815,6 +829,9 @@ def _apply_triage(
 
     has_name_fix = any(isinstance(c, dict) and c.get("is_entity_name_correction") and _visible(c)
                        for c in clause_results)
+    from runtime.review.existing_protection import find_existing_protections, protection_covering
+
+    satisfied = find_existing_protections(clauses)
     out: dict[str, list[dict[str, Any]]] = {MUST_FIX: [], SHOULD_FIX: [], KEEP: [], FINANCE_CHECK: [], DROP: []}
 
     def _row(cr: dict[str, Any], label: str, reason: str, scores: dict[str, int] | None) -> dict[str, Any]:
@@ -846,6 +863,19 @@ def _apply_triage(
             cr["triage"] = DROP
             audit.suppress(cr, "TRIAGE_DROP", "당사자 법인명 정정 finding 과 같은 쟁점(중복)")
             out[DROP].append(_row(cr, DROP, "법인명 정정과 중복", None))
+            continue
+        # 세무 디테일·배상 상한은 보호장치가 있어도 KEEP 이 아니라 재경·사업부 확인 사항이다
+        # (지시 7·10항) — 같은 조에 제조물책임·정산 대행 보호장치가 있다고 덮이면 안 된다.
+        _business = axis == "tax" or bool(re.search(
+            r"배상\s*(?:책임\s*)?(?:상한|한도)|책임\s*(?:상한|한도)", _title(cr)))
+        covered = None if _business else protection_covering(cr, satisfied)
+        if covered is not None:
+            # 지시 5항 — 이미 해결된 보호장치와 같은 쟁점은 다시 만들지 않는다(KEEP).
+            reason = f"{covered.display_path}: {covered.protection.keep_reason}"
+            cr.update({"triage": KEEP, "triage_reason": reason, "keep_as_is": True,
+                       "keep_reason": reason, "display_kind": "keep", "kept_by_protection": covered.protection.key})
+            audit.act(cr, "keep", "EXISTING_PROTECTION", reason)
+            out[KEEP].append(_row(cr, KEEP, reason, None))
             continue
         article = str(cr.get("article_number") or "")
         article_text = "\n".join(r.text for r in index if r.article == article) if article else ""
@@ -886,9 +916,12 @@ def _apply_triage(
     for cr in clause_results:
         if not _visible(cr) or cr.get("triage") not in (MUST_FIX, SHOULD_FIX) or cr.get("is_entity_name_correction"):
             continue
+        # 축만 같다고 합치지 않는다 — 한 조에 가격과 정산을 함께 담은 계약에서 "최저가 귀책" 과
+        # "결제창별 자금흐름" 이 한 건으로 합쳐졌다. 주제까지 같아야 같은 쟁점이다.
+        _tp = topic_of(cr)
         key = (str(cr.get("article_number") or ""), str(cr.get("paragraph_number") or ""),
-               str(cr.get("triage_axis") or ""))
-        if key[0] and key[2] not in ("", "other"):
+               str(cr.get("triage_axis") or "") + "/" + (_tp.key if _tp else ""))
+        if key[0] and key[2].split("/")[0] not in ("", "other"):
             groups.setdefault(key, []).append(cr)
     for items in groups.values():
         if len(items) < 2:
@@ -908,11 +941,116 @@ def _apply_triage(
     return out
 
 
+# ── 과잉 생성 차단 (2026-10-01 와이어드 Golden Fix 7·8·9·11·12·13항) ──────────────
+
+_RX_RETENTION_RIGHT = re.compile(r"이행\s*유보|이행유보권")
+_RX_SETOFF_LIMIT = re.compile(r"상계\s*(?:제한|요건|금지)|일방적\s*상계")
+_RX_BROAD_SETOFF = re.compile(
+    r"(?:판매사|회사|구매자|상대방|을|갑)[”\"']?(?:은|는|이|가)?[^.]{0,40}(?:일체|모든|어떠한|각종)[^.]{0,40}상계할\s*수\s*있"
+)
+_RX_TERMINATION_ON_DEFAULT = re.compile(r"(?:지급\s*정지|지불\s*정지|부도|시정[^.]{0,30}해지|위반한?\s*경우[^.]{0,60}해지)")
+_RX_NDA_DELETION = re.compile(r"(?:백업|로그)[^.]{0,40}(?:반환|삭제|파기)|삭제\s*(?:완료\s*)?(?:를\s*확인할\s*수\s*있는\s*)?(?:증적|확인서)")
+_RX_DATA_CLAUSE = re.compile(r"개인정보|비밀|기밀|데이터|정보\s*보호")
+_RX_PROCEDURE_ADD = re.compile(
+    r"대표이사[^.]{0,20}(?:또는|및)?[^.]{0,20}(?:위임|동의)|위임받은\s*담당자|\d+\s*영업일\s*이내[^.]{0,40}(?:통지|회신|동의\s*여부)"
+    r"|동의한\s*것으로\s*본다|무응답"
+)
+_RX_ADMIN_EXEMPT = re.compile(
+    r"(?:과태료|과징금|행정\s*제재|행정\s*처분|영업\s*정지)[^.]{0,80}(?:면책|책임을?\s*지지\s*아니|부담하지\s*아니"
+    r"|모든\s*책임은[^.]{0,30}부담)"
+)
+
+
+def _overreach_ok(cr: dict[str, Any], *, text: str, archetype: str, audit: _Audit) -> bool:
+    if cr.get("is_entity_name_correction"):
+        return True
+    title = _title(cr)
+    tier = str(cr.get("risk_tier") or "").upper()
+    proposal = _proposal(cr)
+    original = str(cr.get("original_text") or "")
+    flat = re.sub(r"\s*\n\s*", " ", text)
+    # 8항 — 이행유보권은 자동 HIGH 금지. 해지·지급정지 조항이 이미 있거나 공급자가 직접 대금을
+    # 받는 구조면 실익이 낮다(DROP).
+    if _RX_RETENTION_RIGHT.search(title):
+        if _RX_TERMINATION_ON_DEFAULT.search(flat) or re.search(r"고객으로부터[^.]{0,30}직접\s*수취", flat):
+            audit.suppress(cr, "TRIAGE_DROP", "해지·지급정지 조항이 이미 있어 이행유보권 신설의 실익이 낮음")
+            return False
+        if tier == "HIGH":
+            audit.set_tier(cr, "MEDIUM", "HIGH_THRESHOLD", "이행유보권은 공급자 보호 보완사항 — 필수 수정 아님")
+    # 9항 — 상대방에게 넓은 일방 상계권이 없으면 상계 제한 조항을 만들지 않는다.
+    if _RX_SETOFF_LIMIT.search(title) and not _RX_BROAD_SETOFF.search(flat):
+        audit.suppress(cr, "TRIAGE_DROP", "상대방의 광범위한 일방 상계권이 없어 상계 제한 신설의 실익이 낮음")
+        return False
+    # 11항 — NDA 식 데이터 반환·삭제(백업·로그) 문구는 비밀유지 계약·데이터 조항에서만.
+    # 수정문이 이미 거둬진 finding 은 제목으로 본다(실측: "데이터 이전/반환/삭제 및 로그/백업 처리 점검").
+    if re.search(r"(?:로그|백업)[^.]{0,12}(?:처리|삭제|반환)|데이터\s*이전\s*/?\s*반환", title) \
+            and archetype != "confidentiality_only" \
+            and not _RX_DATA_CLAUSE.search(str(cr.get("clause_title") or "") + " " + original[:200]):
+        audit.suppress(cr, "REVIEW_FAILED_CROSS_CONTRACT_CONTAMINATION",
+                       "비밀유지 계약의 데이터 반환·삭제(백업·로그) 점검이 무관한 조항에 붙음")
+        return False
+    if proposal and _RX_NDA_DELETION.search(proposal) and not _RX_NDA_DELETION.search(original) \
+            and archetype != "confidentiality_only" and not _RX_DATA_CLAUSE.search(
+                str(cr.get("clause_title") or "") + " " + original[:200]):
+        audit.suppress(cr, "REVIEW_FAILED_CROSS_CONTRACT_CONTAMINATION",
+                       "비밀유지 계약의 데이터 반환·삭제(백업·로그) 문구가 상품등록 등 무관한 조항에 붙음")
+        return False
+    # 12·13항 — 동의권자·회신기한·무응답 간주 같은 절차를 자동으로 덧붙이지 않는다.
+    if proposal and _RX_PROCEDURE_ADD.search(proposal) and not _RX_PROCEDURE_ADD.search(original):
+        audit.suppress(cr, STATUS_REDLINE_QUALITY,
+                       "현행 사전 서면동의 구조에 동의권자·회신기한·무응답 간주 절차를 덧붙인 과수정")
+        return False
+    # 7항 — 법정 행정책임 자체를 계약으로 면책시키는 문구는 효력이 없다.
+    if proposal and _RX_ADMIN_EXEMPT.search(proposal):
+        audit.suppress(cr, STATUS_REDLINE_QUALITY,
+                       "과태료·행정제재 등 법정 행정책임을 계약으로 면책시키는 수정안(효력 없음)")
+        return False
+    return True
+
+
+def _add_protection_keep_rows(
+    clause_results: list[dict[str, Any]], *, clauses: list[Any] | None, triage: dict[str, Any],
+) -> None:
+    """이미 해결된 보호장치마다 KEEP 판정을 명시적으로 남긴다(지시 15항 — "문제 없음"도 판정이다).
+
+    비밀유지·양도금지 같은 일반 조항은 그것을 건드린 finding 이 있었을 때만 남긴다 — 모든 계약의
+    KEEP 칸이 일반 조항으로 채워지지 않게.
+    """
+    from runtime.review.existing_protection import find_existing_protections
+
+    used = {str(c.get("kept_by_protection") or "") for c in clause_results if isinstance(c, dict)}
+    present = {str(c.get("clause_id") or "") for c in clause_results if isinstance(c, dict)}
+    general = {"confidentiality_consent", "assignment_consent"}
+    for s in find_existing_protections(clauses):
+        key = s.protection.key
+        cid = f"keep_{key}__{s.article}"
+        # 그 보호장치로 KEEP 된 finding 이 이미 있으면 그 행이 판정을 대신한다(중복 방지).
+        if cid in present or key in used or (key in general and key not in used):
+            continue
+        clause_results.append({
+            "clause_id": cid, "display_path": s.display_path, "article_number": s.article,
+            "clause_title": s.protection.title, "risk_tier": "LOW", "severity": "LOW",
+            "keep_as_is": True, "triage": "KEEP", "display_kind": "keep",
+            "keep_reason": s.protection.keep_reason, "is_protection_keep": True,
+            "detected_issue_list": [{"issue_title": s.protection.title}],
+            "related_clause_paths": list(s.clause_paths),
+            "problem": s.protection.keep_reason,
+        })
+        triage.setdefault("KEEP", []).append({
+            "clause_id": cid, "display_path": s.display_path, "title": s.protection.title,
+            "triage": "KEEP", "reason": s.protection.keep_reason, "materiality": {},
+            "contract_clauses": list(s.clause_paths), "statutes": [],
+        })
+
+
 def _merge_packages(visible: list[dict[str, Any]], audit: _Audit) -> None:
     """지시 6항 — 같은 주제의 HIGH/MEDIUM 을 대표 하나로."""
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for cr in visible:
-        if cr.get("dedup_suppressed") or cr.get("is_entity_name_correction"):
+        # ac_* 는 쟁점 하나를 정밀하게 겨냥한 결정론 점검이다 — 같은 주제의 AI 논점에 흡수되면
+        # 그 쟁점(결제창 Case A/B 등)이 하위 bullet 로 묻힌다(와이어드 실측).
+        if cr.get("dedup_suppressed") or cr.get("is_entity_name_correction") \
+                or str(cr.get("clause_id") or "").startswith("ac_"):
             continue
         if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
             continue
@@ -1043,6 +1181,8 @@ def run_senior_counsel_audit(
             continue
         if not _redline_ok(cr, text=body, we_pay=we_pay, audit=audit):
             continue
+        if not _overreach_ok(cr, text=body, archetype=archetype, audit=audit):
+            continue
         _materiality(cr, text=body, archetype=archetype, dispute_review=dispute_review, audit=audit)
         if _visible(cr):
             _relation_reanchor(cr, index, audit)
@@ -1052,7 +1192,9 @@ def run_senior_counsel_audit(
     for cr in clause_results:
         if _visible(cr) or (isinstance(cr, dict) and cr.get("keep_as_is") and cr.get("triage") == "KEEP"):
             _ground_statutes(cr, index, archetype=archetype, audit=audit)
-    triage = _apply_triage(clause_results, index=index, text=body, archetype=archetype, audit=audit)
+    triage = _apply_triage(clause_results, index=index, text=body, archetype=archetype, audit=audit,
+                           clauses=clauses)
+    _add_protection_keep_rows(clause_results, clauses=clauses, triage=triage)
     # 건수 상한은 triage(KEEP·재경·DROP) 뒤에 본다 — 앞에서 보면 곧 빠질 항목들 때문에
     # 정작 남겨야 할 SHOULD FIX(지원사업 상위기준)가 개수에 밀려 내려갔다(실측).
     _limit_counts(clause_results, audit)

@@ -138,7 +138,20 @@ def build_section1_rows(
     _counterparty = format_val(dp.get("counterparty"))
     if _employee_nda and str(_counterparty or "").strip() in ("", "상대방", "미확정", "미상"):
         _counterparty = str(cs.get("counterparty_label") or "") or _counterparty
+    # 온라인 판매·공급 거래(2026-10-01 와이어드 지시 2항) — 상대방을 "구매자"로 적지 않는다.
+    _sales = _gt.get("online_sales_model") if isinstance(_gt.get("online_sales_model"), dict) else None
+    if _sales and _sales.get("confident"):
+        _our_role_label = str(_gt.get("our_role_label") or "")
+        _cp_role_label = str(_gt.get("counterparty_role_label") or "")
+        rows[-1] = HeaderRow(f"우리 측 지위: {_our_role or ''} — {_our_role_label}".strip(" —"))
+        _counterparty = f"{cs.get('counterparty_label') or _counterparty} — {_cp_role_label}".strip(" —")
     rows.append(HeaderRow(f"상대방: {_counterparty}"))
+    if _sales and _sales.get("confident") and _sales.get("payment_agent"):
+        _sel = str(_sales.get("seller_label") or "판매사")
+        rows.append(HeaderRow(
+            f"정산 대행: {_sales['payment_agent']} — 계약당사자 아님, 계약상 최종 지급책임은 {_sel}"
+            + ("" if _sales.get("payment_agent_retained") else " (계약 문언 보완 필요)")
+        ))
     _type_label = str(cs.get("contract_type_label") or "").strip() or contract_type_label(
         format_val(dp.get("contract_type") or contract_type))
     rows.append(HeaderRow(f"계약유형: {_type_label}"))

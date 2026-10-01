@@ -304,7 +304,11 @@ def _merge_same_clause_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
         # 제2항의 부가가치세 과세표준(세무) 논점이 같은 항의 정산문구 지적에
         # 흡수돼, 이번 검토에서 유일한 세무 논점 2건이 최종 결과에서 통째로
         # 사라졌다.
-        if issue.is_counsel_agent or issue.is_construction_checklist:
+        # 법률효과 점검(ac_*)도 쟁점 하나를 겨냥한 별개 판단이다 — 조 단위로만 쪼개진 계약
+        # (와이어드 초안 제7조: 가격·정산을 한 조에)에서 결제창 Case A/B 정리가 최저가 논점에
+        # 흡수돼 사라졌다(2026-10-01 실측).
+        if issue.is_counsel_agent or issue.is_construction_checklist \
+                or str(issue.clause_id or "").startswith("ac_"):
             standalone.append(issue)
             continue
         key = _clause_identity_key(issue)

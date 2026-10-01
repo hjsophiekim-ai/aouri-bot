@@ -292,7 +292,8 @@ def build_legal_review_pdf(
                 f"  관련 조항: {', '.join(str(x) for x in paths) if paths else '해당 조항 없음'}\n"
                 f"  판단: {str(r.get('review_status') or '미답변')}"
                 f" / 수정 필요 여부: {'예' if r.get('needs_revision') else '아니오'}\n"
-                f"  결론: {str(r.get('conclusion') or '')}"
+                + (f"  현재 문구: {str(r.get('current_text'))[:260]}\n" if r.get("current_text") else "")
+                + f"  결론: {str(r.get('conclusion') or '')}"
                 + "".join(
                     f"\n  추가 문안: {str(pc)}" for pc in (r.get("proposed_clauses") or []) if str(pc).strip()
                 )
@@ -414,7 +415,7 @@ def build_legal_review_pdf(
             for st in g.get("statutes") or []:
                 _body(pdf, f"관련 법령: {st.get('citation')}({st.get('title')}) — {st.get('role')}")
     if _finance_items:
-        _heading(pdf, "재경·세무 확인사항 — 법무 수정사항 아님")
+        _heading(pdf, "재경·사업부 확인사항 — 법무 수정사항 아님")
         for c in _finance_items:
             _label(pdf, f"[재경 확인] {c.get('display_path') or ''} {_first_title(c)}".strip())
             if c.get("problem") or c.get("rewrite_reason"):
