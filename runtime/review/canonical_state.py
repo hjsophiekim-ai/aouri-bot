@@ -90,6 +90,8 @@ FAMILY_OF: dict[str, str] = {
     "direct_customer_sales_support": "sales_agency",
     # 라이선스
     "license": "license",
+    # 산학협력 연구용역
+    "research_collaboration": "research_collaboration",
 }
 
 #: 계열 → 교정 시 쓸 대표 세부코드.
@@ -101,6 +103,7 @@ FAMILY_REPRESENTATIVE: dict[str, str] = {
     "rental_lease": "rental",
     "sales_agency": "dealer_agency",
     "license": "license",
+    "research_collaboration": "research_collaboration",
 }
 
 

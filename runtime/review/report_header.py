@@ -47,6 +47,7 @@ _CONTRACT_TYPE_LABELS: dict[str, str] = {
     "distribution_resale": "유통/재판매 계약",
     "software_app_development": "소프트웨어/앱 개발 계약",
     "advisory_service": "자문/용역 계약",
+    "research_collaboration": "산학협력 연구용역 계약(지식재산권 조항 포함)",
     "ai_search_marketing": "AI 검색·마케팅 서비스 계약",
     "purchase_supply": "물품 구매·공급 계약",
     "equipment_purchase_installation": "장비 구매·설치 계약",

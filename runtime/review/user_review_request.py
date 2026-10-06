@@ -107,6 +107,68 @@ _STOPWORDS: frozenset[str] = frozenset({
 })
 
 
+# ── 요청이 아닌 문장 걸러내기 (2026-10-06 범용 보정 4·12항) ─────────────────────
+# 실측(서울대 산학연구계약): 사업부 입력이
+#     "OO 교수와 함께 … 산학연구를 진행하고자 함 / 요청사항 / <연구 용역 계약서>의 법무 검토 요청"
+# 이었는데, 세 줄이 각각 검토 쟁점이 됐다. AI 경로는 배경 문장에서 "배경기술 IP·AI 학습데이터·
+# 개인정보" 쟁점을 지어냈고, 낱말 겹침으로 "적정 — 현재 문언으로 커버됩니다" 라고 답했다. 배경 설명·
+# 머리말·"검토해 달라"는 일반 의뢰는 **맥락**이지 쟁점이 아니다.
+_RX_HEADER_LINE = re.compile(r"^\s*(?:\[?\s*)?(?:검토\s*)?(?:요청\s*사항|배경|참고\s*사항|현황|목적)\s*(?:\]\s*)?[:：]?\s*$")
+_RX_BACKGROUND = re.compile(
+    r"(?:하고자\s*(?:함|합니다|한다|하며)|진행\s*(?:중|예정)(?:임|입니다|이며)?|예정(?:임|입니다)"
+    r"|추진\s*(?:중|예정)(?:임|입니다)?|계획(?:임|입니다)|수신(?:함|하였음|했습니다))\s*\.?\s*$"
+)
+_RX_GENERIC_REVIEW = re.compile(
+    r"(?:법무|법률|계약서?)?\s*(?:검토|자문)\s*(?:를\s*|을\s*)?(?:요청|부탁|의뢰|바랍니다|바람|요망)"
+    r"(?:\s*(?:드립니다|합니다|함|드림))?\s*\.?\s*$"
+)
+#: 일반 의뢰 문장이라도 이것이 있으면 구체적 쟁점이다("지체상금 조항 검토 요청").
+_RX_SPECIFIC_ASK = re.compile(
+    r"조항|제\s*\d+\s*조|여부|가능한지|되는지|괜찮은지|문제|리스크|위험|불리|유리|\?|확인|대금|지급|해지|지식재산|"
+    r"책임|배상|비밀|관할|위약|지체|보증|정산|수수료|독점|기간"
+)
+_RX_SENTENCE_END = re.compile(r"(?:[.?!。]|다|함|임|음|요|청|람|망|까)\s*$")
+_RX_LIST_MARKER = re.compile(r"^\s*(?:[①-⑳]|\(?\d{1,2}[.)]|[-•■·*]\s|[가-하][.)])")
+
+
+def separate_context(focus: str) -> tuple[str, list[str]]:
+    """(실제 검토 요청만 남긴 문자열, 맥락으로 분리한 문장들)."""
+    lines = [ln.strip() for ln in str(focus or "").splitlines()]
+    # PDF·메일에서 붙여 넣은 글은 문장 중간에서 줄이 바뀐다 — 끝나지 않은 줄은 다음 줄과 잇는다.
+    merged: list[str] = []
+    for ln in lines:
+        if not ln:
+            merged.append("")
+            continue
+        if merged and merged[-1] and not _RX_SENTENCE_END.search(merged[-1]) \
+                and not _RX_HEADER_LINE.match(merged[-1]) and not _RX_HEADER_LINE.match(ln) \
+                and not _RX_LIST_MARKER.match(ln):
+            merged[-1] = f"{merged[-1]} {ln}"
+        else:
+            merged.append(ln)
+    keep: list[str] = []
+    context: list[str] = []
+    for seg in merged:
+        if not seg:
+            continue
+        body = seg.lstrip("-•■·* ").strip()
+        if _RX_HEADER_LINE.match(body):
+            context.append(body)
+            continue
+        if _RX_BACKGROUND.search(body) and "?" not in body:
+            context.append(body)
+            continue
+        if _RX_GENERIC_REVIEW.search(body):
+            # "<계약서>의 법무 검토 요청" 에서 계약서 이름을 지우고도 구체적 쟁점어가 남는지 본다.
+            core = re.sub(r"<[^>]{1,60}>|「[^」]{1,60}」|『[^』]{1,60}』", "", body)
+            core = re.sub(r"[가-힣A-Za-z·\s]{0,30}(?:계약서|협약서|약정서)", "", core)
+            if not _RX_SPECIFIC_ASK.search(core):
+                context.append(body)
+                continue
+        keep.append(seg)
+    return "\n".join(keep).strip(), context
+
+
 @dataclass
 class UserReviewIssue:
     """사용자 검토요청에서 추출된 쟁점 하나."""
@@ -367,6 +429,7 @@ def parse_user_review_request(
     # 한 줄 한 줄이 새 검토요청으로 세어져 '사실관계 추가확인' 행이 생긴다
     # (2026-09-28 실측). 답변은 거래모델·AI 검토 프롬프트가 따로 읽는다.
     focus = str(review_focus or "").split(ANSWER_BLOCK_MARKER, 1)[0].strip()
+    focus, _context = separate_context(focus)
     if not focus:
         return UserRequestParseResult(issues=[], status=PARSE_STATUS_EMPTY, degraded=False)
 

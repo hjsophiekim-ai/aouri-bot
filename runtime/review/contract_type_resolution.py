@@ -121,6 +121,16 @@ _TYPE_SIGNALS: dict[str, tuple[TypeSignal, ...]] = {
         _s(r"\bcommission\b.{0,30}\bsales?\b|\bsales?\b.{0,30}\bcommission\b", 3,
            "판매 수수료"),
     ),
+    # 2026-10-06 — 산학협력 연구용역. 연구계약은 정의 조항에 지식재산권·실시 어휘를, 본문에
+    # 비밀유지 조항을 반드시 갖는다. 연구 고유 신호가 없으면 라이선스·NDA 로 떨어졌다(서울대 실측).
+    "research_collaboration": (
+        _s(r"연\s*구\s*책\s*임\s*자|principal\s+investigator", 4, "연구책임자 지정"),
+        _s(r"연\s*구\s*비", 3, "연구비 대가"),
+        _s(r"산\s*학\s*협\s*력|공\s*동\s*연\s*구|연\s*구\s*(?:계\s*약|협\s*약)", 4, "산학·공동연구 표제"),
+        _s(r"연구\s*(?:결과\s*)?보고서", 3, "연구보고서 제출"),
+        _s(r"연\s*구\s*기\s*간|연구\s*계획서|연구\s*과제", 2, "연구기간·연구계획"),
+        _s(r"\bsponsored\s+research\b|\bresearch\s+agreement\b", 4, "Research Agreement"),
+    ),
     "license": (
         _s(r"라\s*이\s*선\s*스|실\s*시\s*권", 4, "실시권 부여"),
         _s(r"로\s*열\s*티|royalty", 4, "로열티 대가"),
@@ -144,6 +154,7 @@ TYPE_LABELS: dict[str, str] = {
     "rental_lease": "렌탈·임대차계약",
     "sales_agency": "판매대리·위탁판매계약",
     "license": "라이선스계약",
+    "research_collaboration": "산학협력 연구용역계약",
 }
 
 
@@ -277,6 +288,7 @@ def resolve_contract_type(text: str, *, declared_type: str = "") -> TypeResoluti
 #: 한국어/영어 키워드. 선언값은 코드가 아니라 사람이 쓴 라벨로 들어온다 —
 #: 실측: "앱개발/소프트웨어개발/SI/유지보수/SaaS" (development_service 를 의미).
 _DECLARED_TYPE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("research_collaboration", ("연구용역", "연구계약", "산학", "공동연구", "research")),
     ("construction_contract", ("공사", "도급", "건축", "시공", "construction", "works")),
     ("supply_installation", ("물품", "구매", "공급", "설치", "납품", "supply", "purchase", "install")),
     ("development_service", ("앱개발", "개발", "소프트웨어", "si", "saas", "유지보수",

@@ -330,10 +330,23 @@ _RX_STYLE_DIGIT_PAREN = re.compile(r"^\(?(\d{1,3})\)\s*(.+)$")
 _RX_STYLE_HANGUL = re.compile(r"^\(?([가-하])\)?\s*(?:목|[.)])\s*(.+)$")
 
 
+#: 양식의 빈칸 숫자 — "(15)일 전에", "(30)일간", "(4)주 이내". 줄머리에 오면 "15)" 를 호 번호로
+#: 읽었다(서울대 산학연구계약 제9조: ③ 둘째 줄 "(15)일 전에" 가 "제2항 15호" 가 되고, 호 목록이
+#: 1 부터 시작하지 않는다는 이유로 ③ 첫 줄이 버려져 제9조 제2항·제3항 원문이 통째로 사라졌다).
+#: 진짜 호 번호 뒤에는 단위 명사가 붙어 오지 않는다.
+_RX_QUANTITY_BLANK = re.compile(
+    r"^\(\s*\d{1,3}\s*\)\s?(?:일|주|개월|월|년|시간|분|회|%|퍼센트|원|만원|억원|명|부|영업일|배|차)"
+)
+
+
+def _is_quantity_blank(line: str) -> bool:
+    return bool(_RX_QUANTITY_BLANK.match((line or "").strip()))
+
+
 def _detect_marker_style(line: str) -> tuple[str, str, str] | None:
     """줄머리 번호 표기의 (스타일, 번호, 나머지). 없으면 None."""
     l = (line or "").strip()
-    if not l:
+    if not l or _is_quantity_blank(l):
         return None
     if l[0] in _CIRCLED_NUMS:
         n = _circled_to_int(l[0])
@@ -377,7 +390,7 @@ def _style_parser(style: str):
 
 def _parse_item_start(line: str) -> tuple[str, str] | None:
     l = (line or "").strip()
-    if not l:
+    if not l or _is_quantity_blank(l):
         return None
     m = re.match(r"^\(?(\d{1,3})\)?\s*(?:호|[.)])\s*(.+)$", l)
     if m:

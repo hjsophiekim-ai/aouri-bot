@@ -489,8 +489,32 @@ def _ground(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> bool:
     return True
 
 
+#: 조항의 주어가 두 당사자 모두 — "“A”와 “B”가 … 책임을 지지 아니한다", "양 당사자는", "각 당사자는".
+_RX_MUTUAL_SUBJECT = re.compile(
+    r"^\s*(?:[^.\n]{0,20}\s)?[“\"]?[^”\".\s]{1,12}[”\"]?\s*(?:와|과)\s*[“\"]?[^”\".\s]{1,12}[”\"]?\s*(?:가|이|는|은)\s"
+    r"|^\s*(?:[^.\n]{0,20}\s)?(?:양\s*당사자|각\s*당사자|쌍방|당사자\s*쌍방|당사자들)(?:은|는|이|가|\s)"
+)
+
+
+def _one_sided_on_mutual_clause(cr: dict[str, Any]) -> bool:
+    """2026-10-06 지시 3항 — "일방 면책·일방 배상" finding 이 두 당사자 모두를 주어로 하는 조항에 붙으면
+    조항을 오독한 것이다. 실측(서울대 제15조): 양 당사자의 불가항력 면책을 RISK-002 "일방 면책(후보)" 으로
+    읽어 MUST FIX 가 됐다."""
+    if not re.search(r"일방\s*(?:면책|배상|책임)", _title(cr)):
+        return False
+    body = re.sub(r"^[^\n]{0,30}\n", "", str(cr.get("original_text") or ""), count=1) \
+        if re.match(r"^[^\n.]{0,30}\n", str(cr.get("original_text") or "")) else str(cr.get("original_text") or "")
+    flat = re.sub(r"\s*\n\s*", " ", body)
+    return bool(_RX_MUTUAL_SUBJECT.search(flat))
+
+
 def _semantic_ok(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> bool:
     """지시 10항 — finding 주제어가 붙은 조항 문언에 하나도 없으면 다른 조항 얘기다."""
+    if _one_sided_on_mutual_clause(cr):
+        audit.suppress(cr, STATUS_SEMANTIC_MISMATCH,
+                       f"'일방' 면책·배상 지적이 두 당사자 모두에게 같은 효과를 주는 "
+                       f"{cr.get('display_path') or '조항'}에 붙어 있음(상호 조항)")
+        return False
     if (
         cr.get("is_entity_name_correction") or cr.get("reanchored_from")
         # 사슬·기본효과·체크리스트는 "없는 것"을 그것이 들어갈 조항에 붙인다 —
@@ -520,7 +544,30 @@ def _semantic_ok(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> b
     return False
 
 
-def _redline_ok(cr: dict[str, Any], *, text: str, we_pay: bool, audit: _Audit) -> bool:
+#: 해지·구제 사유를 좁히는 낱말 — 상대방의 위반을 사유로 하는 조항에 붙으면 우리 해지권이 줄어든다.
+_RX_NARROWING = _rx(r"객관적으로|현저히|중대한|주요\s*의무|명백히|상당한\s*기간|반복적으로")
+#: 원문에서 위반(불이행)하는 쪽 — "“학교”가 본 계약을 위반하여", "“학교”가 정당한 사유 없이".
+_RX_BREACHER = re.compile(
+    r"[“\"]([^”\"]{1,12})[”\"]\s*(?:가|이)\s*(?:본\s*계약을?\s*)?(?:위반|불이행|이행하지|정당한\s*사유\s*없이)"
+)
+
+
+def _narrows_our_remedy(proposal: str, original: str, our: list[str]) -> list[str]:
+    """2026-10-06 지시 10항 — 상대방 위반을 사유로 하는 해지·시정 조항에 해지 요건을 좁히는 낱말을
+    새로 넣으면 우리 해지권 축소다. 실측(서울대 제13조 제1항 1호): "극히 곤란하다고 판단될 경우" 를
+    "주요 의무를 위반하여 … 현저히 곤란하다고 객관적으로 인정되는 경우" 로 바꾸는 수정안."""
+    if not our or not re.search(r"해지|해제|시정|위반|불이행|이행하지", original):
+        return []
+    m = _RX_BREACHER.search(original)
+    if not m:
+        return []
+    breacher = re.sub(r"주식회사|㈜|\(주\)", "", m.group(1)).strip()
+    if not breacher or any(breacher in o or o in breacher for o in our if o):
+        return []
+    return [w.group(0) for w in _RX_NARROWING.finditer(proposal) if w.group(0) not in original]
+
+
+def _redline_ok(cr: dict[str, Any], *, text: str, we_pay: bool, audit: _Audit, our: list[str] | None = None) -> bool:
     """지시 11·19항. False 면 내보내지 않는다."""
     if cr.get("is_entity_name_correction"):
         return True
@@ -533,6 +580,11 @@ def _redline_ok(cr: dict[str, Any], *, text: str, we_pay: bool, audit: _Audit) -
     if we_pay and added_burden:
         audit.suppress(cr, STATUS_ADVERSE_TO_CLIENT,
                        f"우리 회사가 지급자인데 수정안이 금전 부담({', '.join(added_burden[:3])})을 새로 만듦")
+        return False
+    narrowed = _narrows_our_remedy(proposal, original, list(our or []))
+    if narrowed:
+        audit.suppress(cr, STATUS_ADVERSE_TO_CLIENT,
+                       f"상대방 위반을 사유로 한 우리 해지·구제 요건을 좁힘({', '.join(narrowed[:3])})")
         return False
 
     foreign_roles = [n for n in _ROLE_NOUNS if n in proposal and n not in text]
@@ -882,11 +934,15 @@ def _apply_triage(
         label, reason, scores = triage_one(
             cr, axis=axis, relations=relations, contract_text=text, article_text=article_text,
         )
+        tier = str(cr.get("risk_tier") or "").upper()
+        if tier == "LOW" and label in (MUST_FIX, SHOULD_FIX):
+            # triage 는 등급을 올리지 않는다 — 참고(LOW) finding 에 SHOULD 표지를 달면 본문에는 참고,
+            # triage 표에는 권장 수정으로 같은 지적이 두 판정을 갖는다(2026-10-06 지시 4항).
+            label, reason = DROP, (reason + " — " if reason else "") + "참고(LOW) 등급이라 기본 노출 제외"
         cr["triage"] = label
         cr["triage_reason"] = reason
         cr["triage_axis"] = axis
         cr["materiality_score"] = scores
-        tier = str(cr.get("risk_tier") or "").upper()
         if label == MUST_FIX:
             pass
         elif label == SHOULD_FIX:
@@ -1043,6 +1099,51 @@ def _add_protection_keep_rows(
         })
 
 
+def _absorb_into_transaction_packages(visible: list[dict[str, Any]], audit: _Audit) -> None:
+    """2026-10-06 지시 8항 — 같은 손실 시나리오를 여러 조항에서 반복 지적하지 않는다.
+
+    거래 재구성 package(성과물 제출·대금 연계, 연구성과 귀속·활용 등)는 자기가 묶는 조(package_articles)와
+    손실 시나리오 어휘(package_pattern)를 스스로 밝힌다. 그 조에 붙은 다른 HIGH/MEDIUM 중 같은 시나리오를
+    말하는 것은 package 의 하위 쟁점으로 흡수한다. 실측(서울대): "연구보고서 미제출"(제6조) + "잔금 지급"
+    (제5조) + "해지 시 정산"(제13조 제3항)이 각각 MUST/SHOULD 로 따로 나왔다.
+
+    한 finding 이 두 package 에 걸리면 **제목**에서 그 package 의 어휘가 더 많이 걸리는 쪽으로 보낸다.
+    """
+    packages = [c for c in visible if c.get("is_transaction_package") and not c.get("dedup_suppressed")
+                and c.get("package_articles") and c.get("package_pattern")]
+    if not packages:
+        return
+    compiled = [(p, re.compile(str(p["package_pattern"]), re.IGNORECASE)) for p in packages]
+    for cr in visible:
+        if cr.get("dedup_suppressed") or cr.get("is_transaction_package") or cr.get("is_entity_name_correction"):
+            continue
+        if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
+            continue
+        art = str(cr.get("article_number") or "")
+        title = _title(cr)
+        blob = title + " " + str(cr.get("problem") or "")[:300]
+        best, best_score = None, 0
+        for pkg, rx in compiled:
+            if art not in {str(a) for a in pkg["package_articles"]} or not rx.search(blob):
+                continue
+            score = 10 * len(rx.findall(title)) + len(rx.findall(blob))
+            if score > best_score:
+                best, best_score = pkg, score
+        if best is None:
+            continue
+        best.setdefault("sub_issues", []).append({
+            "clause_id": str(cr.get("clause_id") or ""), "display_path": str(cr.get("display_path") or ""),
+            "title": title, "problem": str(cr.get("problem") or "")[:240],
+        })
+        paths = list(best.get("related_clause_paths") or [])
+        if cr.get("display_path") and cr["display_path"] not in paths:
+            paths.append(str(cr["display_path"]))
+        best["related_clause_paths"] = paths
+        cr["dedup_suppressed"] = True
+        cr["dedup_merged_into"] = str(best.get("clause_id") or "")
+        audit.act(cr, "merged", "TRANSACTION_PACKAGE", f"같은 손실 시나리오 → {best.get('clause_id')}")
+
+
 def _merge_packages(visible: list[dict[str, Any]], audit: _Audit) -> None:
     """지시 6항 — 같은 주제의 HIGH/MEDIUM 을 대표 하나로."""
     groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -1063,6 +1164,8 @@ def _merge_packages(visible: list[dict[str, Any]], audit: _Audit) -> None:
         if len(items) < 2:
             continue
         items.sort(key=lambda c: (
+            # 거래 재구성 package 가 있으면 그것이 대표다 — 손실 시나리오 전체를 이미 묶고 있다.
+            -int(bool(c.get("is_transaction_package"))),
             -_TIER_RANK.get(str(c.get("risk_tier") or "").upper(), 0),
             -int(bool(_proposal(c))),
             -float(c.get("confidence") or 0),
@@ -1162,6 +1265,7 @@ def run_senior_counsel_audit(
     index = _index(clauses)
     audit = _Audit()
     we_pay = our_company_pays(body, entity_resolution)
+    our = _our_labels(entity_resolution)
     dispute_review = dispute_needs_review(body)
 
     def _count() -> dict[str, int]:
@@ -1179,7 +1283,7 @@ def run_senior_counsel_audit(
             continue
         if not _semantic_ok(cr, index, audit):
             continue
-        if not _redline_ok(cr, text=body, we_pay=we_pay, audit=audit):
+        if not _redline_ok(cr, text=body, we_pay=we_pay, audit=audit, our=our):
             continue
         if not _overreach_ok(cr, text=body, archetype=archetype, audit=audit):
             continue
@@ -1187,6 +1291,7 @@ def run_senior_counsel_audit(
         if _visible(cr):
             _relation_reanchor(cr, index, audit)
 
+    _absorb_into_transaction_packages([c for c in clause_results if _visible(c)], audit)
     _merge_packages([c for c in clause_results if _visible(c)], audit)
     # 법조문은 통합이 끝난 뒤에 붙인다 — 대표 finding 이 하위 쟁점의 법률관계까지 덮는다.
     for cr in clause_results:
@@ -1206,7 +1311,10 @@ def run_senior_counsel_audit(
     core_issues = [c for c in core if not c.get("is_entity_name_correction")]
     final_check = {
         # 지시 20항 — 출력 직전 점검 결과. 실패 축은 위에서 이미 고쳤어야 한다.
-        "high_within_limit": after["HIGH"] <= MAX_HIGH,
+        # 법인명 정정(HIGH)은 전문·서명란 위치마다 따로 남는 한 쟁점이다 — 건수에서 뺀다.
+        "high_within_limit": after["HIGH"] - sum(
+            1 for c in core if c.get("is_entity_name_correction") and str(c.get("risk_tier")).upper() == "HIGH"
+        ) <= MAX_HIGH,
         "medium_within_limit": after["MEDIUM"] <= MAX_MEDIUM + 2,  # 법인명 정정은 위치별로 남는다
         "core_grounded": all(
             c.get("is_entity_name_correction") or str(c.get("article_number") or "").strip()

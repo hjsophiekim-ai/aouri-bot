@@ -297,7 +297,7 @@ class HangulDayPipelineGoldenTest(unittest.TestCase):
         places = sorted(f["display_path"] for f in fixes)
         self.assertEqual(places, ["서명란·말미", "전문(당사자 표시)"], [f["clause_id"] for f in fixes])
         for f in fixes:
-            self.assertEqual(f["risk_tier"], "MEDIUM")
+            self.assertEqual(f["risk_tier"], "HIGH")  # 법적 주체 오기 = 필수수정
             self.assertFalse(f.get("dedup_suppressed"), f["clause_id"])
             self.assertFalse(f.get("keep_as_is"), f["clause_id"])
             self.assertEqual(f["original_text"], "주식회사 알로소")

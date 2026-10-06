@@ -177,11 +177,12 @@ class PipelineTest(unittest.TestCase):
     def _fixes(self) -> list[dict]:
         return [c for c in self.results if c.get("is_entity_name_correction")]
 
-    def test_every_occurrence_survives_as_a_medium_rewrite(self) -> None:
+    def test_every_occurrence_survives_as_a_high_rewrite(self) -> None:
         fixes = self._fixes()
         self.assertEqual(len(fixes), 3, [f["clause_id"] for f in fixes])
         for f in fixes:
-            self.assertEqual(f["risk_tier"], "MEDIUM", f["clause_id"])
+            # 2026-10-06 사용자 지시 — 법적 주체 오기는 필수수정(HIGH)
+            self.assertEqual(f["risk_tier"], "HIGH", f["clause_id"])
             self.assertFalse(f.get("dedup_suppressed"), f["clause_id"])
             self.assertFalse(f.get("keep_as_is"), f["clause_id"])
             self.assertTrue(f.get("suggested_rewrite"), f["clause_id"])

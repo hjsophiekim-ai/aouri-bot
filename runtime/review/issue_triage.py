@@ -53,7 +53,8 @@ _RX_STRONG_DISPUTE = re.compile(r"공란|선택되지|미선택|오기|모순|�
 _RX_WEAK_DISPUTE = re.compile(r"불명확|없음|미흡|누락|부재|규정되지|특정되지|명시되지|한정")
 _RX_FINE_TUNING = re.compile(r"세분화|구체화|필수화|명확히\s*하면|보완하면|정비|문구\s*조정|미세")
 _RX_ABSENCE = re.compile(r"없음|규정되지|공란|미선택|선택되지|누락|부재|존재하지\s*않")
-_RX_PARTIAL = re.compile(r"불명확|미흡|불충분|한정|제한|일률")
+#: "포함 여부가 명시되지 않음" 도 보호 공백이다(부재까지는 아니어도 해석 다툼이 남는다).
+_RX_PARTIAL = re.compile(r"불명확|미흡|불충분|한정|제한|일률|명시되지|특정되지|정하지\s*않")
 _RX_MONEY_STRONG = re.compile(r"계약금액|대금[^.\n]{0,8}(?:미확정|공란)|무제한|상한\s*없|배수|전액")
 _RX_MONEY = re.compile(r"대금|지급|정산|로열티|제작비|손해|배상|위약|지체상금|금전")
 
@@ -62,6 +63,12 @@ def _title(cr: dict[str, Any]) -> str:
     for d in cr.get("detected_issue_list") or []:
         if isinstance(d, dict) and str(d.get("issue_title") or "").strip():
             return str(d["issue_title"])
+    if not str(cr.get("issue_title") or "").strip() and cr.get("is_ai_discovered"):
+        # 조항별 AI 논점에는 이슈 제목이 없다 — 조 제목("기술지원 및 책임")으로 채점하면 무엇을 문제삼는지
+        # 모른 채 0점이 된다. AI 가 적은 위험 서술로 채점한다.
+        risk = str(cr.get("our_company_risk") or cr.get("rewrite_reason") or "").strip()
+        if risk:
+            return risk[:160]
     return str(cr.get("issue_title") or cr.get("clause_title") or "")
 
 
@@ -111,7 +118,9 @@ def is_protected(cr: dict[str, Any]) -> bool:
     if cr.get("is_entity_name_correction") or str(cr.get("clause_id") or "").startswith("ac_"):
         # ac_* 는 원문 문언을 정규식으로 확인한 법률효과 점검이다(authority_selection_checks).
         return True
-    if cr.get("is_risk_package"):
+    if cr.get("is_risk_package") or cr.get("is_transaction_package"):
+        # 거래 재구성 package(성과물 제출·대금 연계 등)도 계약 전체의 사실(일자·귀속·정산 문언)로
+        # 세운 판단이다 — 제목 낱말 점수로 등급을 내리지 않는다.
         # 리스크 사슬은 계약 전체의 법률효과로 판정한 결과다(대물교환 선이행이 원 사례) —
         # 등급은 effect_risk_package 가 거래 원형으로 이미 정한다.
         return True
@@ -120,6 +129,11 @@ def is_protected(cr: dict[str, Any]) -> bool:
     generated = (
         cr.get("is_counsel_agent") or cr.get("is_effect_baseline")
         or str(cr.get("clause_id") or "").startswith(("svc_", "eb_"))
+        # 2026-10-06 지시 6항 — 조항별 AI 탐색이 **규칙 없이** 찾은 논점도 생성형이다. 실측(서울대 제14조
+        # 제3항): "협의에 의해 지불" 에 "서면" 한 낱말을 더하는 수정이 중요도 0점인데 SHOULD FIX 로 남았다.
+        # 규칙 근거·승인필요 표지·치명 근거(효과 태그)가 있으면 그대로 보호한다.
+        or (cr.get("is_ai_discovered") and not cr.get("related_rules") and not cr.get("approval_required")
+            and not str(cr.get("high_severity_basis") or "").strip())
     )
     return not generated
 
@@ -165,6 +179,8 @@ def triage_one(
         return SHOULD_FIX if tier != "HIGH" else MUST_FIX, "법적 당사자 표기 — 서명 전 정정", scores
     if axis == "tax":
         return FINANCE_CHECK, "세금계산서·부가세·원천징수는 계약 효력에 직접 영향이 없는 재경·세무 확인사항", scores
+    if cr.get("business_check"):
+        return FINANCE_CHECK, "금액·예산은 계약 문언이 아니라 사업부가 정할 사항(BUSINESS CHECK)", scores
     if axis == "jurisdiction" or cr.get("boilerplate_low_priority"):
         return DROP, "국내 법인 간 관할·통지 등 일반 boilerplate", scores
     # ac_* 결정론 점검은 이미 "현행 문언으로 부족한 경우"에만 만들어진다 — 정산 세부 KEEP 규칙이
@@ -181,15 +197,17 @@ def triage_one(
         # 법무 판단(어떤 책임을 상한에서 뺄지)은 요청 답변의 최소수정문구로 낸다.
         return FINANCE_CHECK, "손해배상 상한 금액·기준은 거래 규모를 본 사업부 결정 사항", scores
     has_redline = bool(str(cr.get("suggested_rewrite") or "").strip())
+    # 2026-10-06 지시 6항 — Materiality Filter. 다섯 질문 중 넷 이상 YES 일 때만 HIGH/MEDIUM 을 남긴다.
+    # (KEEP·불리한 수정안은 앞 단계에서 이미 걸렀으므로 여기서 "통과"로 세지 않는다.)
     yes = sum([
-        scores["money"] + scores["rights"] > 0,      # 실제 손실 가능성
-        True,                                       # 다른 조항으로 이미 해결되지 않음(KEEP 아님)
-        True,                                       # 우리에게 불리한 수정안은 감사가 이미 걸렀다
-        axis in _CORE_AXES,                         # 계약유형 핵심축
-        has_redline,                                # 바로 넣을 문구가 있다
+        scores["purpose"] > 0 and axis in _CORE_AXES,   # 계약 목적 달성에 직접 영향
+        scores["money"] > 0,                            # 실제 금전손실 가능성
+        scores["rights"] > 0,                           # IP·대금·성과물·책임 등 핵심권리
+        scores["dispute"] > 0,                          # 실제 분쟁 가능성
+        has_redline and scores["gap"] > 0,              # 지금 계약서에 넣을 실익(보호 공백 + 넣을 문구)
     ])
     if yes < 4:
-        return DROP, "최종 필터 미통과(실익·핵심축·삽입 문구 중 둘 이상 부족)", scores
+        return DROP, f"Materiality Filter 미통과({yes}/5 — 목적·금전·핵심권리·분쟁·실익 중 넷 미만)", scores
     if total >= 8:
         band = MUST_FIX
     elif total >= 5:

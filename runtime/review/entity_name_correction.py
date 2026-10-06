@@ -436,8 +436,13 @@ def _finding(
         "article_number": article,
         "paragraph_number": paragraph,
         "original_text": original,
-        "risk_tier": "MEDIUM",
-        "severity": "MEDIUM",
+        # 2026-10-06 사용자 지시 — 법적 주체 오기는 권고(MEDIUM)가 아니라 필수수정(HIGH)이다. 브랜드·
+        # 그룹명으로 서명하면 계약 당사자 자체가 불분명해져 권리 행사·집행의 상대가 흔들린다.
+        "risk_tier": "HIGH",
+        "severity": "HIGH",
+        "must_fix": True,
+        "review_tier": "MUST",
+        "high_severity_basis": "계약 당사자(법적 주체) 표기 오류 — 권리·의무의 귀속 주체 불명확",
         "problem": problem,
         "rewrite_reason": problem,
         "legal_business_reason": reason,

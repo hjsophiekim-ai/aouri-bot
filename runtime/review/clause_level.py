@@ -602,6 +602,9 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
         # 판단이라, 대표 항으로 흡수되면 그 축의 유일한 논점이 사라진다.
         if bool(cr.get("is_counsel_agent")):
             continue
+        # 사업부·재경 확인 행은 수정안이 아니라 확인 사항이다 — 같은 조의 수정안에 흡수되면 사라진다.
+        if bool(cr.get("business_check")):
+            continue
         an = str(cr.get("article_number") or "").strip()
         if not an:
             continue
@@ -2492,6 +2495,8 @@ def _apply_advisory_ip_review(
             continue
         if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
             continue
+        if cr.get("is_transaction_package") or cr.get("is_entity_name_correction"):
+            continue  # 원문으로 완성한 수정문 위에 템플릿을 덧붙이지 않는다
         a_i = _article_int_from_cr(cr)
         if a_i is not None and a_i in (1, 2, 3):
             continue
@@ -3568,12 +3573,32 @@ def build_clause_level_result(
             "basis": _sales_model.basis,
         }
         _canonical_profile.contract_type = _SALES_TYPE
+    # ── [산학협력 연구용역 거래 재구성] (2026-10-06 범용 보정 1항) ─────────────────
+    # 연구비·연구책임자·연구보고서가 함께 서고 누가 연구비를 내는지 확인되면, 정의 조항의
+    # 지식재산권 어휘로 "라이선스", 비밀유지 조항으로 "NDA" 가 되지 않게 유형을 먼저 잠근다.
+    from runtime.review.research_model import (
+        CANONICAL_TYPE as _RESEARCH_TYPE,
+        resolve_research_model as _resolve_research_model,
+    )
+    _research_model = _resolve_research_model(contract_text=str(text or ""), entity=str(entity or ""))
+    if _sales_model.confident:
+        from runtime.review.research_model import ResearchModel as _ResearchModel
+        _research_model = _ResearchModel()
+    if _research_model.confident and str(_canonical_profile.contract_type or "") != _RESEARCH_TYPE:
+        _sales_type_override = {
+            "was": str(_canonical_profile.contract_type or ""), "now": _RESEARCH_TYPE,
+            "basis": _research_model.basis,
+        }
+        _canonical_profile.contract_type = _RESEARCH_TYPE
     _ad_model = _resolve_ad_model(
         contract_text=str(text or ""),
         user_description=str(review_focus or "") if isinstance(review_focus, str) else "",
         contract_type_code=str(_canonical_profile.contract_type or ""),
         answers=answers,
     )
+    if _research_model.confident:
+        from runtime.review.ad_transaction_model import AdTransactionModel as _AdModelR
+        _ad_model = _AdModelR(basis="산학협력 연구용역으로 확정 — 광고 거래모델 아님")
     if _sales_model.confident:
         # 판매채널 운영자의 "프로모션·광고" 는 판매행위의 일부다 — 광고매체 체크리스트
         # (ADM-*)·송출 질문이 붙지 않게 광고 거래모델을 끈다.
@@ -3680,6 +3705,8 @@ def build_clause_level_result(
         _contract_type_locked_reason = "건설 거래구조 확정"
     elif _sales_model.confident:
         _contract_type_locked_reason = "온라인 판매·공급 거래구조 확정"
+    elif _research_model.confident:
+        _contract_type_locked_reason = "산학협력 연구용역 거래구조 확정"
 
     if _canonical_profile.contract_type == "testing_inspection_service":
         _contract_class = "testing_service"
@@ -4075,6 +4102,43 @@ def build_clause_level_result(
             audit={**_canonical_state.audit, "online_sales_model": _sales_model.basis},
         )
         _canonical_type_code = _SALES_TYPE
+    if _research_model.confident:
+        from dataclasses import replace as _dc_replace_research
+        from runtime.review.research_model import (
+            LABEL as _RESEARCH_LABEL,
+            PERFORMER_ROLE_LABEL as _PERFORMER_ROLE,
+            SPONSOR_ROLE_LABEL as _SPONSOR_ROLE,
+        )
+        _we_sponsor = _research_model.our_side != "performer"
+        _canonical_state = _dc_replace_research(
+            _canonical_state,
+            contract_type=_RESEARCH_TYPE,
+            contract_type_family=_RESEARCH_TYPE,
+            contract_type_label=_RESEARCH_LABEL,
+            party_role="research_sponsor" if _we_sponsor else "research_performer",
+            counterparty_role="research_performer" if _we_sponsor else "research_sponsor",
+            party_role_direction="recipient" if _we_sponsor else "provider",
+            party_label=(_research_model.sponsor_label if _we_sponsor else _research_model.performer_label),
+            counterparty_label=(_research_model.performer_label if _we_sponsor else _research_model.sponsor_label),
+            governing_transaction={
+                **_canonical_state.governing_transaction,
+                "research_model": _research_model.to_dict(),
+                "our_role_label": _SPONSOR_ROLE if _we_sponsor else _PERFORMER_ROLE,
+                "counterparty_role_label": _PERFORMER_ROLE if _we_sponsor else _SPONSOR_ROLE,
+            },
+            audit={**_canonical_state.audit, "research_model": _research_model.basis},
+        )
+        # legal_state 도 같은 지위를 말해야 한다(지시 4항 — 화면·보고서·게이트가 한 상태를 쓴다).
+        _legal_state = _dc_replace_research(
+            _legal_state,
+            our_role=_canonical_state.party_role,
+            our_role_direction=_canonical_state.party_role_direction,
+            our_label=_canonical_state.party_label,
+            counterparty_role=_canonical_state.counterparty_role,
+            counterparty_label=_canonical_state.counterparty_label,
+        )
+        _canonical_type_code = _RESEARCH_TYPE
+        _canonical_type_family = _RESEARCH_TYPE
 
     # ── [Employee NDA 거래모델] (2026-09-28 지시 1항) ─────────────────────────
     # 'NDA' 라는 큰 분류 안에서 사업자 간 NDA 와 임직원 비밀유지 서약을 가른다.
@@ -5727,6 +5791,19 @@ def build_clause_level_result(
     if _sales_model.confident:
         from runtime.review.online_sales_model import payment_flow_finding as _payment_flow_finding
         clause_results.extend(_payment_flow_finding(_sales_model, clauses))
+    if _research_model.confident:
+        from runtime.review.research_model import research_findings as _research_findings
+        clause_results.extend(_research_findings(_research_model, clauses, str(text or "")))
+    # [일방적 방어·면책] (2026-10-06) 우리가 상대방을 귀책과 무관하게 모든 책임·소송에서 보호하는 조항.
+    try:
+        from runtime.review.client_indemnity_check import find_client_indemnity as _find_client_indemnity
+        from runtime.review.senior_counsel_audit import _our_labels as _scl_our_labels
+
+        clause_results.extend(_find_client_indemnity(
+            clauses=clauses, our_labels=_scl_our_labels(_entity_resolution),
+        ))
+    except Exception as exc:  # noqa: BLE001 - 보조 점검 실패가 검토 전체를 막지 않게
+        logger.warning("client indemnity check failed: %s", exc)
 
     # ── [리스크 사슬 검토] (2026-09-10 지시 항목 1) ────────────────────────────
     # 조항별 나열이 아니라 거래위험을 사슬로 연결해 본다. 특히 선이행 구조는
@@ -6280,7 +6357,10 @@ def build_clause_level_result(
     except Exception:
         _detailed_profile = None
     # 2순위: Advisory IP & Copyright (자문/용역 → IP 귀속·보증 CRITICAL 점검)
-    _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity), contract_class=_contract_class)
+    # 2026-10-06 지시 7항 — 연구용역은 위탁자/수탁자 용역 템플릿(IP 전부 위탁자 귀속·제3자 침해 보증)을
+    # 그대로 붙일 계약이 아니다. 연구성과 귀속은 research_model 의 package 가 이 계약 문언으로 다룬다.
+    if not _research_model.confident:
+        _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity), contract_class=_contract_class)
     # 3순위: 기존 필터 체인
     _apply_rental_filter(clause_results, _is_rental)
     _apply_domestic_filter(clause_results, _is_domestic, llm_meta=_llm_meta)
@@ -7828,6 +7908,15 @@ def build_clause_level_result(
             "is_composite": True,
             "canonical_label": _SALES_PRIMARY,
         }
+    if _research_model.confident:
+        from runtime.review.research_model import LABEL as _RESEARCH_PRIMARY
+        meta["contract_composition"] = {
+            "primary_contract_type": _RESEARCH_PRIMARY,
+            "secondary_contract_elements": ["연구 수행", "연구보고서 제출", "연구비 분할 지급", "성과물·지식재산권 귀속"],
+            "is_composite": True,
+            "canonical_label": _RESEARCH_PRIMARY,
+        }
+    meta["research_model"] = _research_model.to_dict()
     meta["online_sales_model"] = _sales_model.to_dict()
     if isinstance(meta.get("canonical_state"), dict) and meta["contract_composition"]["is_composite"]:
         meta["canonical_state"]["primary_contract_type"] = meta["contract_composition"]["primary_contract_type"]
@@ -8848,6 +8937,23 @@ def build_clause_level_result(
             )
     except Exception as exc:  # noqa: BLE001 - 감사 실패가 검토를 막지 않는다
         logger.warning("senior counsel audit failed: %s", exc)
+    # ── [사전질문 답변 속 의도에 직접 답변] (2026-10-06 범용 보정 4·12항) ──────────
+    # 감사가 끝난 **최종** finding 을 근거로 답한다 — 요청 답변과 본문이 같은 조항·같은 수정문을 말한다.
+    try:
+        from runtime.review.answer_intent_review import review_answer_intents as _review_answer_intents
+
+        _answer_reviews = _review_answer_intents(
+            review_focus=str(review_focus or "") if isinstance(review_focus, str) else "",
+            clauses=clauses, clause_results=clause_results,
+        )
+        if _answer_reviews:
+            _cov = [r for r in (meta.get("user_review_coverage") or []) if isinstance(r, dict)]
+            _topics_now = {str(r.get("topic") or "") for r in _cov}
+            _cov += [rv.to_coverage_row() for rv in _answer_reviews if rv.topic not in _topics_now]
+            meta["user_review_coverage"] = _cov
+            meta["answer_intent_reviews"] = [rv.to_coverage_row() for rv in _answer_reviews]
+    except Exception as exc:  # noqa: BLE001 - 답변 정리 실패가 검토를 막지 않는다
+        logger.warning("answer intent review failed: %s", exc)
     # 감사가 내보내지 않기로 한 finding 만 가리키는 실패 상태는 더 이상 성립하지 않는다 —
     # 실측: 제거된 "이행유보권" 하나 때문에 INCOMPLETE_REWRITE 가 대표 상태로 남았다.
     _status_now = str(meta.get("review_status") or "")

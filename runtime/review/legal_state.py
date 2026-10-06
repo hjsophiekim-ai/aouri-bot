@@ -42,6 +42,7 @@ from runtime.review.clause_effect import (
     ARCHETYPE_LEASE,
     ARCHETYPE_LICENSE,
     ARCHETYPE_NDA,
+    ARCHETYPE_RESEARCH,
     ARCHETYPE_SERVICE,
     ARCHETYPE_UNKNOWN,
     ARCHETYPE_WORKS,
@@ -79,6 +80,7 @@ ARCHETYPE_OF_TYPE_CODE: dict[str, str] = {
     "ai_search_marketing": ARCHETYPE_SERVICE,
     "store_operation_outsourcing": ARCHETYPE_SERVICE,
     "license_ip": ARCHETYPE_LICENSE,
+    "research_collaboration": ARCHETYPE_RESEARCH,
 }
 
 #: 원형 → enum 에 대응 코드가 없을 때 쓸 대표 코드. 라이선스·바터처럼 enum 에
@@ -93,12 +95,14 @@ TYPE_CODE_OF_ARCHETYPE: dict[str, str] = {
     ARCHETYPE_SERVICE: "advisory_service",
     ARCHETYPE_LICENSE: "license_ip",
     ARCHETYPE_BARTER: "barter_exchange",
+    ARCHETYPE_RESEARCH: "research_collaboration",
 }
 
 #: 새로 생긴 코드의 표시 라벨.
 EXTRA_TYPE_LABELS: dict[str, str] = {
     "license_ip": "지식재산권 실시허락(라이선스) 계약",
     "barter_exchange": "대물교환(바터) 계약",
+    "research_collaboration": "산학협력 연구용역 계약(지식재산권 조항 포함)",
 }
 
 

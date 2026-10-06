@@ -196,6 +196,7 @@ ARCHETYPE_WORKS = "construction_works"
 ARCHETYPE_DISTRIBUTION = "distribution_resale"
 ARCHETYPE_BARTER = "non_monetary_exchange"
 ARCHETYPE_LEASE = "lease_rental"
+ARCHETYPE_RESEARCH = "research_engagement"
 ARCHETYPE_UNKNOWN = "unknown"
 
 ARCHETYPE_LABELS: dict[str, str] = {
@@ -207,12 +208,18 @@ ARCHETYPE_LABELS: dict[str, str] = {
     ARCHETYPE_DISTRIBUTION: "판매·유통",
     ARCHETYPE_BARTER: "대물교환(무현금)",
     ARCHETYPE_LEASE: "임대차·렌탈",
+    ARCHETYPE_RESEARCH: "연구용역(산학협력·공동연구)",
     ARCHETYPE_UNKNOWN: "미상",
 }
 
 #: 계약의 **자기 규정** — 표제와 정의조항이 스스로 밝히는 성격. 본문 어휘
 #: 빈도보다 강한 신호다(라이선스 계약이 대금·보증 조항을 갖는 것은 당연하다).
 _RX_SELF_DECLARED: tuple[tuple[str, re.Pattern[str]], ...] = (
+    # 연구계약은 정의 조항에 "실시권"·"라이선스" 를 담는다 — 라이선스 표지보다 먼저 본다.
+    (ARCHETYPE_RESEARCH, re.compile(
+        r"연\s*구\s*(?:용\s*역\s*)?(?:계\s*약|협\s*약)\s*서?|공동\s*연구\s*(?:계약|협약)|산학\s*협력\s*(?:계약|협약)"
+        r"|sponsored\s+research\s+agreement|research\s+(?:collaboration\s+)?agreement",
+        re.IGNORECASE)),
     (ARCHETYPE_LICENSE, re.compile(
         r"license\s+agreement|licen[cs]ing\s+agreement|라이선스\s*계약|실시권\s*계약"
         r"|기술도입\s*계약|상표\s*사용\s*계약"
@@ -244,6 +251,15 @@ _RX_SELF_DECLARED: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"용역\s*계약|도급\s*계약|자문\s*계약|제작\s*계약|위탁\s*계약"
         r"|services?\s+agreement|consult(?:ing|ancy)\s+agreement",
         re.IGNORECASE)),
+)
+
+#: 권리를 **허락하는** 문언 — 지식재산 어휘가 많다는 것만으로는 라이선스가 아니다.
+#: 실측(서울대 산학연구계약): 정의 조항의 "지식재산권"·"공동지식재산권" 2개가 인도 어휘보다
+#: 많다는 이유로 연구용역 계약이 라이선스가 됐다. 계약 어디에도 실시를 허락하는 문장이 없었다.
+_RX_GRANT = re.compile(
+    r"실시(?:를|권을)?\s*(?:허락|허여|부여|설정)|(?:사용|이용)(?:을|권을)?\s*(?:허락|허여|부여)"
+    r"|사용권\s*(?:허여|부여)|grants?\b[^.]{0,80}\blicen[cs]e|licen[cs]e\s+(?:to|under)\b|licensed\s+(?:products?|rights?)",
+    re.IGNORECASE,
 )
 
 #: 판매·사용에 연동된 권리 이용 대가 — "로열티", "실시료", "사용료".
@@ -367,7 +383,7 @@ def build_effect_profile(
         # NDA 에도 "정보의 제공·수령" 문언이 있어 delivery 가 잡힌다. 그것은
         # 물품 인도가 아니므로, 대가 구조가 없고 비밀유지가 압도적이면 NDA 다.
         archetype, basis = ARCHETYPE_NDA, "대가 구조 없이 비밀유지가 급부의 전부"
-    elif n(EFFECT_IP) >= 2 and n(EFFECT_IP) >= n(EFFECT_DELIVERY):
+    elif n(EFFECT_IP) >= 2 and n(EFFECT_IP) >= n(EFFECT_DELIVERY) and _RX_GRANT.search(body):
         archetype, basis = ARCHETYPE_LICENSE, "지식재산권 실시허락이 급부의 중심"
     elif (
         n(EFFECT_IP) >= 3

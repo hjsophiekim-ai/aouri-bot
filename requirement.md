@@ -450,8 +450,10 @@ build_clause_level_result()
   `GROUP_NAMES_KO/EN` 이 단일 출처이고, 정정 로직은 이 표만 읽는다.
   - 고치는 경우: 법인격 표기(주식회사·㈜·(주)·Inc.·Co., Ltd.)가 붙었거나 `(이하 ...)` 당사자 정의 자리.
     그룹명은 “계열사·소속·사·내·전체·임직원·affiliates” 등 집단 묘사가 뒤따르면 고치지 않는다.
-  - 조항마다, 그리고 조항으로 잡히지 않는 전문·서명란 줄마다 MEDIUM finding(`is_entity_name_correction`,
-    `is_common_legal_risk`)을 만든다. 계약유형과 무관하게 모든 계약에서 돈다(`clause_level` 효과 기반 검토 직후).
+  - 조항마다, 그리고 조항으로 잡히지 않는 전문·서명란 줄마다 **HIGH** finding(`is_entity_name_correction`,
+    `is_common_legal_risk`, `must_fix`, `high_severity_basis`)을 만든다. **2026-10-06 지시(중요): 법적 주체 오기는
+    권고(MEDIUM)가 아니라 필수수정(HIGH, Triage MUST FIX)** — 당사자가 불분명하면 권리 행사·집행 상대가 흔들린다.
+    감사의 HIGH 건수 상한(MAX_HIGH)에서는 위치별 정정을 세지 않는다(한 쟁점). 계약유형과 무관하게 모든 계약에서 돈다(`clause_level` 효과 기반 검토 직후).
   - 파이프라인 끝에서 다른 finding 의 수정문안에 남은 오기도 같은 규칙으로 바꾼다
     (`meta["entity_name_corrections"]`). AI 프롬프트 3종(국문 조항·영문 NDA·사내변호사 에이전트)에 같은 원칙을 넣었다.
   - 실측 함정: ① 전문 줄 id 를 `line_3` 으로 두면 제1~3조 보호 게이트가 제3조로 읽어 수정안을 지웠다 → 숫자 없는
@@ -592,6 +594,8 @@ KEEP 판단이 전부 방향에 기대므로 두 결함을 함께 고쳤다.
 
 | 날짜 | 변경 내용 |
 |---|---|
+| 2026-10-06 | 당사자 법인명 정정 finding 위험도 MEDIUM → HIGH(MUST FIX). 테스트 기대값 갱신 |
+| 2026-10-06 | 범용 보정: `research_model`(산학협력 연구용역 유형 잠금 + 성과물·대금/연구성과 package), `client_indemnity_check`(우리 일방 무제한 방어·면책 HIGH), `answer_intent_review`(사전질문 답변 속 의도 직접답변), `user_review_request.separate_context`(배경·일반 의뢰 제외), 파서 `_is_quantity_blank`("(15)일" 호 오인), 표시광고법 금지문장 제외, 라이선스 원형에 허락 문언 필수, Materiality 4/5, 거래 package 흡수, 우리 해지권 축소 수정안 REJECT, 용역 IP 템플릿 주입 제외. Golden `test_snu_research_golden.py` |
 | 2026-09-29 | 당사자 법인명 정정(entity_name_correction): 알로소→주식회사 시디즈, 슬로우·데스커→주식회사 일룸(데스커 GroupEntity 를 일룸 브랜드로 통합), 퍼시스그룹·FURSYS GROUP→실제 계약 주체 법인(기본 주식회사 퍼시스). 전문·조항·서명란 전부, 조사 보정, 타 수정문안 정규화, AI 프롬프트 반영. 게이트 오탐 3종(제1~3조 보호·issue_title 병합·관할 KEEP) 대응 |
 | 2026-09-11 | canonical 확정값 단일 사용(적용법률 재판단 제거), 비적용 법률 근거 전면 차단 + 계약근거 위험은 근거만 분리, 효과 불일치 전면 hard fail, 타 유형 템플릿 혼입 시 제거, 중복 보호조항 LOW 강등, 유리조항 KEEP 확장(대칭 구조 제외), UI/DOCX 게이트 이중적용 차단, 방향 판단 부담문형·주어오인 2건 수정 |
 | 2026-09-11 | 퍼시스그룹 계열사 registry(바로스→레터스 상호변경, 브랜드·해외법인 사실확인 분리), 조항 방향 판단 단일 출처(관형절 주어·부정형·"갑" 가정 제거), 상대방 권리 신설 차단, 세무·회계 내부통제 분리, 상대방 역할 오분류 게이트 |

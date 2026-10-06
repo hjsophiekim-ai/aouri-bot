@@ -1,0 +1,89 @@
+{
+ "review_focus": "서울대학교 사범대학 교육학과 신종호 교수와 함께\r\n 미래 학습 경험(LX) 모델 기반의 차세대 교육 환경 예측을 위한 산학연구를 진행하고자 함\r\n\r\n요청사항\r\n\r\n 서울대학교 산학협력단으로부터 수신한 <연구 용역 계약서>의 법무 검토 요청\n\n[사용자 확인 답변]\n- 별첨 연구계획서에 명시된 연구범위와 성과물(특히 무형적 성과물의 종류 및 활용 가능성)이 구체적으로 무엇인지 확인할 수 있는가?: 연구결과보고서 또는 연구결과논문 이 될 것입니다.\n- 다학제적 전문가 심층 인터뷰 용역의 범위, 예상 비용, 산정 방식 및 산학협력단이 아닌 제3자(외부 전문가 등)에게 재위탁(하도급)하는 경우가 있는가?: 가능성이 있습니다.\n- 퍼시스가 공동지식재산권을 실시(상업적 이용 등)하려는 경우 '별도의 실시계약'의 주요 조건(예: 실시료, 독점/비독점, 기간 등)에 대한 산학협력단의 기본 입장이 있는가?: 현재는 특별한 정함은 없습니다.\n- 연구성과(보고서 등) 미제출 또는 제출 지연 시 연구비 지급(특히 잔금)과 관련한 퍼시스의 지급의무가 어떻게 되는가?: 연구성과 미제출시 연구비를 지급하지 않고 싶습니다.\n- 퍼시스가 연구성과를 대외적으로 활용(예: 홍보, 보도자료, 마케팅 등)할 계획이 있는 경우, 산학협력단의 명칭·성과물 내용 사용에 대한 사전 승인 절차 및 제한사항이 실무상 어떻게 운영되는가?: 대외적으로 활용할 계획이 있고, 지식재산권이 퍼시스에게 있기 때문에 별도의 승인없이 사용할 계획입니다.",
+ "review_focus_base": "서울대학교 사범대학 교육학과 신종호 교수와 함께\r\n 미래 학습 경험(LX) 모델 기반의 차세대 교육 환경 예측을 위한 산학연구를 진행하고자 함\r\n\r\n요청사항\r\n\r\n 서울대학교 산학협력단으로부터 수신한 <연구 용역 계약서>의 법무 검토 요청",
+ "answers": {
+  "Q-AI-001-ip_ownership": "연구결과보고서 또는 연구결과논문 이 될 것입니다.",
+  "Q-AI-002-subcontracting": "가능성이 있습니다.",
+  "Q-AI-003-ip_ownership": "현재는 특별한 정함은 없습니다.",
+  "Q-AI-004-payment_settlement": "연구성과 미제출시 연구비를 지급하지 않고 싶습니다.",
+  "Q-AI-005-advertising_disclosure": "대외적으로 활용할 계획이 있고, 지식재산권이 퍼시스에게 있기 때문에 별도의 승인없이 사용할 계획입니다."
+ },
+ "questions": [
+  {
+   "question_id": "Q-AI-001-ip_ownership",
+   "title": "별첨 연구계획서에 명시된 연구범위와 성과물(특히 무형적 성과물의 종류 및 활용 가능성)이 구체적으로 무엇인지 확인할 수 있는가?",
+   "description": "성과물의 구체적 내용에 따라 퍼시스의 실질적 권리(지식재산권, 활용범위, 경제적 가치) 및 향후 분쟁 가능성, 세무상 무형자산 인식 여부가 달라진다.",
+   "answer_type": "text",
+   "required": true,
+   "options": [],
+   "tags": [
+    "topic:ip_ownership",
+    "risk_axis:legal",
+    "source:contract_question_agent",
+    "priority:1"
+   ],
+   "related_rule_ids": []
+  },
+  {
+   "question_id": "Q-AI-002-subcontracting",
+   "title": "다학제적 전문가 심층 인터뷰 용역의 범위, 예상 비용, 산정 방식 및 산학협력단이 아닌 제3자(외부 전문가 등)에게 재위탁(하도급)하는 경우가 있는가?",
+   "description": "용역 범위와 비용이 불명확하면 예산 초과, 비용 분쟁, 하도급 시 책임소재 및 품질관리 리스크가 발생할 수 있다.",
+   "answer_type": "text",
+   "required": true,
+   "options": [],
+   "tags": [
+    "topic:subcontracting",
+    "risk_axis:economic",
+    "source:contract_question_agent",
+    "priority:2"
+   ],
+   "related_rule_ids": []
+  },
+  {
+   "question_id": "Q-AI-003-ip_ownership",
+   "title": "퍼시스가 공동지식재산권을 실시(상업적 이용 등)하려는 경우 '별도의 실시계약'의 주요 조건(예: 실시료, 독점/비독점, 기간 등)에 대한 산학협력단의 기본 입장이 있는가?",
+   "description": "실시계약 조건에 따라 퍼시스의 사업화 가능성, 비용, 독점권 확보 여부 등 경제적·법적 리스크가 크게 달라진다.",
+   "answer_type": "text",
+   "required": true,
+   "options": [],
+   "tags": [
+    "topic:ip_ownership",
+    "risk_axis:legal",
+    "source:contract_question_agent",
+    "priority:3"
+   ],
+   "related_rule_ids": []
+  },
+  {
+   "question_id": "Q-AI-004-payment_settlement",
+   "title": "연구성과(보고서 등) 미제출 또는 제출 지연 시 연구비 지급(특히 잔금)과 관련한 퍼시스의 지급의무가 어떻게 되는가?",
+   "description": "성과물 미제출/지연에도 불구하고 연구비 전액 지급 의무가 발생할 경우 퍼시스의 경제적 손실 및 분쟁 리스크가 있다.",
+   "answer_type": "text",
+   "required": true,
+   "options": [],
+   "tags": [
+    "topic:payment_settlement",
+    "risk_axis:economic",
+    "source:contract_question_agent",
+    "priority:4"
+   ],
+   "related_rule_ids": []
+  },
+  {
+   "question_id": "Q-AI-005-advertising_disclosure",
+   "title": "퍼시스가 연구성과를 대외적으로 활용(예: 홍보, 보도자료, 마케팅 등)할 계획이 있는 경우, 산학협력단의 명칭·성과물 내용 사용에 대한 사전 승인 절차 및 제한사항이 실무상 어떻게 운영되는가?",
+   "description": "명칭·성과물 사용 제한이 엄격할 경우 퍼시스의 대외 활용(광고, 홍보 등) 전략에 제약이 발생할 수 있다.",
+   "answer_type": "text",
+   "required": false,
+   "options": [],
+   "tags": [
+    "topic:advertising_disclosure",
+    "risk_axis:legal",
+    "source:contract_question_agent",
+    "priority:5"
+   ],
+   "related_rule_ids": []
+  }
+ ],
+ "contract_type": "연구용역계약서"
+}

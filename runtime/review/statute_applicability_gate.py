@@ -751,9 +751,24 @@ _RX_ADVERTISING = re.compile(
 )
 
 
+#: 광고 어휘가 **금지 문장** 안에만 있으면 광고 행위가 예정된 것이 아니다 — 실측(서울대 산학연구계약
+#: 제10조): "광고, 판매촉진 … 의 목적으로 사용할 수 없으며" 한 문장으로 표시광고법 "일부 적용"이 됐다.
+_RX_AD_PROHIBITION = re.compile(
+    r"(?:사용|표시|이용|게재|공개)\s*할\s*수\s*없|(?:하여서는|해서는)\s*(?:아니|안)\s*(?:된다|되며)|금지"
+)
+
+
+def _advertising_planned(text: str) -> bool:
+    flat = re.sub(r"\s*\n\s*", " ", str(text or ""))
+    for sent in re.split(r"(?<=[.。])\s+|(?<=다)\s+(?=[①-⑳]|\d+\.)", flat):
+        if _RX_ADVERTISING.search(sent) and not _RX_AD_PROHIBITION.search(sent):
+            return True
+    return False
+
+
 def assess_advertising_act(*, text: str) -> StatuteDecision:
     """표시광고법 — 대외 광고·표시 행위가 있어야 적용된다."""
-    if _RX_ADVERTISING.search(str(text or "")):
+    if _advertising_planned(str(text or "")):
         return StatuteDecision(
             statute="표시광고법",
             conclusion=CONCLUSION_PARTIAL,
