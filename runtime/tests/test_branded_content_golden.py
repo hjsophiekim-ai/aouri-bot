@@ -145,9 +145,12 @@ class PipelineGoldenTest(unittest.TestCase):
         """보정(대칭 완결) — 을 귀책사유 + 갑의 시정요구·해제·해지 + 미지급·환급 + 손해배상이 실제 항으로."""
         f = self.by["lr_remedy_stacking"]
         linked = {e["display_path"]: e["text"] for e in f["package_linked_edits"]}
-        fault = next(t for p, t in linked.items() if p.startswith("제14조 ⑤"))
-        remedy = next(t for p, t in linked.items() if p.startswith("제14조 ⑥"))
-        effect = next(t for p, t in linked.items() if p.startswith("제14조 ⑦"))
+        # 새로 제안하는 항은 출처가 PROPOSED_REDLINE 이고 "(신설)" 로 표시된다(2026-10-07 provenance).
+        fault = next(t for p, t in linked.items() if p == "제14조 제5항(신설)")
+        remedy = next(t for p, t in linked.items() if p == "제14조 제6항(신설)")
+        effect = next(t for p, t in linked.items() if p == "제14조 제7항(신설)")
+        self.assertEqual({e["source"] for e in f["package_linked_edits"] if "(신설)" in e["display_path"]},
+                         {"PROPOSED_REDLINE"})
         self.assertIn("“을”의 귀책사유로 본다", fault)
         for must in ("정당한 사유 없이 약정한 게시일까지", "게시를 거부", "제작·게시·유지가 불가능",
                      "게시 채널의 정책", "제3자의 저작권·초상권", "동의 없이 “콘텐츠”를 삭제하거나 비공개",

@@ -5920,8 +5920,15 @@ def build_clause_level_result(
                 f"- {p.label or p.role_in_contract or '당사자'}: 법적 당사자 {p.legal_entity_name}"
                 + (f" (브랜드: {p.brand_name})" if p.brand_name else "")
                 + (" [우리 회사]" if p.is_our_company else "")
+                + (f" — “{p.alias_of}”의 별칭(같은 당사자이며 별도 당사자가 아님)" if p.alias_of else "")
                 for p in _entity_resolution.parties if p.legal_entity_name
             )
+            if _party_block:
+                # 당사자 수를 함께 준다 — 별칭·비서명 이해관계자를 당사자로 세어 "3자 계약"을 쓰지 않게.
+                _party_block += (
+                    f"\n- 법적 계약당사자 수: {_entity_resolution.legal_party_count}자 (서두·서명란 대조로 확정). "
+                    "서명하지 않는 크리에이터·출연자·관계기관은 당사자가 아니다."
+                )
             _focus_for_agent = review_focus if isinstance(review_focus, str) else ""
             if _party_block:
                 _focus_for_agent = (
@@ -5929,7 +5936,7 @@ def build_clause_level_result(
                     + "[당사자 확정 — 권리·의무는 아래 법적 당사자에게 귀속된다. "
                       "브랜드를 별도 당사자로 취급하지 말 것]\n" + _party_block
                 )
-                if len([p for p in _entity_resolution.parties if p.label]) >= 3:
+                if _entity_resolution.legal_party_count >= 3:
                     # 3자 계약에 양자 계약 규칙을 그대로 대지 않는다(2026-09-30 지시 14항).
                     _focus_for_agent += (
                         "\n[3자 계약] 각 논점마다 의무자·권리자·지급자·수령자·승인자·분쟁 "
@@ -7948,7 +7955,7 @@ def build_clause_level_result(
     meta["contract_composition"] = _build_composition(
         str(text or ""),
         canonical_label=str((meta.get("canonical_state") or {}).get("contract_type_label") or ""),
-        party_count=len([p for p in _entity_resolution.parties if p.label]),
+        party_count=_entity_resolution.legal_party_count,
     )
     if _sales_model.confident:
         # 거래 재구성이 세운 구성요소가 낱말 빈도보다 정확하다(와이어드 지시 1항).
@@ -9241,6 +9248,38 @@ def build_clause_level_result(
     meta["v14_final_self_check"]["failed"] = [
         a["key"] for a in meta["v14_final_self_check"]["axes"] if not a["ok"]
     ]
+
+    # ── [계약별 상태 격리 · 당사자/역할 단일 지도 · 조항 출처 · 정합성 hard gate] (2026-10-07) ──
+    # 출력 직전 — 당사자 수(서두·서명란), 역할 표기, 계약유형, 적용 법률, 조항 참조가 모든 섹션에서
+    # 현재 문서 하나로 설명되는지 본다. 고칠 수 있는 것은 고치고 기록하며, 남으면 상태 코드를 세운다.
+    try:
+        from runtime.review.contract_isolation import run_contract_isolation_gate as _isolation_gate
+
+        _isolation = _isolation_gate(
+            text=str(text or ""), meta=meta, clause_results=clause_results,
+            review={**review, "executive_summary": executive_summary, "risk_scenarios": risk_scenarios,
+                    "strategic_questions": strategic_questions},
+            entity_resolution=_entity_resolution, clause_index=_clause_index,
+            focus_paths=[str(getattr(t, "path", "") or "") for t in (_focus_targets or [])],
+        )
+        meta["contract_isolation_gate"] = _isolation
+        meta["contract_review_state"] = _isolation.get("contract_state")
+        meta["party_map"] = _isolation.get("party_map")
+        from runtime.review.output_filter import build_final_findings as _bff_iso
+        meta["final_findings"] = _bff_iso(
+            clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+        )
+        if _isolation.get("status"):
+            logger.warning("contract isolation gate: %s — %s", _isolation["status"], _isolation.get("detail"))
+            # 당사자 수·역할·조항 출처의 모순은 다른 실패보다 앞선다 — 검토의 좌표축이 틀린 상태다.
+            _prev = str(meta.get("review_status") or "")
+            if _prev and _prev != _isolation["status"]:
+                meta["review_status_superseded"] = {"was": _prev, "detail": meta.get("review_status_detail")}
+            meta["review_status"] = str(_isolation["status"])
+            meta["review_status_detail"] = str(_isolation.get("detail") or "")
+    except Exception as exc:  # noqa: BLE001 - 게이트 실패를 조용히 넘기지 않되 검토 전체를 막지 않는다
+        logger.warning("contract isolation gate failed: %s", exc)
+        meta["contract_isolation_gate"] = {"error": str(exc)}
 
     # [Entity Resolution] 당사자 법인명 불일치는 다른 게이트가 상태를 적지 않았을
     # 때만 대표 상태가 된다. 불일치 목록 자체는 meta["entity_resolution"] 에 늘 남는다.

@@ -261,13 +261,21 @@ def _render_redline_instruction(body: ET.Element, redline: dict[str, Any], *, co
         _para(body, f"수정 이유: {safe_truncate(reason, 350)}", indent=1, italic=True)
 
 
+def linked_edit_heading(e: dict[str, Any]) -> str:
+    """연계 문구의 머리 — 원문 조항 수정인지, 아우리봇이 새로 제안하는 항인지 구분한다."""
+    path = str(e.get("display_path") or "")
+    if str(e.get("source") or "") == "PROPOSED_REDLINE" or "(신설)" in path or "말미" in path:
+        return f"[신설 제안] {path}"
+    return f"[기존 조항 수정] {path}"
+
+
 def _render_linked_edits(body: ET.Element, issue: "ReviewIssue", *, color: str) -> None:
     """함께 고치거나 추가할 다른 항의 완성 문구 — 조항 번호만 적고 문구를 빼지 않는다."""
     if not issue.linked_edits:
         return
     _para(body, "함께 수정·추가할 문구:", bold=True, color=color, indent=1)
     for e in issue.linked_edits:
-        _para(body, f"[{e.get('display_path')}]", bold=True, indent=2)
+        _para(body, linked_edit_heading(e), bold=True, indent=2)
         for line in str(e.get("text") or "").splitlines()[:20]:
             if line.strip():
                 p_line = _p(body)
@@ -382,7 +390,11 @@ def grounding_lines(issue: "ReviewIssue") -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     clauses = [str(c) for c in (g.get("contract_clauses") or []) if str(c).strip()]
     if clauses:
-        out.append(("관련 계약조항", ", ".join(clauses)))
+        # 원문에 실제로 있는 조항만 — 아우리봇이 새로 제안한 항은 아래 "신설 제안" 으로 따로 적는다.
+        out.append(("기존 관련조항", ", ".join(clauses)))
+    proposed = [str(c) for c in (g.get("proposed_clauses") or []) if str(c).strip()]
+    if proposed:
+        out.append(("신설 제안", ", ".join(proposed)))
     statutes = [s for s in (g.get("statutes") or []) if isinstance(s, dict)]
     if statutes:
         for st in statutes:
@@ -1080,7 +1092,7 @@ def build_legal_review_docx(
             if _k.get("keep_reason"):
                 _para(body, f"판단: {safe_truncate(str(_k['keep_reason']), 300)}", indent=1)
             if _kg.get("contract_clauses"):
-                _para(body, f"[관련 계약조항] {', '.join(_kg['contract_clauses'])}", indent=1)
+                _para(body, f"[기존 관련조항] {', '.join(_kg['contract_clauses'])}", indent=1)
             for _st in _kg.get("statutes") or []:
                 _para(body, f"[관련 법령] {_st.get('citation')}({_st.get('title')}) — {_st.get('role')}", indent=1)
     if _finance_items:

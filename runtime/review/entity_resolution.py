@@ -87,6 +87,11 @@ class PartyRecord:
     affiliated: bool = False
     is_our_company: bool = False
     entity_key: str = ""
+    #: 같은 법인을 다른 약칭으로 한 번 더 정의한 경우 먼저 정의된 약칭 — "[시디즈](이하 “갑”) …
+    #: “갑”의 광고주 [시디즈](이하 “광고주”)" 의 광고주는 갑의 별칭이지 세 번째 당사자가 아니다.
+    alias_of: str = ""
+    #: 이름을 어디서 읽었나 — "inline"(같은 문장의 "(이하" 앞) | "table"(위 줄) | "".
+    name_source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -98,6 +103,7 @@ class PartyRecord:
             "signing_entity": self.signing_entity,
             "affiliated_entity": self.affiliated,
             "is_our_company": self.is_our_company,
+            "alias_of": self.alias_of,
         }
 
 
@@ -125,6 +131,42 @@ class EntityResolution:
     defined_brand_aliases: tuple[str, ...] = ()
     #: 이 계약에 실제로 나오는 브랜드 — 서술 정규화는 이 브랜드만 다룬다.
     present_brands: tuple[str, ...] = ()
+    #: 서명란에서 확인된 당사자 약칭(서두 약칭 기준) — 당사자 수 확정의 근거.
+    signature_labels: tuple[str, ...] = ()
+    #: 서명 문구의 계약서 부수("계약서 2통을 작성 … 각 1통씩 보관") — 0 이면 못 읽음.
+    copies: int = 0
+
+    @property
+    def legal_parties(self) -> list[PartyRecord]:
+        """법적 계약당사자 — 서두·정의 약칭과 서명란을 대조해 확정한다(2026-10-07 지시 2항).
+
+        같은 법인의 별칭(alias_of)은 세지 않는다. 서명란에서 둘 이상이 확인되고, 서명하지 않는 서두
+        약칭이 자기 이름조차 없으며, 계약서 부수가 서명 당사자 수를 넘지 않으면 그 약칭은 당사자가
+        아니다(관계기관·연구책임자 등). 서명란을 못 읽으면 서두를 따른다 — 빈칸 서명란이 흔하다.
+        """
+        primary: list[PartyRecord] = []
+        for p in self.parties:
+            if not p.label or p.alias_of or any(q.label == p.label for q in primary):
+                continue
+            # 표 형식에서 위 줄 이름을 빌려 온 약칭이 앞 당사자와 같은 법인이고 서명란에도 없으면
+            # 그 당사자의 다른 이름이다("본건 업무" ← 을사 줄).
+            if (p.name_source == "table" and p.label not in self.signature_labels and p.legal_entity_name
+                    and any(_norm(q.legal_entity_name) == _norm(p.legal_entity_name) for q in primary)):
+                continue
+            primary.append(p)
+        if self.copies and len(primary) > self.copies:
+            # "계약서 2통" 인데 서두 약칭이 셋 — 이름 없는 약칭("본건 업무")은 당사자가 아니다.
+            named = [p for p in primary if p.written_name]
+            if len(named) >= 2:
+                primary = named
+        signed = [p for p in primary if p.label in self.signature_labels]
+        if len(signed) < 2 or (self.copies and self.copies > len(signed)):
+            return primary
+        return [p for p in primary if p in signed or p.written_name]
+
+    @property
+    def legal_party_count(self) -> int:
+        return len(self.legal_parties)
 
     @property
     def status(self) -> str:
@@ -170,6 +212,10 @@ class EntityResolution:
                 {"brand": f.brand, "legal_entity_name": f.legal_name_ko} for f in self.user_brands
             ],
             "defined_brand_aliases": list(self.defined_brand_aliases),
+            "legal_party_count": self.legal_party_count,
+            "legal_party_labels": [p.label for p in self.legal_parties],
+            "signature_labels": list(self.signature_labels),
+            "copies": self.copies,
         }
 
 
@@ -293,8 +339,25 @@ def _extract_preamble_parties(preamble: str) -> list[PartyRecord]:
             # 표 형식(약칭만 한 줄)은 이름 칸이 빈칸이어도 당사자 자리이므로 그대로 둔다.
             if not written and before.strip() and not _RX_PARTY_LABEL.search(label):
                 continue
-            parties.append(PartyRecord(label=label, written_name=written, role_in_contract=role))
+            parties.append(PartyRecord(label=label, written_name=written, role_in_contract=role,
+                                       name_source=("inline" if names else ("table" if written else ""))))
     return parties
+
+
+_RX_COPIES = re.compile(r"계약서\s*(\d+|[일이삼사오두세네])\s*(?:부|통)")
+_KO_NUM = {"일": 1, "이": 2, "두": 2, "삼": 3, "세": 3, "사": 4, "네": 4, "오": 5}
+
+
+def _signature_labels(signature: str, labels: list[str]) -> tuple[str, ...]:
+    """서명란에 약칭이 단독(또는 "약칭:"·"(약칭)") 으로 적힌 당사자 — “갑” / 갑 : / (을)."""
+    out: list[str] = []
+    for lb in labels:
+        q = r"[“\"'‘]?\s*" + re.escape(lb) + r"\s*[”\"'’]?"
+        if (re.search(rf"(?m)^\s*(?:\(\s*)?{q}(?:\s*\))?\s*(?:[:：]|$)", signature)
+                or re.search(rf"(?m)^\s*\(\s*{re.escape(lb)}\s*\)", signature)
+                or re.search(rf"(?m)^\s*{q}\s*[:：]?\s*(?:회\s*사\s*명|상\s*호|주식회사|㈜|\(주\))", signature)):
+            out.append(lb)
+    return tuple(out)
 
 
 def _extract_signature_names(signature: str) -> list[str]:
@@ -398,6 +461,7 @@ def resolve_entities(
     res.defined_brand_aliases = tuple(aliases)
 
     # 서명란 — 서두의 당사자와 짝을 짓고, 틀린 표기·짝 없는 이름을 잡는다.
+    sig_hit_labels: list[str] = []
     for name in sig_names:
         legal, brand, known, code = _resolve_name(name, facts, entity)
         key = known.key if known is not None else ""
@@ -421,6 +485,7 @@ def resolve_entities(
                 else:
                     continue  # 서두에 있는 이름이다 — 누구인지 모를 뿐 불일치는 아니다.
         if match is not None:
+            sig_hit_labels.append(match.alias_of or match.label)
             match.signing_entity = legal
             if (not code and match.written_name
                     and _core(name) != _core(match.written_name)
@@ -437,6 +502,26 @@ def resolve_entities(
                 "서명 법인이 서두의 당사자와 같은 법인인지 확인하십시오.",
             ))
 
+    # 같은 법인을 다시 부르는 약칭은 별칭이다 — 당사자 수에 넣지 않는다.
+    for i, p in enumerate(parties):
+        # 표 형식에서 위 줄을 거슬러 읽은 이름은 옆 칸 당사자의 이름일 수 있다(서울대 연구계약 "학교").
+        if not p.label or p.name_source != "inline" or not (p.legal_entity_name or p.entity_key):
+            continue
+        # 해석 결과(registry)만 같다고 별칭으로 보지 않는다 — 서두에 **같은 이름**을 두 번 적은 경우만.
+        # "㈜일룸(갑) / 퍼시스데스커드림센터(을)" 은 registry 가 둘 다 일룸으로 읽어도 다른 당사자다.
+        first = next((q for q in parties[:i] if q.label and not q.alias_of and q.name_source == "inline"
+                      and q.written_name and _core(q.written_name) == _core(p.written_name)
+                      and _same_entity(q, p.legal_entity_name, p.entity_key)), None)
+        if first is not None:
+            p.alias_of = first.label
+    res.signature_labels = _signature_labels(signature, [p.label for p in parties if p.label]) + tuple(
+        lb for lb in sig_hit_labels if lb)
+    res.signature_labels = tuple(dict.fromkeys(res.signature_labels))
+    copies = _RX_COPIES.search(signature + " " + body[-1500:])
+    if copies:
+        n = copies.group(1)
+        res.copies = int(n) if n.isdigit() else _KO_NUM.get(n, 0)
+
     # 서명란에 이름이 없는 당사자는 서두의 해석을 서명 법인으로 둔다
     # (빈칸 서명란은 불일치가 아니다).
     for p in parties:
@@ -449,6 +534,7 @@ def resolve_entities(
     pick = next((p for p in ours if named is not None and p.entity_key == named.key), None)
     pick = pick or (ours[0] if ours else None)
     if pick is not None:
+        pick = next((q for q in parties if q.label == pick.alias_of), pick) if pick.alias_of else pick
         pick.is_our_company = True
     res.parties = parties
 

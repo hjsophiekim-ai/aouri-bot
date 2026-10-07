@@ -25,7 +25,8 @@ def linked_edit_rows(cr: dict[str, Any]) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     for e in cr.get("package_linked_edits") or cr.get("linked_edits") or []:
         if isinstance(e, dict) and str(e.get("text") or "").strip():
-            out.append({"display_path": str(e.get("display_path") or "").strip(), "text": str(e.get("text")).strip()})
+            out.append({"display_path": str(e.get("display_path") or "").strip(), "text": str(e.get("text")).strip(),
+                        "source": str(e.get("source") or "")})
     return out[:10]
 
 

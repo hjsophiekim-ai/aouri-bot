@@ -265,7 +265,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
 
               <div style="margin-top:10px;">
                 <div class="label">계약 내용 입력</div>
-                <textarea id="text" placeholder="계약서 내용을 여기에 붙여넣어 주세요."></textarea>
+                <textarea id="text" placeholder="계약서 내용을 여기에 붙여넣어 주세요." onchange="onTextReplaced()"></textarea>
               </div>
 
               <div class="row" style="margin-top:12px; justify-content:flex-end;">
@@ -740,6 +740,20 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       _setStartMsg('새 파일이 선택되어 계약유형/중점검토 입력값을 초기화했습니다. 필요하면 이 문서에 맞게 다시 입력해 주세요.', false);
     }
 
+    // 직전 검토에 쓴 문서 머리 — 다른 계약서를 붙여넣으면 이전 계약유형/중점검토 입력을 지운다
+    // (파일 선택과 같은 규칙. 2026-10-07: 이전 계약의 유형·쟁점이 다음 계약에 남지 않게).
+    let _lastStartedHead = null;
+    function onTextReplaced() {
+      const head = ((document.getElementById('text').value || '').trim()).slice(0, 200);
+      if (_lastStartedHead === null || !head || head === _lastStartedHead) return;
+      const ctEl = document.getElementById('contractType');
+      const rfEl = document.getElementById('reviewFocus');
+      if (ctEl && ctEl.value) ctEl.value = '';
+      if (rfEl && rfEl.value) rfEl.value = '';
+      _lastStartedHead = null;
+      _setStartMsg('새 계약서가 입력되어 이전 계약의 계약유형/중점검토 입력값을 초기화했습니다. 필요하면 이 문서에 맞게 다시 입력해 주세요.', false);
+    }
+
     async function startReview() {
       _setStartMsg('', false);
       const btn = document.getElementById('btnStart');
@@ -770,7 +784,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           return;
         }
 
-        // 2. 상태 초기화
+        // 2. 상태 초기화 — 이전 계약의 상태는 하나도 넘기지 않는다(RESET_PREVIOUS_CONTRACT_STATE).
+        _lastStartedHead = file ? null : text.slice(0, 200);
         ctx = { entity, contract_type: contractType, text, filename: null, session_id: null, review_focus: reviewFocus || null };
         questions = [];
         qIndex = 0;
@@ -1326,7 +1341,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           const lk = document.createElement('div');
           lk.className = 'clauseBox';
           lk.innerHTML = '<div class="label">함께 수정·추가할 문구</div>' + linked.map(e =>
-            `<div style="margin-top:6px;"><b>${escapeHtml(String(e.display_path || ''))}</b>`
+            `<div style="margin-top:6px;"><b>${(String(e.source || '') === 'PROPOSED_REDLINE' || String(e.display_path || '').includes('(신설)')) ? '[신설 제안] ' : '[기존 조항 수정] '}${escapeHtml(String(e.display_path || ''))}</b>`
             + `<div class="guidance" style="white-space:pre-wrap;">${escapeHtml(String(e.text || ''))}</div></div>`).join('');
           card.appendChild(lk);
         }

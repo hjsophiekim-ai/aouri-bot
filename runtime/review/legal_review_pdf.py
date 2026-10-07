@@ -141,8 +141,9 @@ def _issue_block(pdf: FPDF, issue: ReviewIssue, *, index: int | None = None) -> 
         _body(pdf, issue.legal_business_reason)
     _label(pdf, "수정문안")
     _body(pdf, issue.proposed_revision)
+    from runtime.review.legal_review_docx import linked_edit_heading
     for e in getattr(issue, "linked_edits", None) or []:
-        _label(pdf, f"함께 수정·추가할 문구 [{e.get('display_path')}]")
+        _label(pdf, f"함께 수정·추가할 문구 {linked_edit_heading(e)}")
         _body(pdf, str(e.get("text") or ""))
     if issue.negotiation_position:
         _label(pdf, "협상 포지션")
@@ -414,7 +415,7 @@ def build_legal_review_pdf(
             if c.get("keep_reason"):
                 _body(pdf, f"판단: {c['keep_reason']}")
             if g.get("contract_clauses"):
-                _body(pdf, f"관련 계약조항: {', '.join(g['contract_clauses'])}")
+                _body(pdf, f"기존 관련조항: {', '.join(g['contract_clauses'])}")
             for st in g.get("statutes") or []:
                 _body(pdf, f"관련 법령: {st.get('citation')}({st.get('title')}) — {st.get('role')}")
     if _finance_items:

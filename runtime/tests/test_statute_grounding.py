@@ -239,7 +239,7 @@ class HangulDayStatuteGoldenTest(unittest.TestCase):
         )
         with zipfile.ZipFile(BytesIO(data)) as z:
             xml = z.read("word/document.xml").decode("utf-8")
-        for needle in ("[관련 계약조항] 제20조 제1항~제3항", "[관련 법령] 민법 제130조(무권대리)",
+        for needle in ("[기존 관련조항] 제20조 제1항~제3항", "[관련 법령] 민법 제130조(무권대리)",
                        "[관련 법령] 저작권법 제35조 제1항", "[법률상 이유]", "[실무상 이유]"):
             self.assertIn(needle, xml)
 
