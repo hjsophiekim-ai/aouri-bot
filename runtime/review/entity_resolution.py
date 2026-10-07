@@ -246,15 +246,29 @@ def _org_names(line: str) -> list[str]:
     return names
 
 
+#: 양식의 대괄호 빈칸에 적힌 이름 — "[시디즈] (이하 “갑”)".
+_RX_BRACKET_NAME = re.compile(r"\[\s*([^\[\]]{1,30}?)\s*\]\s*$")
+#: 당사자를 가리키는 약칭. 이름 없이 "콘텐츠"·"본 계약"·"서비스" 를 정의한 것은 당사자가 아니다.
+_RX_PARTY_LABEL = re.compile(r"^(?:[갑을병정]|회사|고객|당사)$|(?:사|자|인|주|처|원|단|청)$")
+
+
 def _extract_preamble_parties(preamble: str) -> list[PartyRecord]:
     lines = [ln.rstrip() for ln in preamble.splitlines()]
     parties: list[PartyRecord] = []
     for i, line in enumerate(lines):
+        prev_end = 0
         for am in _RX_ALIAS.finditer(line):
             label = am.group(1).strip()
-            # 인라인: 같은 줄 "(이하" 앞의 이름.
-            before = line[: am.start()]
+            # 인라인: "(이하" 앞의 이름 — **앞 약칭 뒤부터**만 본다. 줄 전체를 보면
+            # "㈜비디앤에스(이하 “을”)는 “갑”의 광고주 [시디즈] (이하 “광고주”)" 의 광고주가
+            # ㈜비디앤에스가 됐다(2026-10-07 브랜디드 콘텐츠 계약 실측).
+            before = line[prev_end: am.start()]
+            prev_end = am.end()
             names = _org_names(before)
+            if not names:
+                bm = _RX_BRACKET_NAME.search(before.rstrip(" ("))
+                if bm and _norm(bm.group(1)) in _EXACT_NAMES:
+                    names = [bm.group(1).strip()]
             written = names[-1] if names else ""
             role = ""
             if not written:
@@ -275,6 +289,10 @@ def _extract_preamble_parties(preamble: str) -> list[PartyRecord]:
                                 role = r
                                 break
                         break
+            # 문장 안에서 이름 없이 정의된 약칭("…콘텐츠(이하 “콘텐츠”)", "계약(이하 “본 계약”)")은 당사자가 아니다.
+            # 표 형식(약칭만 한 줄)은 이름 칸이 빈칸이어도 당사자 자리이므로 그대로 둔다.
+            if not written and before.strip() and not _RX_PARTY_LABEL.search(label):
+                continue
             parties.append(PartyRecord(label=label, written_name=written, role_in_contract=role))
     return parties
 

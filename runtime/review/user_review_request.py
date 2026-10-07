@@ -113,13 +113,18 @@ _STOPWORDS: frozenset[str] = frozenset({
 # 이었는데, 세 줄이 각각 검토 쟁점이 됐다. AI 경로는 배경 문장에서 "배경기술 IP·AI 학습데이터·
 # 개인정보" 쟁점을 지어냈고, 낱말 겹침으로 "적정 — 현재 문언으로 커버됩니다" 라고 답했다. 배경 설명·
 # 머리말·"검토해 달라"는 일반 의뢰는 **맥락**이지 쟁점이 아니다.
-_RX_HEADER_LINE = re.compile(r"^\s*(?:\[?\s*)?(?:검토\s*)?(?:요청\s*사항|배경|참고\s*사항|현황|목적)\s*(?:\]\s*)?[:：]?\s*$")
+#: 머리말 — "요청사항", "배경", 앞 글자가 잘린 "청배경"(신청배경) 같은 짧은 줄.
+_RX_HEADER_LINE = re.compile(
+    r"^\s*(?:\[?\s*)?(?:[가-힣]{0,3}\s*)?(?:요청\s*사항|배경|참고\s*사항|현황|목적)\s*(?:\]\s*)?[:：]?\s*$"
+)
+#: 뒤따르는 목록을 소개하는 문장 — "아래 내용들이 … 검토 요청드립니다". 쟁점은 그 아래 목록이다.
+_RX_LIST_INTRO = re.compile(r"^\s*(?:아래|다음|하기)[^.\n]{0,200}(?:요청|검토|부탁)[가-힣\s]{0,8}[.]?\s*$")
 _RX_BACKGROUND = re.compile(
     r"(?:하고자\s*(?:함|합니다|한다|하며)|진행\s*(?:중|예정)(?:임|입니다|이며)?|예정(?:임|입니다)"
     r"|추진\s*(?:중|예정)(?:임|입니다)?|계획(?:임|입니다)|수신(?:함|하였음|했습니다))\s*\.?\s*$"
 )
 _RX_GENERIC_REVIEW = re.compile(
-    r"(?:법무|법률|계약서?)?\s*(?:검토|자문)\s*(?:를\s*|을\s*)?(?:요청|부탁|의뢰|바랍니다|바람|요망)"
+    r"(?:법무|법률|계약서?)?\s*(?:검토|자문)\s*(?:를\s*|을\s*)?(?:요청|부탁|의뢰|바랍니다|바람|요망|신청)"
     r"(?:\s*(?:드립니다|합니다|함|드림))?\s*\.?\s*$"
 )
 #: 일반 의뢰 문장이라도 이것이 있으면 구체적 쟁점이다("지체상금 조항 검토 요청").
@@ -156,6 +161,9 @@ def separate_context(focus: str) -> tuple[str, list[str]]:
             context.append(body)
             continue
         if _RX_BACKGROUND.search(body) and "?" not in body:
+            context.append(body)
+            continue
+        if _RX_LIST_INTRO.match(body) and not _RX_CLAUSE_CITATION.search(body):
             context.append(body)
             continue
         if _RX_GENERIC_REVIEW.search(body):

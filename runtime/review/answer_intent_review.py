@@ -88,6 +88,13 @@ def answer_lines(review_focus: str) -> list[tuple[str, str]]:
     return out
 
 
+def _p(word: str, with_b: str, without_b: str) -> str:
+    core = re.sub(r"[\s“”\"'()]+$", "", word or "")
+    last = core[-1:] if core else ""
+    has = "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 != 0
+    return word + (with_b if has else without_b)
+
+
 def _attr(c: Any, name: str) -> str:
     if isinstance(c, dict):
         return str(c.get(name) or "")
@@ -185,30 +192,72 @@ def _free_use(q: str, a: str, *, clauses: list[Any] | None, live: list[dict[str,
     )
 
 
+def _performer_label(clauses: list[Any] | None) -> str:
+    """업무를 수행하는 상대방의 약칭 — 하도급·연구 수행 문장의 주어."""
+    body = " ".join(_flat(_attr(c, "text")) for c in clauses or [])
+    for rx in (r"[“\"”]([^”\"“]{1,8})[”\"]\s*(?:은|는)\s*[^.]{0,40}(?:하도급|재위탁)",
+               r"[“\"”]([^”\"“]{1,8})[”\"]\s*(?:은|는)\s*(?:연구|용역|업무|서비스)를"):
+        m = re.search(rx, body)
+        if m:
+            return f"“{m.group(1)}”"
+    return "상대방"
+
+
 def _subcontract(q: str, a: str, *, clauses: list[Any] | None, live: list[dict[str, Any]]) -> AnswerReview | None:
     if not _RX_AFFIRM.search(a):
         return None
+    label = "제3자 수행(하도급·재위탁) 통제"
     sub_cl = [c for c in clauses or [] if re.search(r"재위탁|하도급|제3자에게\s*(?:위탁|수행)", _attr(c, "text"))]
-    if sub_cl and any(re.search(r"책임", _attr(c, "text")) for c in sub_cl):
+    consent = [c for c in sub_cl if re.search(r"사전\s*(?:서면\s*)?(?:동의|승인)", _flat(_attr(c, "text")))]
+    liable = [c for c in sub_cl if re.search(r"책임", _attr(c, "text"))]
+    wants_consent = bool(re.search(r"동의|승인", q))
+    if consent and (wants_consent or liable):
+        # 2026-10-07 실측: "하도급 시 사전 동의 필요?" → "네" 인데 이미 사전 동의 조항이 있는 계약에
+        # "재위탁 문언이 없다" 고 답했다. 있는 조항부터 찾는다.
         return AnswerReview(
-            question=q, answer=a, topic="subcontracting", label="외부 전문가 활용(재위탁) 시 책임",
-            verdict=V_OK, clauses=[_attr(c, "display_path") for c in sub_cl[:2]], current_text=_quote(sub_cl[:1]),
-            conclusion="예 — 제3자에게 맡기더라도 상대방이 책임을 지도록 이미 정해져 있습니다.",
+            question=q, answer=a, topic="subcontracting", label=label,
+            verdict=V_OK, clauses=[_attr(c, "display_path") for c in consent[:2]], current_text=_quote(consent[:1]),
+            conclusion=(f"예 — {_p(_attr(consent[0], 'display_path'), '이', '가')} 이미 사전 동의를 받아야만 제3자에게 맡길 수 있도록 "
+                        "정하고 있어 원하시는 대로입니다. 별도 수정은 필요하지 않습니다."),
+            proposed=["해당 없음(현행 유지)"],
         )
-    extra = [c for c in clauses or [] if re.search(r"인터뷰|별도[^.]{0,20}용역|부속\s*합의서", _attr(c, "text"))]
-    them = ""
-    m = re.search(r"[“\"]([^”\"]{1,8})[”\"]\s*(?:는|은)\s*연구를", " ".join(_attr(c, "text") for c in clauses or []))
-    if m:
-        them = f"“{m.group(1)}”"
-    them = them or "상대방"
+    if liable:
+        return AnswerReview(
+            question=q, answer=a, topic="subcontracting", label=label,
+            verdict=V_OK, clauses=[_attr(c, "display_path") for c in liable[:2]], current_text=_quote(liable[:1]),
+            conclusion="예 — 제3자에게 맡기더라도 상대방이 책임을 지도록 이미 정해져 있습니다.",
+            proposed=["해당 없음(현행 유지)"],
+        )
+    them = _performer_label(clauses)
+    extra = [c for c in clauses or [] if re.search(r"별도[^.]{0,20}(?:용역|비용)|부속\s*합의서", _attr(c, "text"))]
+    where = "별도 비용을 정하는 부속합의서 또는 업무 범위 조항" if extra else "업무 범위 조항"
     return AnswerReview(
-        question=q, answer=a, topic="subcontracting", label="외부 전문가 활용(재위탁) 시 책임",
+        question=q, answer=a, topic="subcontracting", label=label,
         verdict=V_BUSINESS, clauses=[_attr(c, "display_path") for c in extra[:1]], current_text=_quote(extra[:1]),
-        conclusion=("본 계약에는 재위탁을 직접 다루는 문언이 없습니다(양도 제한 조항은 권리·의무의 양도만 막습니다). 체결 자체를 "
-                    "막을 사항은 아니고, 외부 전문가 인터뷰를 맡길 경우 비용을 정하는 부속합의서에 아래 한 문장을 넣으면 "
-                    "충분합니다."),
-        proposed=[f"{them}가 인터뷰 용역의 전부 또는 일부를 제3자에게 수행하게 하는 경우에도, 그 수행 결과와 비밀유지에 관한 "
-                  f"이 계약상 책임은 {them}가 부담한다."],
+        conclusion=(f"본 계약에는 제3자 수행(재위탁)을 직접 다루는 문언이 없습니다(양도 제한 조항은 권리·의무의 양도만 "
+                    f"막습니다). 체결 자체를 막을 사항은 아니고, {where}에 아래 한 문장을 넣으면 충분합니다."),
+        proposed=[f"{_p(them, '이', '가')} 업무의 전부 또는 일부를 제3자에게 수행하게 하는 경우에도, 그 수행 결과와 비밀유지에 관한 "
+                  f"이 계약상 책임은 {_p(them, '이', '가')} 부담한다."],
+    )
+
+
+_RX_REUSE_PLAN_Q = re.compile(r"(?:게시|광고소재|활용|사용)[^?]{0,40}계획")
+
+
+def _content_reuse(q: str, a: str, *, clauses: list[Any] | None, live: list[dict[str, Any]]) -> AnswerReview | None:
+    if not _RX_AFFIRM.search(a):
+        return None
+    pkg = next((c for c in live if str(c.get("clause_id") or "").startswith("lr_content_use_rights")), None)
+    if pkg is None:
+        return None
+    paths = list(pkg.get("related_clause_paths") or [_attr(pkg, "display_path")])
+    return AnswerReview(
+        question=q, answer=a, topic="content_reuse", label="결과물의 자체 채널·광고소재 활용",
+        verdict=V_FIX, clauses=paths, current_text=_quote([pkg]),
+        conclusion=("아니요 — 지금 계약대로면 계획하신 활용을 할 수 없습니다. " + str(pkg.get("rewrite_reason") or pkg.get("problem") or "")
+                    .split(" [연계 수정]")[0] + " (본문 HIGH ‘이용권’과 같은 수정입니다.)"),
+        proposed=[f"{_attr(pkg, 'display_path')}: {str(pkg.get('suggested_rewrite') or '').strip()}"],
+        finding_ids=[str(pkg.get("clause_id"))],
     )
 
 
@@ -216,6 +265,7 @@ _TOPICS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
     (_RX_PAY_HOLD, "answer", _pay_hold),
     (_RX_FREE_USE, "answer", _free_use),
     (_RX_SUBCONTRACT_Q, "question", _subcontract),
+    (_RX_REUSE_PLAN_Q, "question", _content_reuse),
 )
 
 

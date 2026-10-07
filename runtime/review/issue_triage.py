@@ -56,6 +56,9 @@ _RX_ABSENCE = re.compile(r"없음|규정되지|공란|미선택|선택되지|누
 #: "포함 여부가 명시되지 않음" 도 보호 공백이다(부재까지는 아니어도 해석 다툼이 남는다).
 _RX_PARTIAL = re.compile(r"불명확|미흡|불충분|한정|제한|일률|명시되지|특정되지|정하지\s*않")
 _RX_MONEY_STRONG = re.compile(r"계약금액|대금[^.\n]{0,8}(?:미확정|공란)|무제한|상한\s*없|배수|전액")
+#: 2026-10-07 지시 5항 — 한도의 **비대칭**("을은 제작료 한도, 갑은 무제한")은 금액 결정이 아니라 권리 배분이다.
+#: 양쪽 모두 한도가 없는 것(와이어드 "배상 상한 부재")은 금액 결정이므로 여기 해당하지 않는다.
+_RX_ASYMMETRY = re.compile(r"불균형|비대칭|일방(?:만|에게만)|한쪽(?:만|에만)|에게만|만\s*(?:한도|상한)|한도\s*비대칭")
 _RX_MONEY = re.compile(r"대금|지급|정산|로열티|제작비|손해|배상|위약|지체상금|금전")
 
 
@@ -63,7 +66,7 @@ def _title(cr: dict[str, Any]) -> str:
     for d in cr.get("detected_issue_list") or []:
         if isinstance(d, dict) and str(d.get("issue_title") or "").strip():
             return str(d["issue_title"])
-    if not str(cr.get("issue_title") or "").strip() and cr.get("is_ai_discovered"):
+    if not str(cr.get("issue_title") or "").strip() and (cr.get("is_ai_discovered") or cr.get("ai_deep_reviewed")):
         # 조항별 AI 논점에는 이슈 제목이 없다 — 조 제목("기술지원 및 책임")으로 채점하면 무엇을 문제삼는지
         # 모른 채 0점이 된다. AI 가 적은 위험 서술로 채점한다.
         risk = str(cr.get("our_company_risk") or cr.get("rewrite_reason") or "").strip()
@@ -118,6 +121,9 @@ def is_protected(cr: dict[str, Any]) -> bool:
     if cr.get("is_entity_name_correction") or str(cr.get("clause_id") or "").startswith("ac_"):
         # ac_* 는 원문 문언을 정규식으로 확인한 법률효과 점검이다(authority_selection_checks).
         return True
+    if cr.get("is_user_focus"):
+        # 2026-10-07 지시 1항 — 사용자가 직접 지정한 조항의 지적은 점수로 DROP 하지 않는다(유실 금지).
+        return True
     if cr.get("is_risk_package") or cr.get("is_transaction_package"):
         # 거래 재구성 package(성과물 제출·대금 연계 등)도 계약 전체의 사실(일자·귀속·정산 문언)로
         # 세운 판단이다 — 제목 낱말 점수로 등급을 내리지 않는다.
@@ -132,8 +138,8 @@ def is_protected(cr: dict[str, Any]) -> bool:
         # 2026-10-06 지시 6항 — 조항별 AI 탐색이 **규칙 없이** 찾은 논점도 생성형이다. 실측(서울대 제14조
         # 제3항): "협의에 의해 지불" 에 "서면" 한 낱말을 더하는 수정이 중요도 0점인데 SHOULD FIX 로 남았다.
         # 규칙 근거·승인필요 표지·치명 근거(효과 태그)가 있으면 그대로 보호한다.
-        or (cr.get("is_ai_discovered") and not cr.get("related_rules") and not cr.get("approval_required")
-            and not str(cr.get("high_severity_basis") or "").strip())
+        or ((cr.get("is_ai_discovered") or cr.get("ai_deep_reviewed")) and not cr.get("related_rules")
+            and not cr.get("approval_required") and not str(cr.get("high_severity_basis") or "").strip())
     )
     return not generated
 
@@ -192,7 +198,9 @@ def triage_one(
     if is_protected(cr):
         return (MUST_FIX if tier == "HIGH" else SHOULD_FIX if tier == "MEDIUM" else DROP), "", scores
     # 생성형 finding — 점수와 최종 필터(지시 16항)로 판단한다. 등급은 올리지 않는다.
-    if re.search(r"배상\s*(?:책임\s*)?(?:상한|한도)|책임\s*(?:상한|한도)", _title(cr)):
+    asymmetric = bool(_RX_ASYMMETRY.search(_title(cr) + " " + str(cr.get("problem") or "")))
+    if re.search(r"배상\s*(?:책임\s*)?(?:상한|한도)|책임\s*(?:상한|한도)", _title(cr)) \
+            and not cr.get("legal_core") and not asymmetric:
         # 와이어드 지시 10항 — 상한을 둘지·얼마로 할지는 거래 규모를 보고 사업부가 정한다.
         # 법무 판단(어떤 책임을 상한에서 뺄지)은 요청 답변의 최소수정문구로 낸다.
         return FINANCE_CHECK, "손해배상 상한 금액·기준은 거래 규모를 본 사업부 결정 사항", scores

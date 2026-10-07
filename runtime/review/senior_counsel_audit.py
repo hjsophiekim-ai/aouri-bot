@@ -375,6 +375,12 @@ def _our_labels(entity_resolution: Any) -> list[str]:
                 core = re.sub(r"주식회사|㈜|\(주\)", "", v).strip()
                 if core and core not in out:
                     out.append(core)
+        # 같은 법인을 다른 약칭으로도 부르는 계약 — "[시디즈](이하 “갑”) … “갑”의 광고주 [시디즈](이하 “광고주”)".
+        legal = str(getattr(our, "legal_entity_name", "") or "").strip()
+        for p in getattr(entity_resolution, "parties", []) or []:
+            lb = str(getattr(p, "label", "") or "").strip()
+            if legal and lb and lb not in out and str(getattr(p, "legal_entity_name", "") or "").strip() == legal:
+                out.append(lb)
     return out
 
 
@@ -421,6 +427,24 @@ class _Audit:
         self.act(cr, f"{old}->{tier}", code, detail)
 
 
+_RX_QUOTE_HEADING = re.compile(r"^\s*제\s*(\d+)\s*조\s*(?:\([^)]{0,30}\))?\s*")
+
+
+def _quoted_article(original: str, index: list[ClauseRef]) -> ClauseRef | None:
+    """인용문이 실제로 들어 있는 조항. 인용이 "제N조 (제목)" 머리로 시작하면 그 조, 아니면 본문 대조."""
+    text = str(original or "")
+    if len(_squash(text)) < 20 or _RX_ABSENT_ORIGINAL.search(text):
+        return None
+    m = _RX_QUOTE_HEADING.match(text)
+    if m and any(r.article == m.group(1) for r in index):
+        rest = _squash(re.sub(r"^[①-⑳]\s*", "", text[m.end():]))[:30]
+        same = [r for r in index if r.article == m.group(1)]
+        return next((r for r in same if rest and rest[:15] in _squash(r.text)), same[0])
+    q = _squash(text)[:30]
+    hits = [r for r in index if q in _squash(r.text)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _ground(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> bool:
     """지시 2·3·4·18항. False 면 내보내지 않는다."""
     if cr.get("is_entity_name_correction"):
@@ -433,6 +457,16 @@ def _ground(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> bool:
     claims_new = bool(_RX_NEW_ARTICLE.search(path) or _RX_ABSENT_ORIGINAL.search(original))
 
     if art and not claims_new:
+        # 2026-10-07 지시 3항 — 인용한 원문이 **다른 조**의 문언이면 조항번호가 틀린 것이다. 실측: 손해배상
+        # 체크리스트가 제14조 원문("제14조 (광고주의 귀책사유 및 조치) ① …")을 인용하면서 제9조 제1항에 붙었다.
+        quoted = _quoted_article(original, index)
+        if quoted is not None and quoted.article != art:
+            before = path or f"제{art}조"
+            cr.update({"article_number": quoted.article, "paragraph_number": quoted.paragraph,
+                       "display_path": quoted.display_path, "clause_title": quoted.title,
+                       "reanchored_from": before, "is_checklist_item": False})
+            audit.act(cr, "reanchored", STATUS_CLAUSE_GROUNDING,
+                      f"인용 원문은 {quoted.display_path}의 문언 — {before} → {quoted.display_path}")
         return True
     # 위치 표기에 이미 "제N조(제M항)"가 있고 그 조가 실제로 있으면 그 위치가 맞다 —
     # 필드만 비어 있는 것이다. 다른 조로 옮기지 않는다.
@@ -448,6 +482,9 @@ def _ground(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> bool:
 
     # 원문 인용이 실제 조항 안에 있으면 그 조항이다("계약서 표지"로 적혀 있어도).
     ref = _clause_containing(original, index) if original and not claims_new else None
+    if ref is None and original and not claims_new:
+        # 앞 단계가 조항번호를 지운 finding 도 인용 원문으로 제자리를 찾는다(지시 3항 — "제14조 (…)" 인용).
+        ref = _quoted_article(original, index)
     absent = claims_new or not original.strip() or bool(re.search(r"계약\s*전체|부재|없음", original))
     has_reason = any(str(cr.get(k) or "").strip() for k in ("problem", "rewrite_reason", "legal_business_reason"))
     if absent and not has_reason:
@@ -1051,13 +1088,21 @@ def _overreach_ok(cr: dict[str, Any], *, text: str, archetype: str, audit: _Audi
         audit.suppress(cr, "REVIEW_FAILED_CROSS_CONTRACT_CONTAMINATION",
                        "비밀유지 계약의 데이터 반환·삭제(백업·로그) 문구가 상품등록 등 무관한 조항에 붙음")
         return False
+    # 2026-10-07 지시 13항 — 상대방이 결과물을 **자기 채널에 공개 게시하는 것이 계약 목적**이면, 결과물의
+    # 포트폴리오·외부 공개 금지 조항을 요구할 실익이 없다(브랜디드 콘텐츠: 을의 유튜브 채널에 게시).
+    if re.search(r"포트폴리오|외부\s*공개\s*금지", title) and re.search(
+            r"채널에\s*게시|공중송신|게시\s*채널", flat):
+        audit.suppress(cr, "TRIAGE_DROP", "결과물을 상대방 채널에 공개 게시하는 것이 계약 목적 — 공개 금지 요구는 실익 없음")
+        return False
     # 12·13항 — 동의권자·회신기한·무응답 간주 같은 절차를 자동으로 덧붙이지 않는다.
     if proposal and _RX_PROCEDURE_ADD.search(proposal) and not _RX_PROCEDURE_ADD.search(original):
         audit.suppress(cr, STATUS_REDLINE_QUALITY,
                        "현행 사전 서면동의 구조에 동의권자·회신기한·무응답 간주 절차를 덧붙인 과수정")
         return False
     # 7항 — 법정 행정책임 자체를 계약으로 면책시키는 문구는 효력이 없다.
-    if proposal and _RX_ADMIN_EXEMPT.search(proposal):
+    # 원문에 이미 있는 문언은 수정안이 만든 것이 아니다 — 원문을 보존한 채 단서를 덧붙인 수정안이
+    # 원문의 "행정 처분 … 면책" 때문에 지워졌다(2026-10-07 브랜디드 제6조 제2항 실측).
+    if proposal and _RX_ADMIN_EXEMPT.search(proposal) and not _RX_ADMIN_EXEMPT.search(original):
         audit.suppress(cr, STATUS_REDLINE_QUALITY,
                        "과태료·행정제재 등 법정 행정책임을 계약으로 면책시키는 수정안(효력 없음)")
         return False
@@ -1111,7 +1156,11 @@ def _absorb_into_transaction_packages(visible: list[dict[str, Any]], audit: _Aud
     """
     packages = [c for c in visible if c.get("is_transaction_package") and not c.get("dedup_suppressed")
                 and c.get("package_articles") and c.get("package_pattern")]
-    if not packages:
+    # 지정 조항 판단(uf_*)은 그 조·항의 **유일한 답**이다 — 같은 위치의 다른 지적(AI 논점 등)을 흡수한다.
+    # 실측: 제7조 제3항에 AI 가 "경쟁사 계약 허용" 을 중요도 0점 HIGH 로 따로 냈다(지시 10항: SHOULD 수준).
+    focus_owners = {str(c.get("display_path") or ""): c for c in visible
+                    if str(c.get("clause_id") or "").startswith("uf_") and not c.get("dedup_suppressed")}
+    if not packages and not focus_owners:
         return
     compiled = [(p, re.compile(str(p["package_pattern"]), re.IGNORECASE)) for p in packages]
     for cr in visible:
@@ -1119,12 +1168,31 @@ def _absorb_into_transaction_packages(visible: list[dict[str, Any]], audit: _Aud
             continue
         if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
             continue
+        if str(cr.get("clause_id") or "").startswith("uf_"):
+            continue  # 지정 조항의 답은 다른 package 에 묻히지 않는다
+        owner = focus_owners.get(str(cr.get("display_path") or ""))
+        if owner is not None:
+            owner.setdefault("sub_issues", []).append({
+                "clause_id": str(cr.get("clause_id") or ""), "display_path": str(cr.get("display_path") or ""),
+                "title": _title(cr), "problem": str(cr.get("problem") or "")[:240],
+            })
+            cr["dedup_suppressed"] = True
+            cr["dedup_merged_into"] = str(owner.get("clause_id") or "")
+            audit.act(cr, "merged", "USER_FOCUS_OWNER", f"지정 조항의 판단 → {owner.get('clause_id')}")
+            continue
         art = str(cr.get("article_number") or "")
         title = _title(cr)
-        blob = title + " " + str(cr.get("problem") or "")[:300]
+        # 조항별 AI 논점은 제목이 조 제목뿐이다 — 무엇을 문제삼는지는 위험 서술에 있다.
+        blob = " ".join([title, str(cr.get("problem") or "")[:300], str(cr.get("rewrite_reason") or "")[:300],
+                         str(cr.get("our_company_risk") or "")[:200]])
         best, best_score = None, 0
+        anchored_text = str(cr.get("original_text") or "")
         for pkg, rx in compiled:
-            if art not in {str(a) for a in pkg["package_articles"]} or not rx.search(blob):
+            in_scope = art in {str(a) for a in pkg["package_articles"]}
+            # 제목은 그 package 의 시나리오인데 붙은 조항에는 그 주제가 한 낱말도 없으면 잘못 붙은 것이다
+            # (지시 3항). 실측: "시디즈의 콘텐츠 활용 범위 과도 제한" 이 제작료 지급 조항(제5조)에 붙었다.
+            misanchored = bool(rx.search(title)) and anchored_text.strip() and not rx.search(anchored_text)
+            if not (in_scope or misanchored) or not rx.search(blob):
                 continue
             score = 10 * len(rx.findall(title)) + len(rx.findall(blob))
             if score > best_score:

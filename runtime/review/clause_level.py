@@ -605,6 +605,10 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
         # 사업부·재경 확인 행은 수정안이 아니라 확인 사항이다 — 같은 조의 수정안에 흡수되면 사라진다.
         if bool(cr.get("business_check")):
             continue
+        # 원문 사실로 세운 거래 package·지정 조항 답은 같은 조의 AI 논점 아래로 들어가지 않는다 — 실측(브랜디드
+        # 제13조): AI 의 "손해배상 등" 이 조 대표가 되어 책임한도 비대칭 package 가 기록 없이 지워졌다.
+        if bool(cr.get("is_transaction_package")) or str(cr.get("clause_id") or "").startswith("uf_"):
+            continue
         an = str(cr.get("article_number") or "").strip()
         if not an:
             continue
@@ -5804,6 +5808,39 @@ def build_clause_level_result(
         ))
     except Exception as exc:  # noqa: BLE001 - 보조 점검 실패가 검토 전체를 막지 않게
         logger.warning("client indemnity check failed: %s", exc)
+    # [사용자 지정 쟁점 + 책임·제재 균형] (2026-10-07 긴급 보정 1·5·6·8·11·12항)
+    # 지정 조항은 mandatory target 으로 고정하고, 비대칭 책임 한도·제재 중첩·이용권 공백은 계약유형과
+    # 무관한 법률효과 점검으로 원문에서 직접 만든다(법무 핵심 finding — 재경 확인으로 보내지 않는다).
+    _focus_targets: list[Any] = []
+    try:
+        from runtime.review.answer_intent_review import answer_lines as _answer_lines
+        from runtime.review.remedy_balance_checks import (
+            find_asymmetric_liability as _find_asym,
+            find_content_use_gap as _find_content_use,
+            find_remedy_stacking as _find_stacking,
+        )
+        from runtime.review.senior_counsel_audit import _our_labels as _scl_our_labels2
+        from runtime.review.user_focus_review import extract_targets as _extract_focus, focus_findings as _focus_findings
+
+        _rf_text = str(review_focus or "") if isinstance(review_focus, str) else ""
+        _our_lbls = _scl_our_labels2(_entity_resolution)
+        _their_lbls = [str(p.label) for p in _entity_resolution.parties
+                       if p.label and p.label not in _our_lbls and not p.is_our_company]
+        _focus_targets = _extract_focus(_rf_text)
+        _plan_confirmed = any(
+            re.search(r"(?:게시|광고소재|활용|사용)[^?]{0,40}계획", q) and re.search(r"^\s*(?:네|예|있)", a)
+            for q, a in _answer_lines(_rf_text)
+        )
+        clause_results.extend(_focus_findings(
+            _focus_targets, clauses=clauses, our=_our_lbls, them=_their_lbls, text=str(text or ""),
+            review_focus=_rf_text,
+        ))
+        clause_results.extend(_find_asym(clauses=clauses, our=_our_lbls, them=_their_lbls))
+        clause_results.extend(_find_stacking(clauses=clauses, our=_our_lbls, them=_their_lbls, text=str(text or "")))
+        clause_results.extend(_find_content_use(clauses=clauses, our=_our_lbls, them=_their_lbls,
+                                                plan_confirmed=_plan_confirmed))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("user focus / remedy balance checks failed: %s", exc)
 
     # ── [리스크 사슬 검토] (2026-09-10 지시 항목 1) ────────────────────────────
     # 조항별 나열이 아니라 거래위험을 사슬로 연결해 본다. 특히 선이행 구조는
@@ -7207,6 +7244,14 @@ def build_clause_level_result(
         rule_role="" if _employee_nda_locked else str(getattr(party, "our_role", "") or ""),
         declared_type_code="",
     )
+    # 2026-10-07 지시 2항 — 거래구조 판정기(건설·온라인판매·연구·광고)가 유형을 세웠으면 canonical identity 도
+    # 그 유형을 말해야 한다. 실측: 브랜디드 콘텐츠 계약이 legal_state "광고 콘텐츠 제작", identity "물품공급·설치".
+    if (_contract_type_locked_reason or _ad_model.canonical_contract_type) and _canonical_state.contract_type \
+            and _canonical_identity.get("contract_type_code") != _canonical_state.contract_type:
+        _canonical_identity["rule_contract_type_code"] = _canonical_identity.get("contract_type_code")
+        _canonical_identity["contract_type_code"] = _canonical_state.contract_type
+        _canonical_identity["contract_type_label"] = _canonical_state.contract_type_label
+        _canonical_identity["source"] = "transaction_model"
 
     # ── [핵심 상업조건 확정 여부] (2026-09-09 지시 항목 9) ──────────────────
     # 금액·기간·지급시기가 비어 있으면 조항 문구보다 그것이 먼저다. 계약금액이
@@ -7668,6 +7713,12 @@ def build_clause_level_result(
         meta["review_status"] = str(_canonical_identity["review_status"])
         meta["review_status_detail"] = str(_canonical_identity.get("detail") or "")
     meta["contract_type_resolution"] = _type_resolution.to_dict()
+    if _canonical_identity.get("source") == "transaction_model":
+        # 낱말 채점 결과는 기록으로만 남기고, 화면·보고서가 읽는 유형은 canonical 값 하나다(지시 2항).
+        meta["contract_type_resolution"]["rule_contract_type_code"] = meta["contract_type_resolution"]["contract_type_code"]
+        meta["contract_type_resolution"]["contract_type_code"] = _canonical_identity["contract_type_code"]
+        meta["contract_type_resolution"]["contract_type_label"] = _canonical_identity["contract_type_label"]
+        meta["contract_type_resolution"]["superseded_by"] = "transaction_model"
     # ── [Contract Legal Map 완결성] (항목 1) ────────────────────────────────
     # "이 map 이 확정되지 않으면 조항별 검토를 시작하지 마세요." Map 은 이미
     # 생성되고 있었지만 게이트가 아니어서, 절반이 비어도 finding 이 그대로
@@ -8919,6 +8970,9 @@ def build_clause_level_result(
     # 불리한 수정안, 관할 boilerplate·선급금 보증 과대평가, HIGH 문턱, 같은 주제
     # package 통합, 건수 상한을 한 번에 본다.
     from runtime.review.senior_counsel_audit import run_senior_counsel_audit as _senior_audit
+    if _focus_targets:
+        from runtime.review.user_focus_review import tag_focus as _tag_focus
+        _tag_focus(_focus_targets, clause_results)
     try:
         meta["senior_counsel_audit"] = _senior_audit(
             clause_results,
@@ -8954,6 +9008,70 @@ def build_clause_level_result(
             meta["answer_intent_reviews"] = [rv.to_coverage_row() for rv in _answer_reviews]
     except Exception as exc:  # noqa: BLE001 - 답변 정리 실패가 검토를 막지 않는다
         logger.warning("answer intent review failed: %s", exc)
+    # ── [사용자 지정 쟁점 유실 금지 · 위험도 단일 상태] (2026-10-07 긴급 보정 1·2·4항) ─────────
+    # 지정 조항마다 최종 판단·위험도·수정 필요 여부·조항번호·수정문안을 확인하고, 요청 답변을 그 결과로
+    # 다시 쓴다(A. 사용자 요청 → B. 추가 핵심리스크 → C. 참고). 위험도는 clause_results 하나가 기준이다.
+    if _focus_targets:
+        from runtime.review.user_focus_review import (
+            STATUS_FOCUS_DROPPED as _ST_DROPPED,
+            STATUS_RISK_CONFLICT as _ST_CONFLICT,
+            risk_state_conflicts as _risk_conflicts,
+            verify_focus as _verify_focus,
+        )
+        _focus_results = _verify_focus(_focus_targets, clause_results, clauses)
+        _cov_now = [r for r in (meta.get("user_review_coverage") or []) if isinstance(r, dict)]
+
+        def _key(s: Any) -> str:
+            return re.sub(r"[\s①-⑳()\-•]", "", str(s or ""))[:20]
+
+        # 상거래 요청 분석기(commercial_request_review)가 주제로 이미 정밀하게 답한 요청은 그 답을 쓴다 —
+        # 요청의 조 번호가 초안 기준이라 이 문서의 조와 다를 수 있다(와이어드 법무팀 수정본).
+        _precise = [r for r in _cov_now if r.get("source") == "user_request"]
+        for _i, _fr in enumerate(_focus_results):
+            _row = next((r for r in _precise if _key(_fr.target.request) and (
+                _key(_fr.target.request) in _key(r.get("original_user_text"))
+                or _key(r.get("original_user_text")) in _key(_fr.target.request))), None)
+            if _row is None:
+                continue
+            _fr.verdict = str(_row.get("review_status") or "")
+            _fr.needs_revision = bool(_row.get("needs_revision"))
+            _fr.tier = "MEDIUM" if _fr.needs_revision else "LOW"
+            _fr.clause_paths = [str(p) for p in _row.get("relevant_clause_paths") or []] or _fr.clause_paths
+            _fr.conclusion = str(_row.get("conclusion") or "")
+            _fr.proposed = [str(p) for p in _row.get("proposed_clauses") or []] or ["해당 없음(현행 유지)"]
+            _fr.missing = [m for m in ("최종 판단", "조항번호") if
+                           (m == "최종 판단" and not _fr.verdict) or (m == "조항번호" and not _fr.clause_paths)]
+            _fr.answered_by_row = True  # type: ignore[attr-defined]
+        _own = [r for r in _focus_results if not getattr(r, "answered_by_row", False)]
+        _req_keys = [_key(r.target.request) for r in _own]
+        _cov_rest = [
+            r for r in _cov_now
+            if not any(k and k in _key(r.get("original_user_text")) for k in _req_keys)
+        ]
+        meta["user_review_coverage"] = [r.to_coverage_row() for r in _own] + _cov_rest
+        _by_path = {r.target.path: r for r in _focus_results}
+        for _mt in meta.get("mandatory_review_targets") or []:
+            _fr = _by_path.get(str(_mt.get("display_path") or ""))
+            if _fr is not None and _fr.tier:
+                # 필수 검토항목의 위험도는 최종 finding 의 위험도다 — 두 값을 따로 두면 화면마다 달라진다.
+                _mt["severity"] = _fr.tier
+                _mt["final_tier"] = _fr.tier
+                _mt["matched_clause_ids"] = list(_fr.finding_ids)
+        meta["user_focus_review"] = [
+            {"target": r.target.path, "verdict": r.verdict, "tier": r.tier, "needs_revision": r.needs_revision,
+             "clause_paths": r.clause_paths, "finding_ids": r.finding_ids, "missing": r.missing}
+            for r in _focus_results
+        ]
+        _dropped = [f"{r.target.path}({', '.join(r.missing)} 없음)" for r in _focus_results if r.missing]
+        _conflicts = _risk_conflicts(clause_results, meta.get("final_findings"),
+                                     meta.get("user_review_coverage"), meta.get("mandatory_review_targets"))
+        meta["risk_state_conflicts"] = _conflicts
+        if _dropped:
+            meta["review_status"] = _ST_DROPPED
+            meta["review_status_detail"] = "사용자 지정 검토사항 누락: " + "; ".join(_dropped)
+        elif _conflicts:
+            meta["review_status"] = _ST_CONFLICT
+            meta["review_status_detail"] = "같은 쟁점의 위험도가 화면마다 다름: " + "; ".join(_conflicts[:4])
     # 감사가 내보내지 않기로 한 finding 만 가리키는 실패 상태는 더 이상 성립하지 않는다 —
     # 실측: 제거된 "이행유보권" 하나 때문에 INCOMPLETE_REWRITE 가 대표 상태로 남았다.
     _status_now = str(meta.get("review_status") or "")

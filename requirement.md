@@ -588,12 +588,34 @@ KEEP 판단이 전부 방향에 기대므로 두 결함을 함께 고쳤다.
 - 접속·부사 어절을 주어 후보에서 제외(`_RX_NOT_A_SUBJECT`). `"갑" 또는 사용자의…`
   에서 "또"(또는)가 문장의 첫 주어로 잡혔다.
 
+## [User Focus · Remedy Balance] 사용자 지정 쟁점 보존과 책임·제재 균형 (2026-10-07)
+
+- `user_focus_review.py` — `extract_targets`(요청문의 조·항·호 인용 → target), `focus_findings`(지정 조항 전용 판단:
+  공급 자료 권리보증 `uf_supplied_material_warranty`, 비독점 조항 `uf_non_exclusivity`), `tag_focus`(지정 조항
+  finding 은 `is_user_focus` → triage 보호), `verify_focus`(감사 후 최종 판단·위험도·수정 필요·조항번호·수정문안 확인
+  → 없으면 `REVIEW_FAILED_USER_FOCUS_DROPPED`), `risk_state_conflicts`(→ `REVIEW_FAILED_RISK_STATE_CONFLICT`).
+  필수 검토항목(`mandatory_review_targets`)의 severity 는 최종 finding 등급으로 덮어쓴다. 요청 답변은 지정 조항 행이
+  맨 앞(A). 상거래 요청 분석기(`source=user_request`)가 이미 답한 요청은 그 답을 쓴다(초안 조 번호 문제).
+- `remedy_balance_checks.py` — `find_asymmetric_liability`(LEGAL_RISK_ASYMMETRIC_LIABILITY), `find_remedy_stacking`
+  (REMEDY_STACKING_RISK, `semantic_checks` 8항목, 다른 조 이중 위약벌 연계), `find_content_use_gap`
+  (LEGAL_RISK_CONTENT_USE_RIGHTS, 사전질문 활용계획 확인 시 HIGH). 모두 `legal_core` — 재경 확인 금지.
+- `senior_counsel_audit`: 인용 원문이 다른 조면 재매핑(`_quoted_article`), uf_* 는 같은 위치 지적의 대표, 거래 package
+  흡수 시 AI 논점의 위험 서술(rewrite_reason·our_company_risk)도 본다, 원문에 이미 있는 "행정처분 면책" 문언으로
+  수정안을 지우지 않는다, 결과물 공개 게시가 목적인 계약의 포트폴리오 공개금지 요구 DROP.
+- `issue_triage`: 배상 상한 → 재경 규칙은 비대칭(`_RX_ASYMMETRY`)·`legal_core` 이면 적용하지 않는다.
+- `entity_resolution`: 서두 약칭은 앞 약칭 뒤 구간에서만 이름을 찾는다, 대괄호 이름 인식, 문장 속 이름 없는 정의어 제외
+  (표 형식 빈칸 당사자는 유지). `_our_labels` 는 같은 법인의 다른 약칭(광고주)을 포함한다.
+- `canonical_identity`·`contract_type_resolution` 기록은 거래구조 판정기가 정한 유형으로 맞춘다(낱말 채점은 `rule_contract_type_code` 로 보존).
+- `answer_intent_review`: 하도급 사전동의 조항이 있으면 적정, 연구계약 전용 문구 제거, 결과물 활용 계획 답변 연결.
+- Golden: `test_branded_content_golden.py`.
+
 ---
 
 ## [Changelog]
 
 | 날짜 | 변경 내용 |
 |---|---|
+| 2026-10-07 | 사용자 지정 쟁점 hard gate(user_focus_review), 책임·제재 균형 점검(remedy_balance_checks), 인용 원문 재매핑, 비대칭 한도 법무 분류, canonical identity 통일, 대괄호 당사자 인식, 하도급 답변 오류 수정. Golden test_branded_content_golden.py |
 | 2026-10-06 | 당사자 법인명 정정 finding 위험도 MEDIUM → HIGH(MUST FIX). 테스트 기대값 갱신 |
 | 2026-10-06 | 범용 보정: `research_model`(산학협력 연구용역 유형 잠금 + 성과물·대금/연구성과 package), `client_indemnity_check`(우리 일방 무제한 방어·면책 HIGH), `answer_intent_review`(사전질문 답변 속 의도 직접답변), `user_review_request.separate_context`(배경·일반 의뢰 제외), 파서 `_is_quantity_blank`("(15)일" 호 오인), 표시광고법 금지문장 제외, 라이선스 원형에 허락 문언 필수, Materiality 4/5, 거래 package 흡수, 우리 해지권 축소 수정안 REJECT, 용역 IP 템플릿 주입 제외. Golden `test_snu_research_golden.py` |
 | 2026-09-29 | 당사자 법인명 정정(entity_name_correction): 알로소→주식회사 시디즈, 슬로우·데스커→주식회사 일룸(데스커 GroupEntity 를 일룸 브랜드로 통합), 퍼시스그룹·FURSYS GROUP→실제 계약 주체 법인(기본 주식회사 퍼시스). 전문·조항·서명란 전부, 조사 보정, 타 수정문안 정규화, AI 프롬프트 반영. 게이트 오탐 3종(제1~3조 보호·issue_title 병합·관할 KEEP) 대응 |
