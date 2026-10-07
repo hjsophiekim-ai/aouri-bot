@@ -29,7 +29,7 @@ from pathlib import Path
 from runtime.review.clause_extraction import extract_clauses
 from runtime.review.entity_resolution import resolve_entities
 from runtime.review.user_focus_review import (
-    FocusTarget, extract_targets, risk_state_conflicts, verify_focus,
+    FocusTarget, extract_targets, request_implementation, risk_state_conflicts, verify_focus,
 )
 from runtime.review.user_review_request import separate_context
 
@@ -69,6 +69,24 @@ class FocusGateUnitTest(unittest.TestCase):
                            [], extract_clauses(TEXT)[0])
         self.assertIn("최종 판단", res[0].missing)
         self.assertIn("위험도", res[0].missing)
+
+    def test_problem_without_counterparty_remedy_fails(self) -> None:
+        """갑 위약벌만 고치고 을 귀책 조치를 문구에 안 넣으면 NOT_IMPLEMENTED."""
+        t = FocusTarget(path="제14조", article="14",
+                        request="제14조 광고주의 귀책사유 및 조치만 있으며 을의 귀책사유에 대한 조치가 없는 점")
+        cr = {"clause_id": "X", "risk_tier": "HIGH", "article_number": "14", "paragraph_number": "3",
+              "display_path": "제14조 제3항", "original_text": "③ 위약벌로 지급한다.",
+              "suggested_rewrite": "③ 손해배상액의 예정으로 지급한다.",
+              "rewrite_reason": "“을” 쪽 귀책에 대한 우리 회사의 해지·환급 조치가 없음."}
+        rows = request_implementation([t], [cr], our=["갑", "광고주"], them=["을"])
+        self.assertEqual(rows[0]["intents"], ["counterparty_fault_remedy"])
+        self.assertEqual(len(rows[0]["missing"]), 4)
+        self.assertTrue(rows[1]["missing"])  # 문제점 기재 ↔ 문구 불일치도 따로 잡는다
+        # 원문을 그대로 앞에 둔 수정안은 덧붙인 부분만 센다.
+        w = FocusTarget(path="제6조 제2항", article="6", paragraph="2", request="제6조 제2항 갑이 을을 면책하는 점")
+        same = {"clause_id": "Y", "risk_tier": "MEDIUM", "article_number": "6", "paragraph_number": "2",
+                "original_text": "② 갑의 귀책사유로 면책한다.", "suggested_rewrite": "② 갑의 귀책사유로 면책한다. 추가 문구."}
+        self.assertTrue(request_implementation([w], [same], our=["갑"], them=["을"])[0]["missing"])
 
     def test_risk_state_conflict_is_detected(self) -> None:
         crs = [{"clause_id": "X", "risk_tier": "LOW"}]
@@ -122,8 +140,39 @@ class PipelineGoldenTest(unittest.TestCase):
         self.assertIn("객관적으로", linked["제14조 제1항 3호"])
         self.assertNotIn("즉시", linked["제14조 제2항"])
         self.assertIn("제3항에 따른 금액으로 한정", linked["제14조 제4항"])
-        recip = next(t for p, t in linked.items() if "⑤" in p)
-        self.assertIn("기 지급받은 제작료 전액을 반환", recip)
+
+    def test_article_14_counterparty_fault_is_drafted(self) -> None:
+        """보정(대칭 완결) — 을 귀책사유 + 갑의 시정요구·해제·해지 + 미지급·환급 + 손해배상이 실제 항으로."""
+        f = self.by["lr_remedy_stacking"]
+        linked = {e["display_path"]: e["text"] for e in f["package_linked_edits"]}
+        fault = next(t for p, t in linked.items() if p.startswith("제14조 ⑤"))
+        remedy = next(t for p, t in linked.items() if p.startswith("제14조 ⑥"))
+        effect = next(t for p, t in linked.items() if p.startswith("제14조 ⑦"))
+        self.assertIn("“을”의 귀책사유로 본다", fault)
+        for must in ("정당한 사유 없이 약정한 게시일까지", "게시를 거부", "제작·게시·유지가 불가능",
+                     "게시 채널의 정책", "제3자의 저작권·초상권", "동의 없이 “콘텐츠”를 삭제하거나 비공개",
+                     "중대한 의무를 위반"):
+            self.assertIn(must, fault)
+        # 을이 계약상 스스로 내릴 수 있는 경우는 무단 삭제가 아니다.
+        self.assertIn("제4조 제3항 단서, 제4조 제4항 및 본 조 제4항에 따른 경우는 제외", fault)
+        self.assertIn("“갑”이 제공한 자료로 인한 경우는 제외", fault)
+        self.assertIn("상당한 기간을 정하여 시정을 요구", remedy)
+        self.assertIn("최고 없이 해제 또는 해지할 수 있다", remedy)
+        self.assertIn("미이행 부분에 해당하는 제작료의 지급 의무를 면하고", effect)
+        self.assertIn("기 지급받은 제작료 중 미이행 부분 상당액을 반환", effect)
+        self.assertIn("손해를 그 귀책 범위 내에서 배상", effect)
+        # 제13조 제3항 반환과 중복하지 않고 연결, 위약벌 신설 금지.
+        self.assertIn("제13조 제3항에 해당하는 경우의 반환은 같은 항에 따른다", effect)
+        self.assertNotIn("위약벌", fault + remedy + effect)
+        self.assertNotIn("제13조 제3항", linked)
+
+    def test_user_request_implemented(self) -> None:
+        rows = {r["target"]: r for r in self.meta["user_request_implementation"]}
+        self.assertEqual(rows["제14조"]["intents"], ["counterparty_fault_remedy"])
+        self.assertEqual(rows["제6조 제2항"]["intents"], ["our_indemnity_scope"])
+        self.assertEqual(rows["제7조 제3항"]["intents"], ["competitor_restriction"])
+        self.assertFalse([r for r in rows.values() if r["missing"]])
+        self.assertNotEqual(self.meta.get("review_status"), "REVIEW_FAILED_USER_REQUEST_NOT_IMPLEMENTED")
 
     def test_asymmetric_liability_is_legal_core(self) -> None:
         f = self.by["lr_asymmetric_liability"]

@@ -9066,9 +9066,29 @@ def build_clause_level_result(
         _conflicts = _risk_conflicts(clause_results, meta.get("final_findings"),
                                      meta.get("user_review_coverage"), meta.get("mandatory_review_targets"))
         meta["risk_state_conflicts"] = _conflicts
+        # 요청 취지(대칭 구조·귀책범위 한정·경쟁 제한 범위)가 수정문구에 실제로 들어갔는가 — 문제만 적고
+        # 문구에 빠지면 출력하지 않는다(2026-10-07 보정 5·7항).
+        from runtime.review.user_focus_review import (
+            STATUS_NOT_IMPLEMENTED as _ST_NOT_IMPL,
+            request_implementation as _req_impl,
+        )
+        try:
+            _impl = _req_impl(_focus_targets, clause_results, our=list(_our_lbls), them=list(_their_lbls))
+        except NameError:  # 라벨 계산이 앞 단계에서 실패한 경우
+            _impl = []
+        meta["user_request_implementation"] = _impl
+        _not_impl = [f"{r['target']}({', '.join(r['missing'])} 없음)" for r in _impl if r["missing"]]
+        _impl_by = {r["target"]: r for r in _impl}
+        for _row in meta["user_review_coverage"]:
+            _ir = _impl_by.get(str(_row.get("normalized_issue") or "").replace(" 지정 검토", ""))
+            if _ir is not None and _row.get("source") == "user_focus_target":
+                _row["implementation_check"] = {"intents": _ir["intents"], "missing": _ir["missing"]}
         if _dropped:
             meta["review_status"] = _ST_DROPPED
             meta["review_status_detail"] = "사용자 지정 검토사항 누락: " + "; ".join(_dropped)
+        elif _not_impl:
+            meta["review_status"] = _ST_NOT_IMPL
+            meta["review_status_detail"] = "사용자 요청이 수정문구에 반영되지 않음: " + "; ".join(_not_impl)
         elif _conflicts:
             meta["review_status"] = _ST_CONFLICT
             meta["review_status_detail"] = "같은 쟁점의 위험도가 화면마다 다름: " + "; ".join(_conflicts[:4])

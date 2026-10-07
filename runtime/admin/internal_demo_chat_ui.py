@@ -1319,6 +1319,18 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         body.appendChild(right);
         card.appendChild(body);
 
+        // 연계 수정 문구 — 같은 쟁점으로 함께 고치거나 추가할 다른 항의 완성 문구(조항 번호만 보여주지 않는다).
+        const linked = (Array.isArray(it.package_linked_edits) ? it.package_linked_edits : [])
+          .filter(e => e && String(e.text || '').trim());
+        if (linked.length) {
+          const lk = document.createElement('div');
+          lk.className = 'clauseBox';
+          lk.innerHTML = '<div class="label">함께 수정·추가할 문구</div>' + linked.map(e =>
+            `<div style="margin-top:6px;"><b>${escapeHtml(String(e.display_path || ''))}</b>`
+            + `<div class="guidance" style="white-space:pre-wrap;">${escapeHtml(String(e.text || ''))}</div></div>`).join('');
+          card.appendChild(lk);
+        }
+
         const reason = document.createElement('div');
         reason.className = 'lawList';
         const rr = (it.rewrite_reason || '');

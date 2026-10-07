@@ -22,6 +22,7 @@ from runtime.review.user_review_request import ANSWER_BLOCK_MARKER
 
 STATUS_FOCUS_DROPPED = "REVIEW_FAILED_USER_FOCUS_DROPPED"
 STATUS_RISK_CONFLICT = "REVIEW_FAILED_RISK_STATE_CONFLICT"
+STATUS_NOT_IMPLEMENTED = "REVIEW_FAILED_USER_REQUEST_NOT_IMPLEMENTED"
 
 _RX_CITE = re.compile(r"제\s*(\d+)\s*조(?:\s*의\s*\d+)?(?:\s*제?\s*(\d+)\s*항)?(?:\s*제?\s*(\d+)\s*호)?")
 _Q = "[“”\"]"
@@ -358,6 +359,99 @@ def verify_focus(targets: list[FocusTarget], clause_results: list[dict[str, Any]
     return results
 
 
+# ── 요청 취지 ↔ 수정문구 일치 (2026-10-07 보정: 대칭적 권리·의무 완결) ──────────────────────
+#
+# 실측: 제14조 "광고주 귀책 조치만 있고 을 귀책 조치가 없다" 요청에 대해 문제점은 인식했으나 수정문구에는 갑의
+# 위약벌·손해배상 조정만 들어가고 을의 귀책사유·갑의 해지·환급·손해배상은 없었다. "검토했다" 가 아니라
+# 요청한 불균형이 **수정문구에서** 해소됐는지 확인한다 — 원문을 그대로 옮긴 부분은 충족으로 세지 않는다.
+
+def _req(them_rx: str, us_rx: str) -> dict[str, list[tuple[str, str]]]:
+    return {
+        # 상대방 귀책에 대한 우리의 조치가 없다 → 상대방 귀책사유 + 우리 해지권 + 미지급·환급 + 손해배상.
+        "counterparty_fault_remedy": [
+            ("상대방 귀책사유", them_rx + r"의\s*귀책사유로\s*(?:본다|한다)|" + them_rx + r"[^.]{0,40}귀책사유로"),
+            ("우리 회사 해제·해지권", us_rx + r"(?:은|는)[^.]{0,120}(?:해제|해지)할\s*수\s*있"),
+            ("미이행 대금 면제 또는 기지급금 반환", us_rx + r"(?:은|는)[^.]{0,60}지급\s*의무를\s*면|"
+             + them_rx + r"(?:은|는)[^.]{0,80}반환"),
+            ("손해배상", r"손해를[^.]{0,30}배상"),
+        ],
+        # 우리 회사의 면책·책임 부담 → 우리 귀책범위로 제한.
+        "our_indemnity_scope": [
+            ("우리 회사 귀책범위 한정", r"귀책사유|귀책\s*범위|그\s*범위에서|책임을\s*지지\s*아니한다"),
+        ],
+        # 상대방의 경쟁사 거래 허용 → 기간·채널·제품군으로 좁힌 제한.
+        "competitor_restriction": [
+            ("제한 기간", r"\d+\s*(?:개월|년)|기간\s*동안"),
+            ("제한 채널", r"채널|매체|플랫폼"),
+            ("제한 제품군", r"제품군|동일[^.]{0,10}제품|경쟁\s*제품"),
+        ],
+    }
+
+
+def _intents(request: str, them: list[str], us: list[str]) -> list[str]:
+    r = _flat(request)
+    th = "(?:" + "|".join(re.escape(x) for x in them + ["상대방"]) + ")"
+    out: list[str] = []
+    if re.search(th + r"[”\"']?\s*의?\s*귀책[^.]{0,40}(?:없|부재|미비|누락)", r) or re.search(
+            r"(?:귀책|책임)[^.]{0,30}(?:만\s*있|일방)[^.]{0,60}" + th + r"[^.]{0,20}(?:없|부재)", r):
+        out.append("counterparty_fault_remedy")
+    if re.search(r"면책|비용과\s*책임", r):
+        out.append("our_indemnity_scope")
+    if re.search(r"경쟁사|경쟁\s*업체|유사\s*(?:계약|서비스)|독점|경업", r):
+        out.append("competitor_restriction")
+    return out
+
+
+def _added_texts(cr: dict[str, Any]) -> list[str]:
+    """finding 이 실제로 바꾸거나 더하는 문구 — 원문을 앞에 그대로 둔 수정안은 덧붙인 부분만."""
+    out: list[str] = []
+    sr, orig = _flat(cr.get("suggested_rewrite")), _flat(cr.get("original_text"))
+    if sr:
+        out.append(sr[len(orig):] if orig and sr.startswith(orig) else sr)
+    for e in cr.get("package_linked_edits") or []:
+        if isinstance(e, dict) and str(e.get("text") or "").strip():
+            out.append(_flat(e.get("text")))
+    return [x for x in out if x.strip()]
+
+
+_RX_PROBLEM_NO_REMEDY = re.compile(r"귀책[^.]{0,60}(?:조치|해지|환급|구제)[^.]{0,20}(?:없|부재)")
+
+
+def request_implementation(
+    targets: list[FocusTarget], clause_results: list[dict[str, Any]], *, our: list[str], them: list[str],
+) -> list[dict[str, Any]]:
+    """지정 요청마다 요청 취지가 수정문구에 실제로 들어갔는가. missing 이 있으면 출력 금지."""
+    them_s, our_s = _short(them), _short(our)
+    if not them_s or not our_s:
+        return []
+    them_rx = "(?:" + "|".join(_lab(x) for x in them_s) + ")"
+    us_rx = "(?:" + "|".join(_lab(x) for x in our_s) + ")"
+    reqs = _req(them_rx, us_rx)
+    live = _live(clause_results)
+    rows: list[dict[str, Any]] = []
+    for t in targets:
+        intents = _intents(t.request, them_s, our_s)
+        if not intents:
+            continue
+        hits = [cr for cr in live if _covers(t, cr)[0]]
+        added = [x for cr in hits for x in _added_texts(cr)]
+        missing = [f"{lbl}" for it in intents for lbl, rx in reqs[it] if not any(re.search(rx, x) for x in added)]
+        rows.append({"target": t.path, "request": t.request, "intents": intents,
+                     "finding_ids": [str(cr.get("clause_id")) for cr in hits], "missing": missing})
+    # 문제점에 "상대방 귀책 조치 없음" 을 적은 finding 은 수정문구에도 그 조치가 있어야 한다.
+    for cr in live:
+        prob = str(cr.get("rewrite_reason") or cr.get("problem") or "").split(" [연계 수정]")[0]
+        if not _RX_PROBLEM_NO_REMEDY.search(prob):
+            continue
+        added = _added_texts(cr)
+        missing = [lbl for lbl, rx in reqs["counterparty_fault_remedy"] if not any(re.search(rx, x) for x in added)]
+        if missing:
+            rows.append({"target": str(cr.get("display_path") or ""), "request": "(문제점 기재)",
+                         "intents": ["counterparty_fault_remedy"], "finding_ids": [str(cr.get("clause_id"))],
+                         "missing": missing})
+    return rows
+
+
 def risk_state_conflicts(
     clause_results: list[dict[str, Any]], final_findings: dict[str, Any] | None,
     coverage: list[dict[str, Any]] | None, mandatory: list[dict[str, Any]] | None,
@@ -389,6 +483,7 @@ def risk_state_conflicts(
 
 
 __all__ = [
-    "FocusResult", "FocusTarget", "STATUS_FOCUS_DROPPED", "STATUS_RISK_CONFLICT",
-    "extract_targets", "focus_findings", "risk_state_conflicts", "tag_focus", "verify_focus",
+    "FocusResult", "FocusTarget", "STATUS_FOCUS_DROPPED", "STATUS_NOT_IMPLEMENTED", "STATUS_RISK_CONFLICT",
+    "extract_targets", "focus_findings", "request_implementation", "risk_state_conflicts", "tag_focus",
+    "verify_focus",
 ]

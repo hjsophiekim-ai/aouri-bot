@@ -141,6 +141,9 @@ def _issue_block(pdf: FPDF, issue: ReviewIssue, *, index: int | None = None) -> 
         _body(pdf, issue.legal_business_reason)
     _label(pdf, "수정문안")
     _body(pdf, issue.proposed_revision)
+    for e in getattr(issue, "linked_edits", None) or []:
+        _label(pdf, f"함께 수정·추가할 문구 [{e.get('display_path')}]")
+        _body(pdf, str(e.get("text") or ""))
     if issue.negotiation_position:
         _label(pdf, "협상 포지션")
         _body(pdf, issue.negotiation_position)

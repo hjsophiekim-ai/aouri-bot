@@ -20,6 +20,15 @@ from runtime.review.hallucination_guard import check_revision_text
 
 # ─── ReviewIssue ──────────────────────────────────────────────────────────────
 
+def linked_edit_rows(cr: dict[str, Any]) -> list[dict[str, str]]:
+    """finding 의 package_linked_edits 를 보고서용 {display_path, text} 로 — 문구가 빈 항목은 뺀다."""
+    out: list[dict[str, str]] = []
+    for e in cr.get("package_linked_edits") or cr.get("linked_edits") or []:
+        if isinstance(e, dict) and str(e.get("text") or "").strip():
+            out.append({"display_path": str(e.get("display_path") or "").strip(), "text": str(e.get("text")).strip()})
+    return out[:10]
+
+
 @dataclass
 class ReviewIssue:
     """Single structured review finding with all required fields."""
@@ -91,6 +100,9 @@ class ReviewIssue:
     # 법조문 grounding(2026-10-01 지시) — 관련 계약조항·조문·법률상 이유·실무상 이유.
     # 여기 없으면 UI/DOCX/PDF 공통 변환에서 사라진다(redline_instruction 과 같은 이유).
     legal_grounding: dict[str, Any] | None = None
+    # 연계 수정 문구(package_linked_edits) — 같은 finding 이 함께 고치거나 추가하는 다른 항의 **완성 문구**.
+    # 여기 없으면 보고서에 조항 번호만 남고 문구가 빠진다(2026-10-07 실측: 제14조 을 귀책 ⑤~⑦).
+    linked_edits: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def display_bucket(self) -> str:
@@ -137,6 +149,7 @@ class ReviewIssue:
             "negotiation_feasibility": self.negotiation_feasibility,
             "redline_instruction": self.redline_instruction,
             "legal_grounding": self.legal_grounding,
+            "linked_edits": list(self.linked_edits),
         }
 
 
@@ -404,6 +417,7 @@ def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
                     negotiation_feasibility=issue.negotiation_feasibility or existing.negotiation_feasibility,
                     redline_instruction=issue.redline_instruction or existing.redline_instruction,
                     legal_grounding=issue.legal_grounding or existing.legal_grounding,
+                    linked_edits=issue.linked_edits or existing.linked_edits,
                 )
             else:
                 # Add new clause_id to existing's related list
@@ -628,6 +642,7 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             negotiation_feasibility=str(cr.get("negotiation_feasibility") or "").strip(),
             redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
             legal_grounding=cr.get("legal_grounding") if isinstance(cr.get("legal_grounding"), dict) else None,
+            linked_edits=linked_edit_rows(cr),
         ))
     return out
 

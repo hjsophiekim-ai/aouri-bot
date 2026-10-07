@@ -150,6 +150,76 @@ def _by_article(clauses: list[Any] | None) -> dict[str, list[Any]]:
     return out
 
 
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮"
+
+
+def _reciprocal_fault_edits(
+    *, art: str, cs: list[Any], clauses: list[Any] | None, th: str, th_rx: str, us: str, brand: str,
+    deliverable: str, fee: str, body: str, refund_c: Any,
+) -> list[dict[str, str]]:
+    """상대방 귀책 → 우리 회사의 시정요구·해제·해지 → 미이행 대금 면제·기지급금 반환 → 손해배상 (2026-10-07 보정).
+
+    사용자 요청 "갑 귀책 조치만 있고 을 귀책 조치가 없다" 에는 갑 책임을 줄이는 것으로 답이 끝나지 않는다.
+    같은 조에 상대방 귀책사유(호 목록)·우리 구제수단·종료 효과를 실제 항으로 둔다. 위약벌은 새로 만들지 않는다
+    (실손해 회복 중심). 이미 다른 조에 있는 반환 규정은 중복하지 않고 연결한다.
+    """
+    pars = [int(_attr(c, "paragraph_number")) for c in cs if _attr(c, "paragraph_number").isdigit()]
+    n = max(pars, default=0) + 1
+    if n + 2 > len(_CIRCLED):
+        return []
+    c1, c2, c3 = _CIRCLED[n - 1], _CIRCLED[n], _CIRCLED[n + 1]
+    posting = "게시" in body
+    person = "소속 크리에이터" if "크리에이터" in body else "임직원"
+    th_poss = f"{th} 또는 {th} {person}"
+    channel = "게시 채널의 정책" if re.search(r"게시\s*채널|게시채널", body) else "관련 플랫폼의 정책"
+    supplied = f"({_p(us, '이', '가')} 제공한 자료로 인한 경우는 제외한다)" if "제공한 자료" in body else ""
+    # 상대방이 계약상 스스로 내릴 수 있는 경우(기간 경과 후 비공개, 대금 미지급 시 삭제, 우리 귀책 시 삭제)는 제외한다.
+    allowed = [c for c in clauses or [] if re.search(
+        th_rx + r"(?:은|는)[^.]{0,80}(?:삭제|비공개)[^.]{0,20}(?:할\s*수\s*있|전환할\s*수\s*있)", _flat(_attr(c, "text")))]
+    allowed_paths = []
+    for c in allowed:
+        p = _attr(c, "display_path")
+        if _attr(c, "article_number") == art and _attr(c, "paragraph_number"):
+            p = f"본 조 제{_attr(c, 'paragraph_number')}항"
+        elif re.search(r"단[,\s][^.]{0,40}?" + th_rx + r"(?:은|는)[^.]{0,80}비공개", _flat(_attr(c, "text"))):
+            p += " 단서"
+        if p and p not in allowed_paths:
+            allowed_paths.append(p)
+    joined = (", ".join(allowed_paths[:-1]) + " 및 " + allowed_paths[-1]) if len(allowed_paths) > 1 else "".join(allowed_paths)
+    excl = f"({joined}에 따른 경우는 제외한다)" if joined else ""
+    items = [
+        (f"{_p(th, '이', '가')} 정당한 사유 없이 약정한 게시일까지 {_p(deliverable, '을', '를')} 게시하지 아니하거나 게시를 거부하는 경우"
+         if posting else
+         f"{_p(th, '이', '가')} 정당한 사유 없이 약정한 기한까지 {_p(deliverable, '을', '를')} 납품하지 아니하거나 이행을 거부하는 경우"),
+        f"{th_poss}의 귀책사유로 {deliverable}의 정상적인 " + ("제작·게시·유지가" if posting else "제작·납품이") + " 불가능하게 된 경우",
+        (f"{_p(deliverable, '이', '가')} 관련 법령 또는 {channel}을 위반하거나 제3자의 저작권·초상권 등 권리를 침해하여 "
+         + ("게시 또는 유지할 수 없게 된 경우" if posting else "정상적으로 이용할 수 없게 된 경우") + supplied),
+    ]
+    if posting:
+        items.append(f"{_p(th, '이', '가')} {us}의 동의 없이 {_p(deliverable, '을', '를')} 삭제하거나 비공개로 전환한 경우{excl}")
+    if "브랜드" in body:
+        items.append(f"{th_poss}의 법령 위반, 부적절한 언행 등으로 사회적 비난을 야기하여 {brand}의 브랜드 이미지가 "
+                     "실추되거나 실추될 현저한 우려가 있는 경우")
+    items.append(f"그 밖에 {_p(th, '이', '가')} 본 계약상 중대한 의무를 위반한 경우")
+    takedown = [i + 1 for i, s in enumerate(items) if re.search(r"법령|브랜드", s)]
+    fault_text = (f"{c1} 다음 각 호의 어느 하나에 해당하는 사유가 발생한 경우, 이는 {th}의 귀책사유로 본다.\n"
+                  + "\n".join(f"{i}. {s}" for i, s in enumerate(items, 1)))
+    remedy_text = (f"{c2} 제{n}항의 사유가 발생한 경우, {_p(us, '은', '는')} {th}에게 상당한 기간을 정하여 시정을 요구하고, "
+                   f"{_p(th, '이', '가')} 그 기간 내에 시정하지 아니하면 서면 통지로써 본 계약을 해제 또는 해지할 수 있다. "
+                   "다만, 시정이 불가능하거나 즉시 조치가 필요한 경우에는 최고 없이 해제 또는 해지할 수 있다."
+                   + (f" 제{n}항 " + "·".join(f"제{i}호" for i in takedown) + f"의 경우 {_p(us, '은', '는')} {th}에게 "
+                      f"{deliverable}의 비공개 또는 삭제를 요청할 수 있다." if posting and takedown else ""))
+    effect_text = (f"{c3} 제{n + 1}항에 따라 본 계약이 해제 또는 해지되는 경우, {_p(us, '은', '는')} 미이행 부분에 해당하는 "
+                   f"{fee}의 지급 의무를 면하고, {_p(th, '은', '는')} 기 지급받은 {fee} 중 미이행 부분 상당액을 반환하며, "
+                   f"{us}에게 발생한 손해를 그 귀책 범위 내에서 배상하여야 한다."
+                   + (f" 다만, {_attr(refund_c, 'display_path')}에 해당하는 경우의 반환은 같은 항에 따른다." if refund_c is not None else ""))
+    return [
+        {"display_path": f"제{art}조 {c1}(같은 조 말미)", "text": fault_text, "role": "counterparty_fault"},
+        {"display_path": f"제{art}조 {c2}(같은 조 말미)", "text": remedy_text, "role": "our_remedy"},
+        {"display_path": f"제{art}조 {c3}(같은 조 말미)", "text": effect_text, "role": "termination_effect"},
+    ]
+
+
 def find_remedy_stacking(
     *, clauses: list[Any] | None, our: list[str], them: list[str], text: str = "",
 ) -> list[dict[str, Any]]:
@@ -194,11 +264,21 @@ def find_remedy_stacking(
             {"check": "삭제 후에도 잔여대금 지급의무가 남는가", "ok": pay_c is None,
              "detail": f"{_attr(pay_c, 'display_path')} — 잔여 대금 지급 의무 존속" if pay_c else ""},
         ]
-        # 상대방 귀책에 대한 우리의 같은 권리가 있는가(대칭).
-        reciprocal = bool(re.search(us_rx + r"(?:은|는)[^.]{0,80}(?:해제|해지)할\s*수\s*있[^.]{0,0}", body)
-                          and re.search(th_rx + r"(?:\s*또는\s*[^.]{0,20})?의\s*(?:위법|부적절|물의|사회적\s*비난)", body))
+        # 상대방 귀책에 대한 우리의 같은 권리가 있는가(대칭) — 귀책사유 목록 + 우리 해지권 + 환급이 모두 있어야 한다.
+        # 일반 해지 조항(시정기간 후 해지)만으로는 미이행 대금·기지급금 정리가 없어 대칭이 아니다.
+        reciprocal = bool(re.search(th_rx + r"의\s*귀책사유로\s*(?:본다|한다)", body)
+                          and re.search(us_rx + r"(?:은|는)[^.]{0,80}(?:해제|해지)할\s*수\s*있", body)
+                          and re.search(th_rx + r"(?:은|는)[^.]{0,80}반환", body))
+        general_term = next((c for c in clauses or [] if re.search(r"(?:당사자|일방)[^.]{0,200}(?:해제|해지)할\s*수\s*있",
+                                                                     _flat(_attr(c, "text")))), None)
+        refund_c = next((c for a2, cs2 in arts.items() if a2 != art for c in cs2
+                         if re.search(th_rx + r"(?:은|는)[^.]{0,40}반환", _flat(_attr(c, "text")))), None)
         checks[3]["ok"] = reciprocal
-        checks[3]["detail"] = "" if reciprocal else f"{th} 쪽 귀책(위법행위·논란)에 대한 우리 회사의 해지·환급 조치가 없음"
+        checks[3]["detail"] = "" if reciprocal else (
+            f"{th} 쪽 귀책(미게시·게시 거부·무단 삭제·권리침해·논란 등)에 대한 우리 회사의 해지·환급·손해배상 조치가 없음"
+            + (f" — {_attr(general_term, 'display_path')}의 일반 해지는 미이행 대금·기지급금 정리가 없고" if general_term else "")
+            + (f"{',' if general_term else ' —'} {_attr(refund_c, 'display_path')}의 반환은 그 항이 정한 사유에 한정됨"
+               if refund_c else ""))
         failed = [x for x in checks if not x["ok"]]
         if len(failed) < 4:
             continue
@@ -230,17 +310,10 @@ def find_remedy_stacking(
                                           f"이 경우 {_q(our_s[0])}의 대금 지급 의무는 제3항에 따른 금액으로 한정한다.",
                                           _flat(_attr(pay_c, "text")))})
         if not reciprocal:
-            person = "소속 크리에이터" if "크리에이터" in body else "임직원"
-            brand = _q(our_s[-1]) if len(our_s) > 1 else _q(our_s[0])
-            n_par = max((int(_attr(c, "paragraph_number")) for c in cs if _attr(c, "paragraph_number").isdigit()),
-                        default=0) + 1
-            circled = "①②③④⑤⑥⑦⑧⑨⑩"[n_par - 1] if 1 <= n_par <= 10 else f"제{n_par}항"
-            linked.append({"display_path": f"제{art}조 {circled}(같은 조 말미)",
-                           "text": (f"{circled} {th} 또는 {th} {person}의 법령 위반, 부적절한 언행 등으로 사회적 비난이 "
-                                    f"야기되어 {brand}의 브랜드 이미지가 실추되거나 실추될 현저한 우려가 있는 경우, "
-                                    f"{_p(_q(our_s[0]), '은', '는')} 서면 통지로써 본 계약을 해제 또는 해지하고 {th}에게 {deliverable}의 비공개 또는 "
-                                    f"삭제를 요청할 수 있다. 이 경우 {_p(th, '은', '는')} 기 지급받은 {fee} 전액을 반환하고 "
-                                    f"{_p(_q(our_s[0]), '이', '가')} 입은 손해를 배상하여야 한다.")})
+            linked.extend(_reciprocal_fault_edits(
+                art=art, cs=cs, clauses=clauses, th=th, th_rx=th_rx, us=_q(our_s[0]),
+                brand=_q(our_s[-1]) if len(our_s) > 1 else _q(our_s[0]),
+                deliverable=deliverable, fee=fee, body=body, refund_c=refund_c))
         for oc in other_pen:
             linked.append({"display_path": _attr(oc, "display_path"),
                            "text": (re.sub(r"위약벌로", "손해배상액의 예정으로", _flat(_attr(oc, "text")))
@@ -254,7 +327,9 @@ def find_remedy_stacking(
             + ", 해지되면 " + _p("·".join(stacked), "이", "가") + " 한꺼번에 적용된다(책임 중첩). "
             + ("같은 사유에 대한 위약벌이 " + ", ".join(_attr(c, "display_path") for c in other_pen) + "에도 있어 이중으로 부과될 수 있다. "
                if other_pen else "")
-            + (checks[3]["detail"] + "." if not reciprocal else "")
+            + (checks[3]["detail"] + ". 우리 회사 책임을 줄이는 것만으로는 불균형이 해소되지 않으므로, 같은 조에 "
+               f"{th}의 귀책사유와 우리 회사의 시정요구·해제·해지, 미이행 {fee} 지급 면제·기지급금 반환, 손해배상을 "
+               "실제 항으로 추가한다(위약벌은 새로 두지 않고 실손해 회복 중심)." if not reciprocal else "")
         )
         paths = [_attr(pen_c, "display_path")] + [e["display_path"] for e in linked]
         out.append(_finding(
@@ -276,7 +351,8 @@ def find_remedy_stacking(
             package_articles=sorted({art} | {_attr(c, "article_number") for c in other_pen}),
             package_pattern=r"위약|해지|해제|삭제|비공개|귀책|물의|평판|명예|브랜드|광고\s*중단|잔여|조치",
             negotiation_position=("우선순위: ① 위약벌 → 손해배상액의 예정(별도 손해배상 삭제) ② 상대방 판단 기준 삭제 "
-                                  "③ 삭제 시 잔여대금 정리 ④ 상대방 귀책 시 우리 회사의 해지·환급권 신설."),
+                                  "③ 삭제 시 잔여대금 정리 ④ 상대방 귀책사유·우리 회사의 해지·미지급·환급·손해배상 추가 "
+                                  "(갑 조치와 같은 구조라 상호주의로 요구하기 쉽습니다)."),
             detected_issue_list=[{"issue_title": f"[책임 중첩] 제{art}조 — 상대방 일방 해지 + 위약벌·손해배상·삭제·잔여대금 중첩, 상대방 귀책 조치 부재"}],
         ))
     return out

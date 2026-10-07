@@ -30,6 +30,7 @@ from xml.etree import ElementTree as ET
 
 from runtime.review.language_quality_gate import safe_truncate
 from runtime.review.report_header import SECTION1_TITLE, build_section1_rows
+from runtime.review.output_filter import linked_edit_rows
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ class ReviewIssue:
     is_mandatory_target: bool = False
     redline_instruction: dict[str, Any] | None = None
     legal_grounding: dict[str, Any] | None = None
+    linked_edits: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def display_bucket(self) -> str:
@@ -259,6 +261,22 @@ def _render_redline_instruction(body: ET.Element, redline: dict[str, Any], *, co
         _para(body, f"수정 이유: {safe_truncate(reason, 350)}", indent=1, italic=True)
 
 
+def _render_linked_edits(body: ET.Element, issue: "ReviewIssue", *, color: str) -> None:
+    """함께 고치거나 추가할 다른 항의 완성 문구 — 조항 번호만 적고 문구를 빼지 않는다."""
+    if not issue.linked_edits:
+        return
+    _para(body, "함께 수정·추가할 문구:", bold=True, color=color, indent=1)
+    for e in issue.linked_edits:
+        _para(body, f"[{e.get('display_path')}]", bold=True, indent=2)
+        for line in str(e.get("text") or "").splitlines()[:20]:
+            if line.strip():
+                p_line = _p(body)
+                r_line = _r(p_line, color=color)
+                t_elem = ET.SubElement(r_line, _w("t"))
+                t_elem.set(f"{{{XML_NS}}}space", "preserve")
+                t_elem.text = "      " + safe_truncate(_clean_text(line.strip()), 600)
+
+
 def _separator(body: ET.Element) -> None:
     _blank(body)
 
@@ -348,6 +366,7 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         confidence=float(d.get("confidence") or 0.75),
         redline_instruction=d.get("redline_instruction") if isinstance(d.get("redline_instruction"), dict) else None,
         legal_grounding=d.get("legal_grounding") if isinstance(d.get("legal_grounding"), dict) else None,
+        linked_edits=linked_edit_rows(d),
     )
 
 
@@ -461,6 +480,7 @@ def _build_review_issues(
             is_mandatory_target=bool(cr.get("is_mandatory_review_target") or cr.get("is_mandatory")),
             redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
             legal_grounding=cr.get("legal_grounding") if isinstance(cr.get("legal_grounding"), dict) else None,
+            linked_edits=linked_edit_rows(cr),
         )
         issues.append(ri)
 
@@ -992,6 +1012,7 @@ def build_legal_review_docx(
                         t_elem.text = "      " + safe_truncate(_clean_text(line), 250)
             else:
                 logger.error("HIGH issue %s has no proposed_revision", issue.clause_id)
+            _render_linked_edits(body, issue, color=COLOR_HIGH)
 
             neg = issue.negotiation_position
             if neg and not _has_placeholder(neg):
@@ -1028,6 +1049,7 @@ def build_legal_review_docx(
                 _render_redline_instruction(body, issue.redline_instruction, color=COLOR_MEDIUM)
             else:
                 _para(body, f"수정방향: {safe_truncate(issue.proposed_revision, 350)}", indent=1)
+            _render_linked_edits(body, issue, color=COLOR_MEDIUM)
 
             neg = issue.negotiation_position
             if neg and not _has_placeholder(neg):
