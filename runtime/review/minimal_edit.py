@@ -28,6 +28,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from runtime.review.clause_effect import (
@@ -341,17 +342,49 @@ def minimal_edit_for(
         DIRECTION_WE_BEAR: _ADDITION_WHEN_WE_BEAR,
         DIRECTION_THEY_BEAR: _ADDITION_WHEN_THEY_BEAR,
     }.get(direction, _ADDITION_WHEN_UNKNOWN)
+    # 쌍방에 똑같이 적용되는 조항("“갑” 또는 “을”이 … 배상")은 한쪽 방향 문구가 아니라 대칭 문구다 — 2026-10-13
+    # 실측: 상호 손해배상 조항(제22조)에 "총액 한도 없음" 을 지적하고는 배상금 지급기한 문장을 붙였다.
+    if _RX_MUTUAL_CLAUSE.search(body):
+        table = _ADDITION_WHEN_UNKNOWN
 
     eff_list = effects or classify_clause_effects(title=clause_title, text=body)
     for eff in eff_list:
         addition = table.get(eff) or _ADDITION_WHEN_UNKNOWN.get(eff)
         if addition:
+            addition = _name_our_side(addition, our_labels)
             return (
                 f"{body.rstrip()} {addition}".strip(),
                 addition,
                 _PRACTICAL_POSITION.get(eff, _FALLBACK_POSITION),
             )
     return "", "", ""
+
+
+_RX_MUTUAL_CLAUSE = re.compile(
+    r"[“\"]?갑[”\"]?\s*(?:또는|및|과)\s*[“\"]?을[”\"]?\s*(?:이|은|는|가)?|각\s*당사자|쌍방|양\s*당사자"
+)
+
+
+def _name_our_side(addition: str, our_labels: tuple[str, ...]) -> str:
+    """계약 문구에 "우리" 를 쓰지 않는다 — 계약서가 쓰는 우리 쪽 약칭(“갑”)으로 바꾼다.
+
+    2026-10-13 실측: "배상의무자는 우리의 서면 청구를 받은 날부터 …" 가 수정 문구로 그대로 나갔다. 약칭을
+    모르면 "상대방에 대하여 권리를 가지는 당사자" 처럼 중립적으로 쓴다.
+    """
+    label = next((lb for lb in our_labels or () if lb and len(lb) <= 4
+                  and not re.search(r"주식회사|㈜|\(주\)", lb)), "")
+    if label:
+        q = f"“{label.strip('“”\"')}”"
+        last = q.strip("“”")[-1:]
+        has = "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 != 0
+        rep = [("우리 측의", f"{q}의"), ("우리의", f"{q}의"), ("우리가", q + ("이" if has else "가")),
+               ("우리는", q + ("은" if has else "는")), ("우리에게", f"{q}에게"), ("우리 회사", q)]
+    else:
+        rep = [("우리 측의", "해당 당사자의"), ("우리의", "상대방의"), ("우리가", "해당 당사자가"),
+               ("우리는", "상대방은"), ("우리에게", "상대방에게"), ("우리 회사", "해당 당사자")]
+    for a, b in rep:
+        addition = addition.replace(a, b)
+    return addition
 
 
 def apply_minimal_edit(

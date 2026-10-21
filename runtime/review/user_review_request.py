@@ -115,17 +115,28 @@ _STOPWORDS: frozenset[str] = frozenset({
 # 머리말·"검토해 달라"는 일반 의뢰는 **맥락**이지 쟁점이 아니다.
 #: 머리말 — "요청사항", "배경", 앞 글자가 잘린 "청배경"(신청배경) 같은 짧은 줄.
 _RX_HEADER_LINE = re.compile(
-    r"^\s*(?:\[?\s*)?(?:[가-힣]{0,3}\s*)?(?:요청\s*사항|배경|참고\s*사항|현황|목적)\s*(?:\]\s*)?[:：]?\s*$"
+    r"^\s*(?:\[?\s*)?(?:[가-힣]{0,3}\s*)?(?:요청\s*사항|배경|참고\s*사항|현황|목적|제\s*목)\s*(?:\]\s*)?[:：]?\s*$"
 )
 #: 뒤따르는 목록을 소개하는 문장 — "아래 내용들이 … 검토 요청드립니다". 쟁점은 그 아래 목록이다.
 _RX_LIST_INTRO = re.compile(r"^\s*(?:아래|다음|하기)[^.\n]{0,200}(?:요청|검토|부탁)[가-힣\s]{0,8}[.]?\s*$")
 _RX_BACKGROUND = re.compile(
     r"(?:하고자\s*(?:함|합니다|한다|하며)|진행\s*(?:중|예정)(?:임|입니다|이며)?|예정(?:임|입니다)"
-    r"|추진\s*(?:중|예정)(?:임|입니다)?|계획(?:임|입니다)|수신(?:함|하였음|했습니다))\s*\.?\s*$"
+    r"|추진\s*(?:중|예정)(?:임|입니다)?|계획(?:임|입니다)|수신(?:함|하였음|했습니다)"
+    # "…용역계약 체결 예정" 처럼 명사형으로 끝나는 배경 문장(2026-10-21 실측: 검토 쟁점이 됐다)
+    r"|(?:체결|계약|진행|도입|출시|시행)\s*예정)\s*\.?\s*$"
 )
 _RX_GENERIC_REVIEW = re.compile(
     r"(?:법무|법률|계약서?)?\s*(?:검토|자문)\s*(?:를\s*|을\s*)?(?:요청|부탁|의뢰|바랍니다|바람|요망|신청)"
-    r"(?:\s*(?:드립니다|합니다|함|드림))?\s*\.?\s*$"
+    r"(?:\s*(?:드립니다|합니다|함|드림))?\s*\.?\s*(?:\([^)]{1,30}\))?\s*$"
+)
+
+#: 계약서 전체를 검토 범위로 지정하는 요청 — 개별 쟁점이 아니라 **범위 지시**다.
+#: 실측(2026-10-21): "첨부 계약서 전반의 법률상 이상 여부 및 보완 필요 사항 검토 요청" 이 "여부"
+#: 한 낱말로 구체 쟁점이 됐고, 임의 조항에 연결돼 "적정 / 수정 필요 여부: 아니오" 로 답해졌다.
+_RX_COMPREHENSIVE = re.compile(
+    r"(?:계약서?|문서)?\s*(?:전반|전체|전부|전반적)(?:의|적인|적으로|에\s*대한)?[^.\n]{0,40}"
+    r"(?:검토|이상\s*여부|보완|문제|리스크|법률|법적)"
+    r"|(?:법률|법적)\s*(?:상\s*)?이상\s*여부"
 )
 #: 일반 의뢰 문장이라도 이것이 있으면 구체적 쟁점이다("지체상금 조항 검토 요청").
 _RX_SPECIFIC_ASK = re.compile(
@@ -134,6 +145,22 @@ _RX_SPECIFIC_ASK = re.compile(
 )
 _RX_SENTENCE_END = re.compile(r"(?:[.?!。]|다|함|임|음|요|청|람|망|까)\s*$")
 _RX_LIST_MARKER = re.compile(r"^\s*(?:[①-⑳]|\(?\d{1,2}[.)]|[-•■·*]\s|[가-하][.)])")
+
+
+COMPREHENSIVE_MARK = "[전반 검토] "
+COMPREHENSIVE_ISSUE_ID = "user_comprehensive_review"
+
+
+def comprehensive_issue(context: list[str]) -> "UserReviewIssue | None":
+    """맥락으로 분리한 문장 중 전체 검토 지시가 있으면 그것을 범위 쟁점 하나로 세운다."""
+    hit = next((c[len(COMPREHENSIVE_MARK):] for c in context if c.startswith(COMPREHENSIVE_MARK)), "")
+    if not hit:
+        return None
+    return UserReviewIssue(
+        issue_id=COMPREHENSIVE_ISSUE_ID, source=SOURCE_EXPLICIT, original_user_text=hit,
+        normalized_issue="계약서 전반 검토(전체 조항을 검토 범위로 지정)", catalog_code="",
+        semantic_parsed=True,
+    )
 
 
 def separate_context(focus: str) -> tuple[str, list[str]]:
@@ -157,6 +184,13 @@ def separate_context(focus: str) -> tuple[str, list[str]]:
         if not seg:
             continue
         body = seg.lstrip("-•■·* ").strip()
+        # "계약 전반 검토 부탁드립니다. 특히 제5조 …" — 전체 검토 문장만 떼어 범위 지시로 두고 나머지는 쟁점으로.
+        _sents = [x for x in re.split(r"(?<=[.。?!])\s+", body) if x.strip()]
+        if len(_sents) > 1:
+            _comp = [x for x in _sents if _RX_COMPREHENSIVE.search(x) and not _RX_CLAUSE_CITATION.search(x)]
+            if _comp and len(_comp) < len(_sents):
+                context.extend(COMPREHENSIVE_MARK + x for x in _comp)
+                body = seg = " ".join(x for x in _sents if x not in _comp)
         if _RX_HEADER_LINE.match(body):
             context.append(body)
             continue
@@ -165,6 +199,10 @@ def separate_context(focus: str) -> tuple[str, list[str]]:
             continue
         if _RX_LIST_INTRO.match(body) and not _RX_CLAUSE_CITATION.search(body):
             context.append(body)
+            continue
+        if _RX_COMPREHENSIVE.search(body) and not _RX_CLAUSE_CITATION.search(body):
+            # 전체 검토 지시는 맥락으로 빼고, 호출자가 범위 쟁점 하나로 따로 세운다.
+            context.append(COMPREHENSIVE_MARK + body)
             continue
         if _RX_GENERIC_REVIEW.search(body):
             # "<계약서>의 법무 검토 요청" 에서 계약서 이름을 지우고도 구체적 쟁점어가 남는지 본다.
@@ -438,8 +476,29 @@ def parse_user_review_request(
     # (2026-09-28 실측). 답변은 거래모델·AI 검토 프롬프트가 따로 읽는다.
     focus = str(review_focus or "").split(ANSWER_BLOCK_MARKER, 1)[0].strip()
     focus, _context = separate_context(focus)
+    _scope = comprehensive_issue(_context)
     if not focus:
-        return UserRequestParseResult(issues=[], status=PARSE_STATUS_EMPTY, degraded=False)
+        return UserRequestParseResult(issues=[_scope] if _scope else [], status=PARSE_STATUS_EMPTY, degraded=False)
+    result = _parse_specific_requests(
+        focus, contract_type_code, ai_provider=ai_provider, ai_model=ai_model, ai_timeout_sec=ai_timeout_sec,
+        ai_max_tokens=ai_max_tokens, ai_temperature=ai_temperature,
+    )
+    if _scope:
+        result.issues.insert(0, _scope)
+    return result
+
+
+def _parse_specific_requests(
+    focus: str,
+    contract_type_code: str,
+    *,
+    ai_provider: AIProvider | None,
+    ai_model: str | None,
+    ai_timeout_sec: float | None,
+    ai_max_tokens: int | None,
+    ai_temperature: float | None,
+) -> UserRequestParseResult:
+    """맥락을 걷어낸 구체 요청만 쟁점으로 구조화한다."""
 
     ai_enabled = bool(
         ai_provider and ai_model and ai_timeout_sec is not None
@@ -623,6 +682,37 @@ def link_clauses_to_issues(
 
 # ── 항목 3: coverage tracking ───────────────────────────────────────────────
 
+def _comprehensive_row(issue: UserReviewIssue, live: list[dict[str, Any]]) -> dict[str, Any]:
+    """전체 검토 요청에는 이 보고서 전체로 답한다 — 임의 조항 하나에 붙여 '적정' 을 만들지 않는다."""
+    shown = [cr for cr in live if not cr.get("keep_as_is")
+             and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")]
+    high = [cr for cr in shown if str(cr.get("risk_tier") or "").upper() == "HIGH"]
+    paths = list(dict.fromkeys(str(cr.get("display_path") or "") for cr in shown if cr.get("display_path")))
+    if shown:
+        verdict = VERDICT_NEEDS_FIX
+        conclusion = (f"계약서 전체를 검토 범위로 처리했습니다. 필수수정 {len(high)}건·권장수정 "
+                      f"{len(shown) - len(high)}건이 있습니다(아래 필수수정·권장수정 절). 그 밖의 조항은 "
+                      "현행 유지 또는 참고 사항입니다.")
+    else:
+        verdict = VERDICT_OK
+        conclusion = "계약서 전체를 검토 범위로 처리했고, 필수·권장 수정이 필요한 조항은 확인되지 않았습니다."
+    return {
+        "issue_id": issue.issue_id, "source": issue.source,
+        "original_user_text": issue.original_user_text,
+        "relevant_clause": "계약서 전체",
+        "direct_answer": conclusion,
+        "issue_topic": TOPIC_UNKNOWN, "normalized_issue": issue.normalized_issue,
+        "catalog_code": "", "custom_user_issue": True,
+        "relevant_clause_ids": [], "relevant_clause_paths": paths,
+        "answer_clause_paths": paths,
+        "review_status": verdict, "needs_revision": bool(shown),
+        "conclusion": conclusion,
+        "matched_finding_ids": [str(cr.get("clause_id") or "") for cr in shown],
+        "answered_by": "comprehensive_scope",
+        "is_comprehensive_scope": True,
+    }
+
+
 def _live_findings(clause_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         cr for cr in (clause_results or [])
@@ -746,6 +836,9 @@ def build_user_request_coverage(
 
     out: list[dict[str, Any]] = []
     for issue in issues:
+        if issue.issue_id == COMPREHENSIVE_ISSUE_ID:
+            out.append(_comprehensive_row(issue, live))
+            continue
         linked_paths = {clause_display.get(cid, "") for cid in issue.relevant_clause_ids}
         linked_paths.discard("")
         # 사용자가 직접 인용한 조항이 있으면 그것이 가장 정확한 anchor다.

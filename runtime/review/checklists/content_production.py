@@ -227,13 +227,116 @@ def _find_clause_full_text(text: str, clause_nums: list[str]) -> str:
     return " ".join(_collect_clause_lines(text, clause_nums))
 
 
+# ─── 조항 위치는 **내용으로** 찾는다 ────────────────────────────────────────────
+#
+# 2026-10-19 실측(외부 에디터 콘텐츠 용역계약): 이 체크리스트는 한 광고제작 계약 양식의 조 번호(제9조=소유권,
+# 제11조=비밀유지, 제14조=손해배상 …)를 그대로 썼다. 번호가 다른 계약에서는 제3조(계약기간) 원문을 인용한
+# "제3자 권리" 지적, 제11조(손해배상) 원문을 인용한 "포트폴리오" 지적이 나왔고, 실제 지식재산권 조항(제8조)은
+# 검사 범위에서 빠졌다. 이제 조 제목·본문의 주제어로 조를 찾고, 그 조의 문언으로만 판정·인용한다.
+
+_RX_ART_HEADING = re.compile(r"^\s*제\s*(\d+)\s*조(?:\s*의\s*\d+)?\s*[.:]?\s*(.*)$")
+#: 업무 범위에서 **빠진** 업무를 말하는 문장 — "디자인 제작, 촬영 … 은 포함되지 않는다" 를 범위로 읽지 않는다.
+_RX_EXCLUSION_SENT = re.compile(r"[^.\n]*(?:포함되지\s*않는다|포함하지\s*아니한다|제외한다|제외된다)[^.\n]*")
+
+
+def _articles(text: str) -> list[tuple[str, str, str]]:
+    """(조 번호, 조 제목, 조 본문) — 조 시작 줄만 경계로 본다(본문 속 상호참조는 경계가 아니다)."""
+    out: list[tuple[str, str, str]] = []
+    cur: list[str] | None = None
+    num, title = "", ""
+    for line in str(text or "").split("\n"):
+        m = _RX_ART_HEADING.match(line)
+        if m:
+            if cur is not None:
+                out.append((num, title, "\n".join(cur)))
+            num = m.group(1)
+            title = re.sub(r"^[\[(（【]\s*|\s*[\])）】].*$", "", m.group(2).strip())
+            cur = [line.strip()]
+            continue
+        if cur is not None:
+            # 서명란·첨부는 마지막 조의 본문이 아니다.
+            if re.match(r"^\s*(?:첨부|별첨|별표|\[별)", line) or re.search(r"서명\s*날인|기명\s*날인", line):
+                out.append((num, title, "\n".join(cur)))
+                cur = None
+                continue
+            cur.append(line.strip())
+    if cur is not None:
+        out.append((num, title, "\n".join(cur)))
+    return out
+
+
+def _locate(text: str, title_rx: str, body_rx: str = "", *, limit: int = 2) -> list[str]:
+    """주제에 해당하는 조 번호 — 조 제목이 주제어를 담으면 강하게, 본문 언급은 약하게 센다."""
+    t_rx = re.compile(title_rx)
+    b_rx = re.compile(body_rx or title_rx)
+    scored: list[tuple[int, int, str]] = []
+    for order, (num, title, body) in enumerate(_articles(text)):
+        score = (5 if t_rx.search(title) else 0) + len(b_rx.findall(body))
+        if score > 0:
+            scored.append((-score, order, num))
+    scored.sort()
+    # 둘째 조부터는 조 제목이 주제를 말할 때만 함께 든다 — 해지 조의 "제8조(지식재산권) … 위반" 같은 상호참조
+    # 한 줄로 해지 조가 지식재산 조로 묶이지 않게.
+    picked = [n for i, (neg, _, n) in enumerate(scored[:limit]) if i == 0 or -neg >= 5]
+    return sorted(picked, key=int)
+
+
+def _area(text: str, nums: list[str]) -> str:
+    return " ".join(_collect_clause_lines(text, nums)) if nums else ""
+
+
+def _label(nums: list[str]) -> str:
+    return " 및 ".join(f"제{n}조" for n in nums)
+
+
+def _titles(text: str, nums: list[str]) -> list[str]:
+    """찾은 조의 **실제** 제목 — 양식의 조 제목을 쓰면 제목 대조 게이트가 조항번호를 지운다."""
+    by = {n: t for n, t, _ in _articles(text)}
+    return [by[n] for n in nums if by.get(n)]
+
+
+def _scope_text(text: str) -> str:
+    """상대방이 실제로 맡은 업무 — 범위 제외 문장은 뺀다."""
+    nums = _locate(text, r"범위|업무|과업|용역의?\s*내용|제작", r"수행한다|제작한다|작성", limit=3)
+    area = _area(text, nums) or str(text or "")
+    return _RX_EXCLUSION_SENT.sub(" ", area)
+
+
+def _quoted_labels(text: str) -> tuple[str, str]:
+    """수정문구에 쓸 당사자 표기 — 원문이 “갑”/"갑" 처럼 따옴표를 쓰면 그대로 따른다."""
+    if re.search(r"[\"“]갑[\"”]", text or ""):
+        return '"갑"', '"을"'
+    return "갑", "을"
+
+
+def _quote(text: str, nums: list[str], fallback: str, focus: str = "") -> str:
+    """인용 — `focus` 가 있으면 그 주제어가 든 **항**만 인용한다. 조 전체를 인용하면 같은 조의 다른 항(상호참조
+    포함)이 섞여, 의미 대조 게이트가 지적의 법률효과를 엉뚱하게 읽는다(해지 조의 "제7조(비밀유지) … 위반" 한 줄로
+    정산 지적이 비밀유지 지적으로 읽혀 삭제됐다 — 2026-10-19)."""
+    lines = _collect_clause_lines(text, nums)
+    if focus and lines:
+        paras: list[str] = []
+        for ln in lines[1:]:
+            if re.match(r"^[①-⑳]", ln) or not paras:
+                paras.append(ln)
+            else:
+                paras[-1] += " " + ln
+        hit = next((p_ for p_ in paras if re.search(focus, p_)), "")
+        if hit:
+            return hit[:300]
+    excerpt = " ".join(lines[:10])
+    return excerpt[:300] if excerpt else fallback
+
+
 # ─── Individual checklist items ────────────────────────────────────────────────
 
 def _check_cp001_deliverables(text: str) -> ContentCheckResult | None:
-    """CP-001: 산출물 정의 및 제출 형식."""
-    clause_text = _find_clause_text(text, ["2", "3"])
-
-    # Check if deliverables are adequately defined
+    """CP-001: 산출물 정의 및 제출 형식 — 영상·촬영·디자인처럼 원본 파일이 따로 있는 산출물에만 의미가 있다."""
+    scope = _scope_text(text)
+    # 원고·뉴스레터 같은 텍스트 산출물은 "편집 원본·촬영 소스·해상도"가 쟁점이 아니다.
+    if not _has_any(scope, "영상", "촬영", "편집", "그래픽", "디자인", "썸네일", "음향"):
+        return None
+    nums = _locate(text, r"범위|제작", r"제작|결과물|산출물")
     has_file_format = _has_any(text, "원본 파일", "프로젝트 파일", "편집 가능", "파일 형식", "해상도")
     has_basic_deliverables = _has_any(text, "결과물", "산출물", "납품", "제출")
     has_견적서 = _has_any(text, "제작 견적서", "별첨")
@@ -243,7 +346,7 @@ def _check_cp001_deliverables(text: str) -> ContentCheckResult | None:
         problem = "계약서에 산출물(결과물) 정의 및 제출 형식이 규정되어 있지 않습니다."
     elif has_file_format:
         return None  # PRESENT_ACCEPTABLE — skip
-    elif has_견적서 and not has_file_format:
+    elif has_견적서:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
             "산출물 납품 조항은 있으나, 편집 가능한 원본 파일, 프로젝트 파일, 자막 파일, 썸네일, "
@@ -254,13 +357,14 @@ def _check_cp001_deliverables(text: str) -> ContentCheckResult | None:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = "산출물 정의가 있으나 구체적인 파일 형식, 해상도, 납품 기준이 불명확합니다."
 
+    label = _label(nums) or "산출물 조항"
     return ContentCheckResult(
         checklist_id="CP-001",
-        clause_ids=["제2조", "제3조", "별첨 제작 견적서"],
-        clause_titles=["용역의 범위", "콘텐츠 제작", "별첨 제작 견적서"],
+        clause_ids=[f"제{n}조" for n in nums] + (["별첨 제작 견적서"] if has_견적서 else []),
+        clause_titles=_titles(text, nums) or ["용역의 범위", "콘텐츠 제작"][: len(nums)],
         severity="MEDIUM",
-        issue_title="제2조 및 제3조 — 산출물 정의 및 파일 제출 형식 보완 필요",
-        original_text=clause_text or "[제2조/제3조] 용역의 범위 및 콘텐츠 제작 관련 조항",
+        issue_title=f"{label} — 산출물 정의 및 파일 제출 형식 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 용역의 범위 및 콘텐츠 제작 관련 조항"),
         status=status,
         problem=problem,
         legal_business_reason=(
@@ -272,20 +376,22 @@ def _check_cp001_deliverables(text: str) -> ContentCheckResult | None:
     )
 
 
+#: 검수 후에도 하자·오류를 고치게 하는 문언 — 검수 간주가 있어도 이것이 있으면 사후 구제가 남아 있다.
+_RX_POST_ACCEPTANCE_REMEDY = re.compile(
+    r"검수\s*(?:합격|완료)\s*(?:이후|후)에도|하자[^.\n]{0,20}보완|사실\s*관계\s*오류|책임지고\s*보완|하자\s*담보"
+)
+
+
 def _check_cp002_inspection(text: str) -> ContentCheckResult | None:
     """CP-002: 검수 및 합격 간주 조항 — 검수 조항이 이미 있는지 반드시 확인."""
-    clause_text = _find_clause_text(text, ["6", "7"])
-
-    # Key: distinguish ABSENT from PRESENT_BUT_WEAK
-    has_inspection_clause = _has_any(
-        text, "검수", "합격", "불합격", "보완", "검수 결과"
-    )
-    has_deemed_acceptance = _has_any(
-        text, "합격된 것으로 간주", "승인한 것으로 간주", "검수한 것으로 본다"
-    )
+    nums = _locate(text, r"검수|납품|제출", r"검수")
+    area = _area(text, nums) or text
+    has_inspection_clause = _has_any(text, "검수", "합격", "불합격", "검수 결과")
+    has_deemed_acceptance = bool(re.search(
+        r"합격된\s*것으로\s*간주|승인한\s*것으로\s*간주|검수(?:한|\s*완료된|\s*완료한)\s*것으로\s*(?:본다|간주)", text))
     has_recheck = _has_any(text, "재검수", "보완본", "재제출")
     has_major_defect_handling = _has_any(text, "중대한 하자", "지급 보류", "검수 합격 이후에도")
-    has_penalty_for_weak = _has_any(text, "보완 완료", "보완기간 연장", "검수 기간 연장")
+    has_post_remedy = bool(_RX_POST_ACCEPTANCE_REMEDY.search(text))
 
     if not has_inspection_clause:
         status = ChecklistStatus.ABSENT
@@ -293,29 +399,30 @@ def _check_cp002_inspection(text: str) -> ContentCheckResult | None:
             "검수 조항이 없어 콘텐츠 합격 기준, 검수 기간, 보완 절차가 불명확합니다. "
             "검수 기준 및 지급 조건을 신설할 필요가 있습니다."
         )
-    elif has_inspection_clause and has_deemed_acceptance and not has_major_defect_handling:
+    elif has_deemed_acceptance and not has_major_defect_handling and not (has_recheck and has_post_remedy):
         # CRITICAL: must say "있으나" not "없어"
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
             "검수 조항은 있으나, 무응답 합격 간주 기간이 있고 재검수 횟수 제한, "
             "중대한 하자 발견 시 검수 철회 또는 지급 보류 규정이 없어 보완이 필요합니다."
         )
-    elif has_inspection_clause and not has_recheck:
+    elif not has_recheck and not has_post_remedy:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
             "검수 조항은 있으나, 보완 요청 후 재검수 절차 및 중대한 하자 처리 기준이 "
             "명확하지 않아 보완이 필요합니다."
         )
     else:
-        return None  # PRESENT_ACCEPTABLE
+        return None  # PRESENT_ACCEPTABLE — 재검수와 검수 후 보완 책임이 이미 있다
 
+    label = _label(nums) or "검수 조항"
     return ContentCheckResult(
         checklist_id="CP-002",
-        clause_ids=["제6조", "제7조"],
-        clause_titles=["콘텐츠의 제출 및 검수", "대금 지급"],
+        clause_ids=[f"제{n}조" for n in nums],
+        clause_titles=_titles(text, nums) or ["콘텐츠의 제출 및 검수", "대금 지급"][: len(nums)],
         severity="MEDIUM",
-        issue_title="제6조 및 제7조 — 검수 간주 및 대금 지급 조건 보완 필요",
-        original_text=clause_text or "[제6조] 콘텐츠의 제출 및 검수 관련 조항",
+        issue_title=f"{label} — 검수 간주 및 대금 지급 조건 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 콘텐츠의 제출 및 검수 관련 조항") if area else "",
         status=status,
         problem=problem,
         legal_business_reason=(
@@ -330,17 +437,19 @@ def _check_cp002_inspection(text: str) -> ContentCheckResult | None:
 
 def _check_cp003_payment_additional(text: str) -> ContentCheckResult | None:
     """CP-003: 대금 지급 및 추가 과업 비용."""
-    clause_text = _find_clause_text(text, ["7", "2"])
-
-    has_additional_work_clause = _has_any(text, "추가 과업", "추가·변경", "추가 비용")
-    has_written_approval = _has_any(text, "서면 승인", "서면으로 승인", "사전 서면")
+    nums = _locate(text, r"대금|변경|범위", r"추가|별도\s*(?:합의|협의)|범위를\s*초과")
+    has_additional_work_clause = bool(re.search(
+        r"추가\s*과업|추가·변경|추가\s*비용|범위를\s*초과|과업\s*범위를?\s*변경|별도\s*(?:합의|협의)", text))
+    has_written_approval = _has_any(text, "서면 승인", "서면으로 승인", "사전 서면", "서면으로 합의", "서면 동의")
     has_change_request = _has_any(text, "변경요청서", "견적서 제출", "사전 통보")
-    has_payment_hold = _has_any(text, "지급을 보류", "대금 보류", "검수 불합격")
+    # 대금이 애초에 "검수 완료된" 성과물에만 지급되면 불합격분 지급 보류는 이미 구조에 들어 있다.
+    has_payment_hold = _has_any(text, "지급을 보류", "대금 보류", "검수 불합격") or bool(
+        re.search(r"검수\s*완료된[^.\n]{0,60}(?:기준|대금|지급|정산)", text))
 
     if not has_additional_work_clause:
         status = ChecklistStatus.ABSENT
         problem = "추가 과업 발생 시 비용 처리 및 승인 절차 조항이 없습니다."
-    elif has_additional_work_clause and not has_written_approval and not has_change_request:
+    elif not has_written_approval and not has_change_request:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
             "추가 과업 규정은 있으나, 갑의 사전 서면 승인, 변경요청서 제출, "
@@ -356,13 +465,14 @@ def _check_cp003_payment_additional(text: str) -> ContentCheckResult | None:
     else:
         return None
 
+    label = _label(nums) or "대금 조항"
     return ContentCheckResult(
         checklist_id="CP-003",
-        clause_ids=["제2조 제2항", "제7조 제3항"],
-        clause_titles=["용역의 범위(추가·변경)", "대금 지급(추가 과업)"],
+        clause_ids=[f"제{n}조" for n in nums],
+        clause_titles=_titles(text, nums) or ["용역의 범위(추가·변경)", "대금 지급(추가 과업)"][: len(nums)],
         severity="MEDIUM",
-        issue_title="제2조 제2항 및 제7조 제3항 — 추가 과업 및 비용 변경 절차 보완 필요",
-        original_text=clause_text or "[제2조 제2항/제7조 제3항] 추가 과업 및 대금 관련 조항",
+        issue_title=f"{label} — 추가 과업 및 비용 변경 절차 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 추가 과업 및 대금 관련 조항"),
         status=status,
         problem=problem,
         legal_business_reason=(
@@ -375,100 +485,170 @@ def _check_cp003_payment_additional(text: str) -> ContentCheckResult | None:
     )
 
 
+_RX_IP_TITLE = r"지식\s*재산|저작권|소유권|권리의?\s*귀속|성과물의?\s*(?:활용|귀속|이용)|결과물의?\s*(?:귀속|이용)"
+#: 권리를 넘기는 문언 — 이용허락(라이선스)이 아니라 귀속·이전·양도.
+_RX_ASSIGNMENT = re.compile(
+    r"(?:지식\s*재산권|저작권|저작재산권|소유권)[^.\n]{0,60}(?:귀속|이전|양도)"
+)
+_RX_SECONDARY = re.compile(r"2차적\s*저작물|편집[·ㆍ,\s]*(?:수정|변경|개변)|변형|재가공|번역|각색|축약|재구성")
+_RX_MORAL = re.compile(r"저작인격권|동일성\s*유지|성명\s*표시")
+#: 대금을 치러야 권리가 넘어가는 구조 — "용역대금 지급과 동시에", "완납 시".
+_RX_TRANSFER_ON_PAYMENT = re.compile(
+    r"(?:대금|용역대금|보수)[^.\n]{0,10}(?:완납|지급)\s*(?:과|와)?\s*(?:동시에|시에?|후에?|이후)"
+)
+#: 대금 지급 전에도 쓸 수 있게 하는 문언.
+_RX_INTERIM_LICENSE = re.compile(
+    r"(?:지급|완납)\s*전(?:이라도|에도)|이용을?\s*허락|사용권을?\s*(?:갑에게\s*)?부여|이용권을?\s*부여"
+)
+#: 우리(발주자)가 대금 지급 **전에** 성과물을 게시·사용하는 구조 — 검수·인수 후 게시, 대금은 월말 정산.
+_RX_USE_BEFORE_PAYMENT = re.compile(
+    r"검수[·ㆍ\s]*(?:인수|완료)[^.\n]{0,30}(?:게시|게재|사용|이용|발행)|(?:게시|게재|발행)한다"
+)
+
+
 def _check_cp004_ip_transfer(text: str) -> ContentCheckResult | None:
-    """CP-004: 권리 이전 및 사용권 범위 — 핵심 리스크, TOP 5에 반드시 포함.
+    """CP-004: 권리 이전 및 사용권 범위 — 실제로 빠진 것만 지적한다.
 
-    Key: Only look for media scope WITHIN the IP/ownership clause (제9조 area),
-    not in the entire contract (which may have "SNS" in the 별첨).
+    판정은 지식재산 조(제목·본문으로 찾은 조)의 **전문**으로 한다. 권리를 통째로 넘기는 계약에서 "매체·기간·지역"
+    열거는 쟁점이 아니다(소유자는 매체 제한을 받지 않는다). 남는 쟁점은 대개 셋이다:
+      1) 2차적저작물작성권 — 저작재산권 전부를 양도해도 특약이 없으면 포함되지 않은 것으로 추정된다(저작권법
+         제45조 제2항). 편집·축약·재구성·번역해 쓰려면 명시가 필요하다.
+      2) 대금 지급 시 이전 + 지급 전 게시 — 지급 전 이용의 계약상 근거가 비어 있다.
+      3) 저작인격권 — 편집·축약 시 동일성유지권 분쟁을 막는 불행사 약정.
     """
-    clause_text = _find_clause_text(text, ["9", "10"])
-    # 판정은 조문 **전문**으로 한다 — 발췌(300자)로 판정하면 뒤쪽 항에 이미
-    # 규정된 이용범위를 놓친다(2026-09-10 지시). 다만 검사 범위는 여전히
-    # IP/이용권 조항으로 한정한다: 별첨에 "SNS" 라는 단어가 있다는 사실이
-    # 이용권 부여를 뜻하지는 않기 때문이다.
-    ip_area = _find_clause_full_text(text, ["9", "10"])
+    nums = _locate(text, _RX_IP_TITLE, r"지식\s*재산|저작권|소유권", limit=2)
+    ip_area = _area(text, nums)
+    has_ip_transfer = bool(_RX_ASSIGNMENT.search(ip_area or text)) or _has_any(text, "권리 이전")
+    is_advertising = _has_any(text, "광고")
 
-    has_ip_transfer = _has_any(text, "저작권", "소유권", "저작재산권", "권리 이전")
-    # Media scope must appear in the IP clause area, not just anywhere in the contract
+    gaps: list[str] = []
+    reasons: list[str] = []
+    revision: list[str] = []
+    gab, eul = _quoted_labels(text)
+
     has_media_scope_in_clause = _has_any(
-        ip_area,
-        "홈페이지", "SNS", "기간·지역", "전시", "영업자료", "매체",
+        ip_area, "홈페이지", "SNS", "기간·지역", "전시", "영업자료", "매체",
     ) and _has_any(ip_area, "사용할 수 있", "이용할 수 있", "사용권")
-    has_secondary_rights = _has_any(ip_area, "2차적저작물", "편집·수정권", "변형", "재가공")
-    has_existing_exception = _has_any(text, "기존", "보유 자료", "노하우", "기존 권리")
-    has_exception_unlimited = _has_any(ip_area, "사용권을 갑에게 부여", "기간·지역 제한 없는", "제한 없이 사용")
-
-    # Check scope
-    missing_scope: list[str] = []
-    if not has_media_scope_in_clause:
-        missing_scope.append("사용 매체·기간·지역 명시")
-    if not has_secondary_rights:
-        missing_scope.append("편집·변형·재가공·2차 저작물 허용")
-    if has_existing_exception and not has_exception_unlimited:
-        missing_scope.append("을의 기존 자료 예외에 대한 무제한 사용권 보장")
+    if has_ip_transfer and not _RX_SECONDARY.search(ip_area):
+        gaps.append("편집·변형·재가공·2차적저작물 작성 권한")
+        reasons.append(
+            "저작재산권을 넘겨받아도 2차적저작물작성권은 특약이 없으면 함께 넘어오지 않은 것으로 추정되므로"
+            "(저작권법 제45조 제2항), 편집·축약·재구성·번역해 다른 채널에 쓰는 순간 상대방의 권리 주장 여지가 남습니다."
+        )
+    if has_ip_transfer and not _RX_MORAL.search(text) and gaps:
+        gaps.append("저작인격권 불행사")
+        reasons.append("편집·축약 시 동일성유지권을 근거로 한 이의를 막는 불행사 약정이 없습니다.")
+    if has_ip_transfer and _RX_TRANSFER_ON_PAYMENT.search(ip_area) and not _RX_INTERIM_LICENSE.search(ip_area) \
+            and _RX_USE_BEFORE_PAYMENT.search(text):
+        gaps.append("대금 지급 전 이용 근거")
+        reasons.append(
+            "권리는 대금 지급과 동시에 넘어오는데 성과물은 검수 직후 게시하고 대금은 그 뒤에 정산하므로, "
+            "지급 전 게시·이용의 계약상 근거가 비어 있고 대금 분쟁 시 게시 중단 요구를 받을 수 있습니다."
+        )
+    if not has_media_scope_in_clause and (not has_ip_transfer or is_advertising):
+        gaps.append("사용 매체·기간·지역 명시")
+    if _has_any(ip_area, "기존 보유", "보유 자료", "노하우", "기존 권리") and not _has_any(
+            ip_area, "사용권을 갑에게 부여", "기간·지역 제한 없는", "제한 없이 사용"):
+        gaps.append("을의 기존 자료 예외에 대한 무제한 사용권 보장")
 
     if not has_ip_transfer:
         status = ChecklistStatus.ABSENT
         problem = "콘텐츠 저작권 및 지식재산권 이전 조항이 없습니다."
-    elif missing_scope:
+        proposed = _REV_CP004_IP_TRANSFER
+    elif gaps:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
-            f"소유권·저작권 이전 조항은 있으나, 다음 사항이 불명확합니다: {', '.join(missing_scope)}. "
-            "사용 매체(홈페이지, SNS, 온라인 광고, 오프라인 매장, 전시, 영업자료 등), 기간, 지역이 없고, "
-            "편집·변형·재가공 허용 여부도 불명확하며, "
-            "대금 완납 전 사용권이 없어 광고 집행이 지연될 수 있습니다."
-        )
+            f"권리 귀속 조항({_label(nums) or '지식재산권 조항'})은 있으나 다음 사항이 정해져 있지 않습니다: "
+            f"{', '.join(gaps)}. " + " ".join(reasons)
+        ).strip()
+        if is_advertising or "사용 매체·기간·지역 명시" in gaps or "을의 기존 자료 예외에 대한 무제한 사용권 보장" in gaps:
+            proposed = _REV_CP004_IP_TRANSFER
+        else:
+            # 원문 귀속 조항은 그대로 두고 빠진 것만 덧붙인다(기존 보호를 바꾸지 않는다).
+            if "편집·변형·재가공·2차적저작물 작성 권한" in gaps:
+                revision.append(
+                    f"제1항에 따라 {gab}에게 귀속되는 권리에는 최종 성과물을 편집·축약·번역·재구성하는 등 "
+                    "2차적저작물을 작성하여 이용할 권리가 포함된다."
+                )
+            if "저작인격권 불행사" in gaps:
+                revision.append(
+                    f"{eul}은 {gab}의 위 이용에 대하여 저작인격권을 행사하지 아니한다. 다만 성명 표시는 "
+                    "바이라인에 관한 당사자의 합의에 따른다."
+                )
+            if "대금 지급 전 이용 근거" in gaps:
+                revision.append(
+                    f"용역대금 지급 전이라도 {gab}은 검수 완료된 성과물을 본 계약의 목적 범위에서 게시·이용할 수 있다."
+                )
+            proposed = " ".join(revision)
     else:
         return None
 
+    core = "편집·변형·재가공·2차적저작물 작성 권한" in gaps or not has_ip_transfer
+    label = _label(nums) or "지식재산권 조항"
     return ContentCheckResult(
         checklist_id="CP-004",
-        clause_ids=["제9조"],
-        clause_titles=["소유권의 귀속"],
-        severity="HIGH",
-        issue_title="제9조 — 콘텐츠 권리 이전 및 사용권 범위 보완 필요",
-        original_text=clause_text or "[제9조] 소유권의 귀속 관련 조항",
+        clause_ids=[f"제{n}조" for n in nums],
+        clause_titles=_titles(text, nums) or ["지식재산권"][: len(nums)],
+        severity="HIGH" if core else "MEDIUM",
+        issue_title=f"{label} — 콘텐츠 권리 이전 및 사용권 범위 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 지식재산권 관련 조항", r"귀속|이전|양도"),
         status=status,
         problem=problem,
         legal_business_reason=(
-            "사용 매체·지역·기간이 불명확하면 SNS, 전시, 영업자료 등 새로운 매체에서 콘텐츠를 사용할 때 "
-            "을에게 추가 사용료를 지급해야 하는 분쟁이 발생합니다. "
-            "편집·변형·재가공 허용이 명확하지 않으면 마케팅 요구에 맞게 콘텐츠를 수정하는 데 제약이 생깁니다. "
-            "대금 완납 전 사용권이 없으면 대금 분쟁 중 광고를 집행하지 못할 위험이 있습니다."
-        ),
-        proposed_revision=_REV_CP004_IP_TRANSFER,
+            "콘텐츠를 채널별로 편집·재가공해 쓰는 것이 이 거래의 목적인데 그 권한이 계약에 없으면, "
+            "재가공물마다 상대방 동의 또는 추가 대가 요구가 문제될 수 있습니다. "
+            + ("사용 매체·지역·기간이 불명확하면 새로운 매체에서 콘텐츠를 사용할 때 추가 사용료 분쟁이 생깁니다. "
+               if "사용 매체·기간·지역 명시" in gaps else "")
+            + ("대금 완납 전 사용권이 없으면 대금 분쟁 중 콘텐츠를 계속 쓰지 못할 위험이 있습니다."
+               if "대금 지급 전 이용 근거" in gaps or is_advertising else "")
+        ).strip(),
+        proposed_revision=proposed,
         negotiation_position=_NEG_COUNTERPARTY,
         confidence=0.95,
     )
 
 
 def _check_cp005_third_party_ip(text: str) -> ContentCheckResult | None:
-    """CP-005: 제3자 권리·폰트·이미지·음원·초상권·AI 생성물."""
-    clause_text = _find_clause_text(text, ["3", "10"])
+    """CP-005: 제3자 권리 — 상대방이 실제로 만드는 산출물에 들어갈 수 있는 자료만 따진다.
 
+    텍스트 원고 용역에 "음원·촬영 장소·모델 릴리즈" 를 요구하면 계약과 무관한 체크리스트가 된다. 영상·촬영을
+    맡으면 음원·장소·초상이, 이미지·사진을 맡으면 초상·이미지 라이선스가 쟁점이다.
+    """
+    nums = _locate(text, r"지식\s*재산|저작권|권리\s*보증|제3자", r"제3자[^.\n]{0,40}(?:권리|침해)", limit=2)
+    scope = _scope_text(text)
     has_font_image = _has_any(text, "폰트", "이미지", "유상")
-    has_third_party_ip = _has_any(text, "제3자의 저작권", "지식재산권", "권리 침해")
+    has_third_party_ip = _has_any(text, "제3자의 저작권", "지식재산권", "권리 침해", "권리를 침해")
+    has_warranty_indemnity = bool(
+        re.search(r"제3자[^.\n]{0,60}(?:권리|저작권|지식\s*재산권)[^.\n]{0,40}(?:침해하지|침해\s*아니)", text)
+        and re.search(r"(?:면책|비용과\s*책임|비용으로[^.\n]{0,20}해결|손해를\s*배상)", text)
+    )
+    produces_av = _has_any(scope, "영상", "촬영", "음향", "음원")
+    produces_images = _has_any(scope, "이미지 제작", "사진 촬영", "일러스트", "그래픽", "썸네일")
+
     has_music = _has_any(text, "음원", "효과음", "음향")
     has_portrait = _has_any(text, "초상권", "모델", "출연자")
     has_location = _has_any(text, "촬영 장소", "장소 사용", "로케이션")
-    has_ai_content = _has_any(text, "ai 생성물", "ai생성", "인공지능 생성", "생성형 ai")
+    has_ai_content = _has_any(text, "ai 생성물", "ai생성", "인공지능 생성")
     has_license_evidence = _has_any(text, "라이선스 계약서", "사용허락서", "사용 증빙", "릴리즈")
     has_commercial_confirm = _has_any(text, "상업적", "광고 사용 가능", "매체 제한")
 
-    # Check scope
     missing_items: list[str] = []
-    if not has_music:
-        missing_items.append("음원·효과음")
-    if not has_portrait:
+    if produces_av:
+        if not has_music:
+            missing_items.append("음원·효과음")
+        if not has_location:
+            missing_items.append("촬영 장소 사용 동의")
+    if (produces_av or produces_images) and not has_portrait:
         missing_items.append("모델·출연자 초상권")
-    if not has_location:
-        missing_items.append("촬영 장소 사용 동의")
-    if not has_ai_content:
-        missing_items.append("AI 생성물 라이선스")
-    if not has_license_evidence:
-        missing_items.append("라이선스 증빙 제출 의무")
-    if not has_commercial_confirm:
-        missing_items.append("상업적 광고 사용 가능 여부 확인")
+    if produces_av or produces_images:
+        if not has_ai_content:
+            missing_items.append("AI 생성물 라이선스")
+        if not has_license_evidence:
+            missing_items.append("라이선스 증빙 제출 의무")
+        if not has_commercial_confirm and _has_any(text, "광고"):
+            missing_items.append("상업적 광고 사용 가능 여부 확인")
+    elif not has_warranty_indemnity and not has_license_evidence:
+        missing_items.append("제3자 권리 비침해 보증·면책")
 
     if not has_font_image and not has_third_party_ip:
         status = ChecklistStatus.ABSENT
@@ -477,19 +657,22 @@ def _check_cp005_third_party_ip(text: str) -> ContentCheckResult | None:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
             f"제3자 자료 사용 보증 조항은 있으나, 다음 항목이 불명확합니다: {', '.join(missing_items)}. "
-            "유상 폰트·이미지 이외에 음원, 영상소스, 모델 초상권, 촬영 장소, AI 생성물에 대한 "
-            "라이선스 확인 및 증빙 제출 의무가 없어 갑이 광고 집행 중 제3자 권리 침해 위험에 노출됩니다."
+            + ("유상 폰트·이미지 이외에 음원, 영상소스, 모델 초상권, 촬영 장소, AI 생성물에 대한 "
+               "라이선스 확인 및 증빙 제출 의무가 없어 갑이 광고 집행 중 제3자 권리 침해 위험에 노출됩니다."
+               if produces_av else
+               "상대방이 제작하는 이미지·자료의 출처와 이용 조건을 확인할 수단이 없어 게시 후 권리 침해 분쟁에 노출됩니다.")
         )
     else:
         return None
 
+    label = _label(nums) or "제3자 권리 조항"
     return ContentCheckResult(
         checklist_id="CP-005",
-        clause_ids=["제3조 제2항", "제10조"],
-        clause_titles=["콘텐츠 제작(제3자 자료)", "지식재산권"],
-        severity="HIGH",
-        issue_title="제3조 제2항 및 제10조 — 제3자 권리·라이선스 증빙 보완 필요",
-        original_text=clause_text or "[제3조 제2항/제10조] 제3자 자료 및 지식재산권 관련 조항",
+        clause_ids=[f"제{n}조" for n in nums],
+        clause_titles=_titles(text, nums) or ["제3자 자료", "지식재산권"][: len(nums)],
+        severity="HIGH" if produces_av else "MEDIUM",
+        issue_title=f"{label} — 제3자 권리·라이선스 증빙 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 제3자 자료 및 지식재산권 관련 조항"),
         status=status,
         problem=problem,
         legal_business_reason=(
@@ -497,6 +680,8 @@ def _check_cp005_third_party_ip(text: str) -> ContentCheckResult | None:
             "저작권자 또는 모델로부터 사용중지 가처분이나 손해배상 청구를 받을 수 있습니다. "
             "특히 상업적 광고 사용 가능 여부를 사전에 확인하지 않으면 계약 위반 및 "
             "광고 중단 손해를 부담해야 합니다."
+        ) if produces_av else (
+            "권리 확인 수단 없이 게시하면 제3자의 게시 중단 요구·손해배상 청구에 우리가 먼저 대응해야 합니다."
         ),
         proposed_revision=_REV_CP005_THIRD_PARTY_IP,
         negotiation_position=_NEG_COUNTERPARTY,
@@ -505,63 +690,77 @@ def _check_cp005_third_party_ip(text: str) -> ContentCheckResult | None:
 
 
 def _check_cp006_termination(text: str) -> ContentCheckResult | None:
-    """CP-006: 해지 시 정산 및 중간 산출물 인도."""
-    clause_text = _find_clause_text(text, ["12"])
+    """CP-006: 해지 시 정산 및 중간 산출물 인도 — 해지 조의 문언으로 판정한다."""
+    nums = _locate(text, r"해지|해제|종료", r"해지|해제")
+    area = _area(text, nums) or text
 
     has_termination = _has_any(text, "해제", "해지", "계약의 해")
-    has_settlement = _has_any(text, "정산", "비용 정산", "기성고")
-    has_work_product_return = _has_any(text, "산출물", "시안", "촬영 원본", "인도")
-    has_clear_basis = _has_any(text, "실제 수행", "합리적으로 산정", "비율", "기준")
-    has_counterparty_refund = _has_any(text, "반환", "환급")
+    has_clear_basis = _has_any(area, "실제 수행", "합리적으로 산정", "비율", "기준")
+    has_work_product_return = _has_any(area, "산출물", "시안", "촬영 원본", "인도", "귀속")
+    pays_for_unfinished = bool(re.search(r"진행\s*중인?\s*작업|미완성|중간\s*산출물|기여도", area))
 
     if not has_termination:
         status = ChecklistStatus.ABSENT
         problem = "계약 해제·해지 관련 조항이 없습니다."
-    elif has_termination and _has_any(text, "상호 협의한다", "협의하여 정한다") and not has_clear_basis:
+    elif _has_any(area, "상호 협의한다", "협의하여 정한다", "협의하여 정산") and not has_clear_basis:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
             "해지 조항은 있으나 정산 방법이 '상호 협의'에만 의존하고 구체적 기준이 없습니다. "
             "갑 귀책 해지 시 실수행 과업 산정 기준, 을 귀책 해지 시 대금 반환 범위, "
             "해지 시 중간 산출물(촬영 원본, 시안, 편집 파일 등) 인도 의무가 불명확합니다."
         )
-    elif has_termination and not has_work_product_return:
+    elif not has_work_product_return and pays_for_unfinished:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
-            "해지 시 정산 조항은 있으나, 을이 제작한 중간 산출물(촬영 원본, 시안, 편집 파일 등)을 "
-            "갑에게 인도하는 의무가 명확하지 않습니다."
+            "해지 시 진행 중인 작업까지 정산해 대가를 지급하도록 되어 있으나, 그 대가를 치른 중간 작업물(초안·자료 등)을 "
+            "갑에게 인도하고 이용하게 하는 의무가 없습니다 — 대금은 지급하고 결과물은 받지 못하는 구조가 될 수 있습니다."
         )
     else:
         return None
 
+    label = _label(nums) or "해지 조항"
     return ContentCheckResult(
         checklist_id="CP-006",
-        clause_ids=["제12조 제3항"],
-        clause_titles=["계약의 해제 및 해지(정산)"],
+        clause_ids=[f"제{n}조" for n in nums],
+        clause_titles=_titles(text, nums) or ["계약의 해제 및 해지(정산)"][: len(nums)],
         severity="MEDIUM",
-        issue_title="제12조 제3항 — 해지 시 정산 및 산출물 인도 기준 보완 필요",
-        original_text=clause_text or "[제12조] 계약의 해제 및 해지 관련 조항",
+        issue_title=f"{label} — 해지 시 정산 및 산출물 인도 기준 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 계약의 해제 및 해지 관련 조항", r"정산"),
         status=status,
         problem=problem,
         legal_business_reason=(
             "정산 기준이 없으면 해지 후 대금 반환 또는 추가 지급 금액을 두고 장기간 분쟁이 발생합니다. "
-            "특히 촬영 완료 후 편집 미완성 단계에서 해지하면 갑이 촬영 원본을 받지 못하고 "
+            "특히 작업 도중 해지하면 갑이 중간 작업물을 받지 못하고 "
             "재제작 비용을 전액 부담해야 하는 상황이 생길 수 있습니다."
         ),
-        proposed_revision=_REV_CP006_TERMINATION,
+        proposed_revision=_REV_CP006_TERMINATION if _has_any(_scope_text(text), "영상", "촬영", "편집", "시안")
+        else _cp006_text_revision(text),
         negotiation_position=_NEG_COUNTERPARTY,
     )
 
 
-def _check_cp007_damages(text: str) -> ContentCheckResult | None:
-    """CP-007: 손해배상 및 책임 범위."""
-    clause_text = _find_clause_text(text, ["14"])
+def _cp006_text_revision(text: str) -> str:
+    """텍스트·기획 산출물용 — 원문 정산 문언은 그대로 두고 인도·권리 귀속만 덧붙인다."""
+    gab, eul = _quoted_labels(text)
+    ip = _locate(text, _RX_IP_TITLE, r"지식\s*재산|저작권|소유권", limit=1)
+    where = f"제{ip[0]}조" if ip else "지식재산권 조항"
+    return (
+        f"해지에 따라 진행 중인 작업을 정산하는 경우, {eul}은 정산 대상 작업물(초안·조사 자료를 포함한다)을 지체 없이 "
+        f"{gab}에게 인도하며, 그 작업물에 관한 권리는 정산 대금 지급과 동시에 {where}에 따라 {gab}에게 귀속된다."
+    )
 
+
+def _check_cp007_damages(text: str) -> ContentCheckResult | None:
+    """CP-007: 손해배상 및 책임 범위 — 다른 조의 제3자 분쟁 면책까지 함께 본다."""
+    nums = _locate(text, r"손해\s*배상|책임", r"손해")
     has_damages = _has_any(text, "손해배상", "손해")
-    has_all_damages = _has_any(text, "모든 손해액", "전부 배상")
-    has_ip_damages = _has_any(text, "지식재산권 침해", "저작권 침해")
-    has_indirect = _has_any(text, "간접손해", "특별손해", "제3자 청구")
+    has_all_damages = bool(re.search(r"모든\s*손해", text))
+    # 제3자 권리 분쟁은 지식재산 조의 보증·면책("을의 비용과 책임으로 분쟁을 해결")이 이미 다룰 수 있다.
+    has_third_party_cover = bool(re.search(
+        r"제3자[^.\n]{0,80}(?:분쟁|청구|주장)[^.\n]{0,120}(?:면책|비용과\s*책임|비용으로|손해를\s*배상)", text))
+    has_ip_damages = _has_any(text, "지식재산권 침해", "저작권 침해") or has_third_party_cover
+    has_indirect = _has_any(text, "간접손해", "특별손해", "제3자 청구") or has_third_party_cover
     has_lawyer_fees = _has_any(text, "변호사 비용", "소송 비용")
-    has_ad_disruption = _has_any(text, "광고 집행 중단", "광고 중단", "브랜드")
 
     if not has_damages:
         status = ChecklistStatus.ABSENT
@@ -573,7 +772,7 @@ def _check_cp007_damages(text: str) -> ContentCheckResult | None:
             "브랜드 훼손으로 인한 손해배상의 범위(직접손해, 제3자 청구 대응 비용, 변호사 비용, "
             "광고 중단·대체 제작 비용)가 불명확합니다."
         )
-    elif has_damages and not has_ip_damages:
+    elif not has_ip_damages:
         status = ChecklistStatus.PRESENT_BUT_WEAK
         problem = (
             "손해배상 조항은 있으나 지식재산권 침해로 인한 손해배상, "
@@ -582,13 +781,14 @@ def _check_cp007_damages(text: str) -> ContentCheckResult | None:
     else:
         return None
 
+    label = _label(nums) or "손해배상 조항"
     return ContentCheckResult(
         checklist_id="CP-007",
-        clause_ids=["제14조"],
-        clause_titles=["손해배상"],
+        clause_ids=[f"제{n}조" for n in nums],
+        clause_titles=_titles(text, nums) or ["손해배상"][: len(nums)],
         severity="MEDIUM",
-        issue_title="제14조 — 손해배상 범위(IP 침해·광고중단·제3자 청구) 보완 필요",
-        original_text=clause_text or "[제14조] 손해배상 관련 조항",
+        issue_title=f"{label} — 손해배상 범위(IP 침해·광고중단·제3자 청구) 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 손해배상 관련 조항"),
         status=status,
         problem=problem,
         legal_business_reason=(
@@ -601,13 +801,18 @@ def _check_cp007_damages(text: str) -> ContentCheckResult | None:
     )
 
 
+#: 상대방의 성과물 이용·공개를 우리 허락에 묶는 문언.
+_RX_PORTFOLIO_RESTRICT = re.compile(
+    r"사전\s*서면\s*동의\s*없이|서면\s*허락|허락을\s*받아야|동의를\s*받아야|사용할\s*수\s*없다|공개할\s*수\s*없다"
+)
+
+
 def _check_cp008_portfolio(text: str) -> ContentCheckResult | None:
     """CP-008: 포트폴리오·외부 공개 제한."""
-    clause_text = _find_clause_text(text, ["11"])
-
+    nums = _locate(text, r"비밀|포트폴리오|활용", r"포트폴리오|비밀", limit=1)
     has_confidentiality = _has_any(text, "비밀유지", "비밀")
     has_portfolio_clause = _has_any(text, "포트폴리오", "홈페이지", "레퍼런스", "보도자료")
-    has_portfolio_restrict = _has_any(text, "사전 서면 동의 없이", "사용하거나 공개할 수 없다")
+    has_portfolio_restrict = bool(_RX_PORTFOLIO_RESTRICT.search(text))
 
     if has_portfolio_clause and has_portfolio_restrict:
         return None  # PRESENT_ACCEPTABLE
@@ -623,13 +828,14 @@ def _check_cp008_portfolio(text: str) -> ContentCheckResult | None:
             "갑의 신제품 출시 전 비밀 유지 및 브랜드 관리에 문제가 생길 수 있습니다."
         )
 
+    label = _label(nums) or "비밀유지 조항"
     return ContentCheckResult(
         checklist_id="CP-008",
-        clause_ids=["제11조"],
-        clause_titles=["비밀유지"],
+        clause_ids=[f"제{n}조" for n in nums],
+        clause_titles=_titles(text, nums) or ["비밀유지"][: len(nums)],
         severity="MEDIUM",
-        issue_title="제11조 — 을의 포트폴리오·외부 공개 금지 조항 보완 필요",
-        original_text=clause_text or "[제11조] 비밀유지 관련 조항",
+        issue_title=f"{label} — 을의 포트폴리오·외부 공개 금지 조항 보완 필요",
+        original_text=_quote(text, nums, f"[{label}] 비밀유지 관련 조항"),
         status=status,
         problem=problem,
         legal_business_reason=(

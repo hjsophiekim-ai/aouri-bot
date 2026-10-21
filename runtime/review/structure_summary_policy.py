@@ -72,9 +72,12 @@ _NDA_FIELDS: tuple[StructureField, ...] = (
 # ── 용역·개발·도급 계약군 전용 ────────────────────────────────────────────
 _SERVICE_FIELDS: tuple[StructureField, ...] = (
     StructureField("our_legal_role", "우리 측 지위"),
-    StructureField("deliverables_ip_owner", "산출물 지식재산권 귀속", "미기재 — 귀속 주체 명시 필요"),
-    StructureField("acceptance_criteria", "검수 기준", "미기재"),
-    StructureField("payment_terms", "대금 지급 조건", "미기재"),
+    # 값은 파이프라인이 원문 대조로 채운다(legal_map_grounding.resolve_summary_facts).
+    # 값이 없다는 것은 대조를 못 했다는 뜻이지 계약에 조항이 없다는 뜻이 아니다 —
+    # 그래서 빈 값 문구가 "미기재" 를 단정하지 않는다(2026-10-21 실측).
+    StructureField("deliverables_ip_owner", "산출물 지식재산권 귀속", "원문 대조 전 — 확인 필요"),
+    StructureField("acceptance_criteria", "검수 기준", "원문 대조 전 — 확인 필요"),
+    StructureField("payment_terms", "대금 지급 조건", "원문 대조 전 — 확인 필요"),
 )
 
 #: contract_type_code 접두/부분 문자열 → 추가 필드셋.

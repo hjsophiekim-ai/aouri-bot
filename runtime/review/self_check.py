@@ -74,6 +74,52 @@ _RX_MONETARY_PENALTY_LANGUAGE = re.compile(
     r"|liquidated\s+damages|penalty\s+for\s+delay|\d+(?:\.\d+)?\s*%[^.\n]{0,40}(?:per|each)\s+day",
     re.IGNORECASE,
 )
+_RX_ARTICLE_HEAD_LINE = re.compile(r"(?m)^\s*제\s*(\d+)\s*조")
+
+
+def unreviewed_monetary_penalties(
+    full_text: str,
+    clause_results: list[dict[str, Any]],
+    our_labels: tuple[str, ...] = (),
+) -> list[dict[str, str]]:
+    """우리가 부담하는 금전 제재 문언 중 어떤 검토 결과도 다루지 않은 것.
+
+    self_check 와 다운로드 경로가 같은 판단을 쓴다(2026-10-21). 종전에는 두 곳이 각자
+    "원문에 지체상금 낱말이 있는데 사유에 '%' 가 든 finding 이 없다" 로 판정했다 —
+    실측(프리랜서 용역계약): 상대방이 우리에게 부담하는 지체상금(1/1000)인데도 "대응
+    검토항목이 없습니다 · 위험도 과소평가 자동 상향 보정함" 이 문서에 실렸고, 상향된 항목은 없었다.
+    """
+    from runtime.review.clause_direction import DIRECTION_THEY_BEAR, burden_direction
+
+    body = str(full_text or "")
+    heads = [(m.start(), m.group(1)) for m in _RX_ARTICLE_HEAD_LINE.finditer(body)]
+    reviewed_articles = {
+        str(cr.get("article_number") or "") for cr in clause_results or []
+        if isinstance(cr, dict) and not cr.get("dedup_suppressed")
+    }
+    legacy = any(
+        isinstance(cr, dict) and not cr.get("dedup_suppressed") and (
+            str(cr.get("clause_id") or "") == "clr_late_penalty_rate_uncapped"
+            or "%" in str(cr.get("legal_business_reason") or ""))
+        for cr in clause_results or []
+    )
+    out: list[dict[str, str]] = []
+    for m in _RX_MONETARY_PENALTY_LANGUAGE.finditer(body):
+        prev_end = body.rfind("다.", 0, m.start())
+        prev_head = max((pos for pos, _ in heads if pos <= m.start()), default=-1)
+        start = max(prev_end + 2 if prev_end >= 0 else 0, prev_head if prev_head >= 0 else 0)
+        end = body.find("다.", m.end())
+        # PDF 줄바꿈은 문장 경계가 아니다 — 그대로 넘기면 주어를 못 찾아 방향이 뒤집힌다.
+        sentence = re.sub(r"\s+", " ", body[start: end + 2 if end >= 0 else len(body)]).strip()
+        if burden_direction(sentence, our_labels) == DIRECTION_THEY_BEAR:
+            continue  # 상대방이 부담한다 — 우리 금전리스크가 아니다
+        art = next((n for pos, n in reversed(heads) if pos <= m.start()), "")
+        if (art and art in reviewed_articles) or legacy:
+            continue
+        out.append({"article": art, "sentence": re.sub(r"\s+", " ", sentence)[:200]})
+    return out
+
+
 _RX_RATE_REDUCTION_MARKER = re.compile(r"인하|낮은\s*요율|lower(?:ed)?\s+rate", re.IGNORECASE)
 _RX_CAP_MARKER = re.compile(r"상한|한도|cap\b|maximum|exceed", re.IGNORECASE)
 _RX_CONDITIONAL_FUNDING_LANGUAGE = re.compile(
@@ -96,6 +142,7 @@ def run_self_check(
     final_findings_clause_ids: set[str] | None = None,
     legal_map_fields: dict[str, Any] | None = None,
     legal_applicability_results: list[dict[str, Any]] | None = None,
+    our_labels: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Run the final self-check pass. Mutates clause_results in place for (3),
     returns a report dict summarising all 7 checks for inclusion in meta."""
@@ -350,14 +397,9 @@ def run_self_check(
 
     # 10-2: 계약금액 대비 가장 큰 금전리스크(지체상금·위약금 등)를 찾았는가 —
     # 원문에 벌칙성 금전조항 언어가 있는데 대응 finding이 하나도 없으면 놓친 것.
-    _has_penalty_finding = any(
-        str(cr.get("clause_id") or "") == "clr_late_penalty_rate_uncapped"
-        or "%" in str(cr.get("legal_business_reason") or "")
-        for cr in active_clause_results
-    )
-    _monetary_risk_unconfirmed = bool(
-        _RX_MONETARY_PENALTY_LANGUAGE.search(full_text or "") and not _has_penalty_finding
-    )
+    _unreviewed_penalties = unreviewed_monetary_penalties(full_text, active_clause_results, our_labels)
+    _monetary_risk_unconfirmed = bool(_unreviewed_penalties)
+    report["unreviewed_monetary_penalties"] = _unreviewed_penalties
     report["largest_monetary_risk_unconfirmed"] = _monetary_risk_unconfirmed
 
     # 10-3: 타인의 귀책을 우리가 떠안는 구조가 있는데 severity가 HIGH가

@@ -172,7 +172,12 @@ def explicit_role_from_labels(text: str, our_label: str, counterparty_label: str
 
     ol = re.escape(our_label)
     cl = re.escape(counterparty_label)
-    self_supplier = re.search(rf'{_Q}{ol}{_Q}\s*(?:은|는)[^.]{{0,20}}(매도자|매도인|공급자|판매자)(?:로서)?', text)
+    # 자기 선언은 역할 명사가 **곧바로** 이어질 때만이다. 2026-10-13 실측: 제11조 제2항 "“갑”은 “을”이
+    # 계약물품을 납품한 경우 공급자에게 … 수령 증명서를 교부" 의 "공급자" 가 갑의 자기 선언으로 읽혀, 구매자인
+    # 일룸이 공급자로 확정됐다(당사자 지도 갑=공급자, 을=구매자).
+    _decl = r"\s*(?:은|는)\s*(?:본\s*계약(?:의|상|에서)?\s*)?"
+    _cop = r"(?:로서|으로서|이며|이고|이다|입니다|\s*\(|\s*,|\s*지위)"
+    self_supplier = re.search(rf'{_Q}{ol}{_Q}{_decl}(매도자|매도인|공급자|판매자){_cop}', text)
     reverse_buy = re.search(
         rf"{_Q}{cl}{_Q}\s*(?:은|는)[^.]{{0,60}}{_Q}{ol}{_Q}\s*"
         r"(?:으로부터|로부터)[^.]{0,30}(구매|매수|매입|구입)",
@@ -180,7 +185,7 @@ def explicit_role_from_labels(text: str, our_label: str, counterparty_label: str
     )
     if self_supplier or reverse_buy:
         return "supplier"
-    self_buyer = re.search(rf'{_Q}{ol}{_Q}\s*(?:은|는)[^.]{{0,20}}(매수인|구매자|발주자)(?:로서)?', text)
+    self_buyer = re.search(rf'{_Q}{ol}{_Q}{_decl}(매수인|구매자|발주자){_cop}', text)
     forward_buy = re.search(
         rf"{_Q}{ol}{_Q}\s*(?:은|는)[^.]{{0,60}}{_Q}{cl}{_Q}\s*"
         r"(?:으로부터|로부터)[^.]{0,30}(구매|매수|매입|구입)",
@@ -188,4 +193,42 @@ def explicit_role_from_labels(text: str, our_label: str, counterparty_label: str
     )
     if self_buyer or forward_buy:
         return "buyer"
+    # 거래 방향 문장 — "“을”이 공급하는 계약물품", "“을”이 … 납품", "“갑”이 발주" 처럼 누가 물품을 대고
+    # 누가 발주하는지가 여러 조에 걸쳐 일관되면 그것으로 정한다(한쪽만 나올 때만).
+    def _n(label: str, verbs: str) -> int:
+        hits = re.finditer(rf"{_Q}{re.escape(label)}{_Q}\s*(?:이|가)\s*(?:[^.\n“”\"]{{0,12}}\s)?(?:{verbs})", text)
+        # "“갑”이 지정하는 장소에 납품" 의 납품 주체는 갑이 아니다.
+        return sum(1 for m in hits if not re.search(r"지정|발주|요구|청구", m.group(0)[len(label) + 2:-2]))
+    supply_verbs = r"공급하는|납품한|납품하|납품할|제조\s*납품"
+    order_verbs = r"발주한|발주하|발주할|지정하는\s*장소"
+    ours_supply, theirs_supply = _n(our_label, supply_verbs), _n(counterparty_label, supply_verbs)
+    ours_order, theirs_order = _n(our_label, order_verbs), _n(counterparty_label, order_verbs)
+    if theirs_supply >= 2 and not ours_supply and not theirs_order:
+        return "buyer"
+    if ours_supply >= 2 and not theirs_supply and not ours_order:
+        return "supplier"
     return None
+
+
+# ── 계약이 정의하지 않은 "당사" 를 계약의 우리 측 표기로 맞춘다 (2026-10-21) ──
+#
+# 우리 측 표기(갑/을)를 확정하지 못한 단계에서 만든 수정 문안은 "당사" 를
+# 기본값으로 쓴다(rewrite_engine._party_term). 계약이 "당사" 를 정의하지 않으면
+# 그 문안은 원문에 그대로 넣을 수 없다 — 실측(프리랜서 용역계약): "당사의 사전
+# 서면 승인 … 단, … "갑"의 최종 결정" 처럼 한 문장에 두 이름이 섞였다.
+# 당사자 지도가 확정한 우리 측 표기가 있을 때만 바꾼다. 모르면 그대로 둔다.
+
+_RX_UNDEFINED_OUR = re.compile(r"당사(?!자)(?=의|는|가|에게|에|와|과|를|로|\s)")
+
+
+def contract_defines_dangsa(text: str) -> bool:
+    return bool(re.search(r"당사(?!자)", str(text or "")))
+
+
+def normalize_undefined_our_term(value: str, *, text: str, our_label: str) -> str:
+    """계약이 "당사" 를 정의하지 않았으면 문안 속 "당사" 를 우리 측 표기로 바꾼다."""
+    label = str(our_label or "").strip()
+    if not value or not label or contract_defines_dangsa(text) or label == "당사":
+        return value
+    quoted = f'"{label}"' if re.search(rf'["“]{re.escape(label)}["”]', str(text or "")) else label
+    return _RX_UNDEFINED_OUR.sub(quoted, value)

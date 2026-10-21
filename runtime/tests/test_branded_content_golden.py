@@ -190,7 +190,9 @@ class PipelineGoldenTest(unittest.TestCase):
             if c.get("article_number") == "9":
                 self.assertNotRegex(str(c.get("issue_title") or "") + str(c.get("problem") or ""), r"손해\s*배상")
         cp = next(c for c in self.crs if c["clause_id"] == "CP-007")
-        self.assertTrue(cp["display_path"].startswith("제14조"), cp["display_path"])
+        # 2026-10-21: 체크리스트가 조를 **내용으로** 찾는다 — 이 계약의 손해배상 조는 제13조("손해배상 등")다.
+        # 종전 기대값 "제14조"(광고주의 귀책사유 및 조치)는 양식 조번호를 하드코딩하던 때의 값이었다.
+        self.assertTrue(cp["display_path"].startswith("제13조"), cp["display_path"])
 
     def test_focus_answers_first_and_consistent(self) -> None:
         cov = self.meta["user_review_coverage"]

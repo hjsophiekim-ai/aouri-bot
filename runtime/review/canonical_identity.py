@@ -47,7 +47,9 @@ _RX_PROVIDER = re.compile(
 )
 _RX_RECIPIENT = re.compile(
     r"도급인|발주(?:자|처)|주문자|구매(?:자|사)|매수인|위탁자|임대인|"
-    r"employer|owner|buyer|purchaser|client|licensee|수령자|정보\s*수령",
+    # ordering_party — party_role 분류기의 지위 코드(도급인/발주자). 코드가 정규화되지 않으면 지위가 빈 채로
+    # 남아 "계약유형/당사자 지위 확인 필요" 경고가 서는데(2026-10-19 실측), 보고서는 발주자라고 쓰고 있었다.
+    r"employer|owner|buyer|purchaser|client|licensee|ordering_party|수령자|정보\s*수령",
     re.IGNORECASE,
 )
 

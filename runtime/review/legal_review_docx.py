@@ -246,6 +246,9 @@ def _render_redline_instruction(body: ET.Element, redline: dict[str, Any], *, co
     edit_type_label = _EDIT_TYPE_LABELS.get(str(redline.get("edit_type") or ""), str(redline.get("edit_type") or ""))
     _para(body, f"수정 위치: {redline.get('edit_location') or ''}", bold=True, color=color, indent=1)
     _para(body, f"수정 방식: {edit_type_label}", indent=1)
+    if redline.get("held"):
+        # 함께 반영했을 때 위치·참조·기존 보호를 확인하지 못한 수정안 — 지적은 유효하나 그대로 넣으면 안 된다.
+        _para(body, f"※ 자동 적용 보류: {redline.get('hold_reason') or ''}", bold=True, color=COLOR_HIGH, indent=1)
     _para(body, "수정 문구:", bold=True, color=color, indent=1)
     final_text = str(redline.get("final_clause_text") or "")
     for line in final_text.splitlines()[:20] or [""]:

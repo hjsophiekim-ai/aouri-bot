@@ -194,10 +194,12 @@ class Section1IdenticalAcrossFormatsTest(unittest.TestCase):
 
     def test_docx_only_fields_now_present_in_pdf(self) -> None:
         flat = "".join(self.pdf_rows)
-        for expected in ("핵심 결론:", "미결 사항:", "분석 신뢰도",
+        for expected in ("핵심 결론:", "미결 사항:",
                          "고객사(상대방) 양식 여부", "비밀유지기간"):
             self.assertIn(expected.replace(" ", ""), flat.replace(" ", ""),
                           f"PDF 섹션 1 에 {expected} 가 없다")
+        # 검증 근거 없는 분류기 점수는 신뢰도 %로 내보내지 않는다(2026-10-19 지시 10항)
+        self.assertNotIn("분석신뢰도", flat.replace(" ", ""))
 
     def test_contract_type_label_is_human_readable(self) -> None:
         for rows in (self.pdf_rows, self.docx_rows):

@@ -383,6 +383,7 @@ def run_effect_baseline_review(
 
             final_text, _addition, position = minimal_edit_for(
                 original_text=text, clause_title=title, effects=[check.effect],
+                our_labels=our_labels,
             )
             display_path = _clause_attr(clause, "display_path") or title
             out.append({

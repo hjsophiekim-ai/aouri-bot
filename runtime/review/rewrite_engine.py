@@ -755,13 +755,36 @@ def _party_term(party: PartyRole | None, *, which: str) -> str:
     return "상대방"
 
 
+_RX_STRUCT_HEAD = re.compile(r"^\s*(?:[①-⑳]|\d{1,2}\s*[.)]|제\s*\d+\s*조|[-•·]|\(\s*[가-하\d]\s*\))")
+_RX_SENT_END = re.compile(r"(?:[.。!?]|[다함음됨임])[\"'”’)\]]*\s*$")
+
+
+def _logical_lines(text: str) -> list[str]:
+    """PDF 줄바꿈으로 끊긴 문장을 한 줄로 잇는다.
+
+    줄 단위 삽입·교체가 시각적 줄바꿈을 문장 경계로 오인하면, 새 문장이 원문 문장
+    한가운데("…사전에 / [삽입문] / 서면으로 합의한다.")에 끼어든다(2026-10-21 실측).
+    조·항·호 머리나 문장 끝에서만 줄을 나눈다.
+    """
+    out: list[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if out and not _RX_SENT_END.search(out[-1]) and not _RX_STRUCT_HEAD.match(line):
+            out[-1] = out[-1] + " " + line
+        else:
+            out.append(line)
+    return out
+
+
 def _replace_first_line(
     text: str,
     *,
     predicate,
     replacement_line: str,
 ) -> tuple[str, bool]:
-    lines = (text or "").splitlines()
+    lines = _logical_lines(text)
     for i, line in enumerate(lines):
         if predicate(line):
             lines[i] = replacement_line
@@ -770,7 +793,7 @@ def _replace_first_line(
 
 
 def _insert_after_first_match(text: str, *, predicate, insert_line: str) -> str:
-    lines = (text or "").splitlines()
+    lines = _logical_lines(text)
     for i, line in enumerate(lines):
         if predicate(line):
             lines.insert(i + 1, insert_line)
@@ -841,7 +864,9 @@ def _rewrite_app_003_sow(text: str, *, posture: str, party: PartyRole | None) ->
         return None
     our = _party_term(party, which="our")
     cp = _party_term(party, which="counterparty")
-    ins = f"개발 범위/요구사항(SOW) 및 변경요청은 {our}의 서면 승인에 따라 확정되며, 승인 없는 추가 개발/비용 청구는 인정되지 않는다."
+    # 이 규칙은 개발용역뿐 아니라 일반 용역(SOW) 유형에도 걸린다 — "개발" 이라고 쓰면 콘텐츠·자문
+    # 용역의 수정문안에 다른 계약의 문언이 섞인다(2026-10-21 실측). 과업 일반 표현으로 쓴다.
+    ins = f"과업의 범위·사양 및 그 변경은 {our}의 서면 승인에 따라 확정되며, 승인 없는 추가 과업에 대한 비용 청구는 인정되지 않는다."
     out, replaced = _replace_first_line(
         original,
         predicate=lambda l: _has_any(l, ["범위", "사양", "요구사항", "SOW", "변경"]) and _has_any(l, _AMBIG),
@@ -849,7 +874,7 @@ def _rewrite_app_003_sow(text: str, *, posture: str, party: PartyRole | None) ->
     )
     if not replaced and _has_any(original, ["범위", "사양", "요구사항", "SOW", "변경요청", "change request"]):
         out = _insert_after_first_match(out, predicate=lambda l: _has_any(l, ["범위", "사양", "요구사항", "SOW"]), insert_line=ins)
-    reason = "SOW/변경관리(승인·비용·일정) 핵심 문구를 별도 보강문이 아닌 본문 문장으로 흡수."
+    reason = "과업 범위 변경(승인·비용·일정) 관리 문구를 별도 보강문이 아닌 본문 문장으로 흡수."
     return RewriteProposal(suggested_rewrite=out, rewrite_reason=reason, reason_codes=["APP-003"])
 
 

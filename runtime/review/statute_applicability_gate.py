@@ -766,13 +766,29 @@ def _advertising_planned(text: str) -> bool:
     return False
 
 
+def _advertising_sentence(text: str) -> str:
+    flat = re.sub(r"\s*\n\s*", " ", str(text or ""))
+    for sent in re.split(r"(?<=[.。])\s+|(?<=다)\s+(?=[①-⑳]|\d+\.)", flat):
+        if _RX_ADVERTISING.search(sent) and not _RX_AD_PROHIBITION.search(sent):
+            return sent
+    return ""
+
+
 def assess_advertising_act(*, text: str) -> StatuteDecision:
     """표시광고법 — 대외 광고·표시 행위가 있어야 적용된다."""
-    if _advertising_planned(str(text or "")):
+    sent = _advertising_sentence(str(text or ""))
+    if sent:
+        # 근거 문장의 어휘로만 말한다 — 2026-10-13 실측: 프랜차이즈 별첨의 "광고를 시행할 수 있다" 한 줄에
+        # 계약에 없는 "협찬 표시" 를 이유로 붙였다(다른 광고계약의 문구가 섞인 것처럼 읽힌다).
+        flat_sent = sent.replace("·", "")
+        words = [w for w in ("광고", "홍보", "협찬", "추천·보증", "마케팅 콘텐츠") if w.replace("·", "") in flat_sent]
+        m = _RX_ADVERTISING.search(sent)
+        snippet = sent[max(0, m.start() - 20): m.end() + 25].strip() if m else sent[:45]
         return StatuteDecision(
             statute="표시광고법",
             conclusion=CONCLUSION_PARTIAL,
-            reason="광고·협찬 표시 행위가 예정되어 있어 표시·광고 관련 부분에 적용됩니다.",
+            reason=(f"계약에 {'·'.join(words) or '광고'} 행위가 예정되어 있어(“…{snippet}…”) 그 표시·광고 내용에 "
+                    "한하여 적용됩니다."),
         )
     return StatuteDecision(
         statute="표시광고법",

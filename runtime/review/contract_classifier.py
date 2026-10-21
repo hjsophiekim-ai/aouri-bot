@@ -451,9 +451,12 @@ def _classify_type_code(
         "저작권 이전", "소유권 이전", "저작재산권", "2차적저작물",
         "결과물", "산출물",
     )
+    # "생성형 AI" 낱말만으로는 AI 검색 마케팅 신호가 아니다 — 2026-10-19 실측: 콘텐츠 용역계약의 비밀유지 조항
+    # "비공개 자료를 … 생성형 AI 서비스에 입력해서는 안 된다" 하나로 콘텐츠 제작 판정(Step 0)을 건너뛰었다.
+    # 검색·노출과 함께 쓰일 때만 센다.
     has_ai_search_specific = has(
         "ai 검색", "검색 노출", "검색 최적화", "aeo", "geo", "llm",
-        "생성형 ai", "검색 알고리즘", "키워드 광고", "검색 알고리즘",
+        "생성형 ai 검색", "생성형 ai 노출", "검색 알고리즘", "키워드 광고",
     )
     has_ad_content_or_ownership_transfer = has(
         "소유권의 귀속", "저작권 이전", "저작재산권", "2차적저작물작성권",
@@ -462,7 +465,9 @@ def _classify_type_code(
 
     # Advertising content production (제품 광고 콘텐츠 제작 대행)
     if has_production_core and not has_ai_search_specific:
-        if has_creative_elements or has_ad_content_or_ownership_transfer:
+        # "광고" 가 한 번도 없는 콘텐츠 제작(브랜드 블로그·뉴스레터 원고 등)을 "제품 광고 콘텐츠 제작 대행" 으로
+        # 부르지 않는다 — 이미지·산출물 같은 낱말은 어떤 제작 용역에도 나온다(2026-10-19 외부 에디터 용역계약).
+        if (has_creative_elements or has_ad_content_or_ownership_transfer) and has("광고"):
             reasons.append("advertising_content_production_strong")
             return "advertising_content_production", reasons
         reasons.append("content_production_service_generic")
@@ -596,8 +601,13 @@ def _classify_type_code(
         has("소유권", "title to the goods", "transfer of ownership"),
     ]
     _goods_trade_count = sum(1 for s in _goods_trade_signals if s)
+    # "장비" 는 낱말로만 센다 — 2026-10-13 실측: 제6조 "포장비, 운임" 의 "포**장비**" 때문에 그림 물품거래계약이
+    # "장비 구매·설치 계약" 으로 분류됐다.
+    # 2026-10-19 실측: 제4조 "취재비, 출장비" 의 "출**장비**" 로 콘텐츠 용역계약이 같은 오분류를 됐다 — "~비"(비용)
+    # 낱말 안의 "장비" 를 함께 막는다.
+    _equipment = bool(re.search(r"(?<![포출])장비|설치|시운전|equipment|installation", combined))
     if _goods_trade_count >= 3:
-        if has("장비", "설치", "시운전", "equipment", "installation"):
+        if _equipment:
             reasons.append(f"equipment_purchase_installation_strong_{_goods_trade_count}signals")
             return "equipment_purchase_installation", reasons
         reasons.append(f"purchase_supply_strong_{_goods_trade_count}signals")
@@ -607,7 +617,7 @@ def _classify_type_code(
         reasons.append("advisory_service")
         return "advisory_service", reasons
 
-    if has("장비", "설치", "시운전") and has("구매", "공급", "납품"):
+    if _equipment and has("구매", "공급", "납품"):
         reasons.append("equipment_purchase_installation")
         return "equipment_purchase_installation", reasons
 

@@ -1662,6 +1662,14 @@ def create_handler(service: RuleQueryService):
                 # 명시한다. 제거할 수 없는 상태만 종전처럼 409 로 막는다.
                 _delivery = DeliveryReport()
                 _meta_status = _remediate_review_status(clause_meta, _delivery)
+                # 수정안을 함께 반영했을 때 검증하지 못한 항목 — 지적은 본문에 남고, 자동 적용 보류 사실을 여기 싣는다.
+                for _held in ((clause_meta or {}).get("revision_set_check") or {}).get("held") or []:
+                    _delivery.add(
+                        "REVISION_SET_HELD",
+                        clause_ids=[str(_held.get("display_path") or _held.get("clause_id") or "")],
+                        reason="수정안 자동 적용 보류 — 지적은 유효",
+                        detail=str(_held.get("reason") or ""),
+                    )
                 if _meta_status.startswith("REVIEW_FAILED"):
                     _json_response(
                         self,
@@ -2729,6 +2737,22 @@ def create_handler(service: RuleQueryService):
                         _user_coverage_docx = _apply_enda_coverage_docx(
                             _user_coverage_docx, _enda_review_docx["user_requests"],
                         )
+                    # [지정 쟁점 판단 단일화, 2026-10-13] 검토 파이프라인이 검증한 지정 조항·별첨 판단을
+                    # 0절(필수 검토항목)·0-3절(요청 답변)에 그대로 싣는다 — 이 경로의 재계산이 "[별첨]" 을
+                    # 빠뜨리고 결론을 조 제목으로 채우던 문제. 게이트는 그대로 둔다.
+                    try:
+                        from runtime.review.user_focus_review import overlay_focus_rows as _overlay_focus_rows
+
+                        _live_ids_docx = {
+                            str(c.get("clause_id") or "") for c in _all_results
+                            if isinstance(c, dict) and not c.get("dedup_suppressed") and not c.get("keep_as_is")
+                        }
+                        _mandatory_target_status, _user_coverage_docx = _overlay_focus_rows(
+                            _mandatory_target_status, _user_coverage_docx,
+                            clause_meta if isinstance(clause_meta, dict) else None, _live_ids_docx,
+                        )
+                    except Exception:  # noqa: BLE001 - 덮기 실패 시 이 경로의 재계산 결과를 그대로 쓴다
+                        pass
                     _user_parse_notice_docx = str(
                         (_user_parse_meta_docx or {}).get("degraded_notice") or ""
                     )
@@ -2748,7 +2772,8 @@ def create_handler(service: RuleQueryService):
                             _USER_SCOPE_FAIL,
                             detail="미답변 검토요청: " + "; ".join(
                                 str(
-                                    x.get("normalized_issue") or x.get("issue") or x.get("code") or x
+                                    (x.get("normalized_issue") or x.get("issue") or x.get("code") or x)
+                                    if isinstance(x, dict) else x  # 미답변 목록은 문자열로도 온다
                                 )[:120]
                                 for x in _unanswered_issues_docx[:6]
                             ),
@@ -2761,21 +2786,22 @@ def create_handler(service: RuleQueryService):
                     # 귀책을 우리가 떠안는데 HIGH가 아님)만은 여기서도 반드시
                     # 재확인한다 — 그 외 항목은 초기 리뷰 단계의 self_check가 이미
                     # meta.self_check에 기록해 둔다.
-                    from runtime.review.self_check import (
-                        _RX_MONETARY_PENALTY_LANGUAGE as _rx_monetary_penalty,
-                    )
+                    from runtime.review.self_check import unreviewed_monetary_penalties as _unreviewed_penalties
                     _active_docx_results = [
                         cr for cr in _all_results
                         if isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is")
                     ]
-                    _has_penalty_finding_docx = any(
-                        str(cr.get("clause_id") or "") == "clr_late_penalty_rate_uncapped"
-                        or "%" in str(cr.get("legal_business_reason") or "")
-                        for cr in _active_docx_results
+                    _our_labels_docx = tuple(
+                        str(p_.get("label") or "") for p_ in (((clause_meta or {}).get("party_map") or {}).get("parties") or [])
+                        if isinstance(p_, dict) and p_.get("is_our_company") and p_.get("label")
                     )
-                    _monetary_risk_unconfirmed_docx = bool(
-                        _rx_monetary_penalty.search(str(text or "")) and not _has_penalty_finding_docx
+                    # 검토 결과(KEEP 포함)가 그 조를 다뤘는지·제재를 우리가 부담하는지까지 본다 — self_check 와 같은 판단.
+                    _penalties_docx = _unreviewed_penalties(
+                        str(text or ""),
+                        [cr for cr in _all_results if isinstance(cr, dict) and not cr.get("dedup_suppressed")],
+                        _our_labels_docx,
                     )
+                    _monetary_risk_unconfirmed_docx = bool(_penalties_docx)
                     _third_party_fault_not_high_docx = [
                         str(cr.get("clause_id") or "")
                         for cr in _active_docx_results
@@ -2793,17 +2819,25 @@ def create_handler(service: RuleQueryService):
                             if isinstance(_cr_tp, dict) and str(_cr_tp.get("clause_id") or "") in _third_party_fault_not_high_docx:
                                 _cr_tp["risk_tier"] = "HIGH"
                                 _cr_tp["severity"] = "HIGH"
-                        _delivery.add(
-                            "REVIEW_FAILED_GLOBAL_REASONING",
-                            clause_ids=_third_party_fault_not_high_docx,
-                            reason="위험도 과소평가가 확인되어 자동 상향 보정함",
-                            detail=(
-                                ("원문에 금전 제재(지연손해금·위약벌 등) 문언이 있으나 대응 검토항목이 없습니다. "
-                                 if _monetary_risk_unconfirmed_docx else "")
-                                + ("제3자 귀책을 우리가 부담하는 조항을 HIGH로 상향했습니다."
-                                   if _third_party_fault_not_high_docx else "")
-                            ).strip(),
-                        )
+                        if _third_party_fault_not_high_docx:
+                            _delivery.add(
+                                "REVIEW_FAILED_GLOBAL_REASONING",
+                                clause_ids=_third_party_fault_not_high_docx,
+                                reason="위험도 과소평가가 확인되어 자동 상향 보정함",
+                                detail="제3자 귀책을 우리가 부담하는 조항을 HIGH로 상향했습니다.",
+                            )
+                        if _monetary_risk_unconfirmed_docx:
+                            # 상향한 것이 없으면 "상향 보정" 이라고 쓰지 않는다 — 어느 조의 어떤 문언이
+                            # 검토되지 않았는지 적어 담당자가 바로 확인하게 한다.
+                            _delivery.add(
+                                "REVIEW_FAILED_GLOBAL_REASONING",
+                                clause_ids=[f"제{x['article']}조" for x in _penalties_docx if x.get("article")],
+                                reason="우리가 부담하는 금전 제재 문언에 대한 검토 결과가 없음 — 담당자 확인 필요",
+                                detail=" / ".join(
+                                    (f"제{x['article']}조: " if x.get("article") else "") + x["sentence"]
+                                    for x in _penalties_docx[:3]
+                                ),
+                            )
                         if _third_party_fault_not_high_docx:
                             _docx_final = _build_final_findings(
                                 _all_results, contract_type_code=_ct_code, include_low=False,

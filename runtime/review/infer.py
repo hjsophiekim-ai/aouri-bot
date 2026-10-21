@@ -37,7 +37,7 @@ ENTITY_KEYWORDS = [
 
 CONTRACT_TYPE_KEYWORDS = [
     ("NDA/비밀유지", ["nda", "비밀유지", "confidential"]),
-    ("앱개발/소프트웨어개발/SI/유지보수/SaaS", ["앱 개발", "소프트웨어 개발", "시스템 개발", "개발용역", "it 용역", "si", "유지보수", "saas", "api 연동", "source code", "산출물", "sla"]),
+    ("앱개발/소프트웨어개발/SI/유지보수/SaaS", ["앱 개발", "소프트웨어 개발", "시스템 개발", "개발용역", "it 용역", "si", "유지보수", "saas", "api 연동", "source code", "sla"]),
     ("운영대행/위탁운영/공간운영/서비스위탁", ["운영대행", "위탁운영", "운영위탁", "공간운영", "매장운영", "라운지 운영", "시설운영", "시설관리", "관리용역", "운영용역", "서비스위탁"]),
     ("개인정보/처리위탁(DPA)", ["처리위탁", "dpa", "data processing", "personal data processing", "수탁자", "위탁자"]),
     ("임대차/전대차", ["임대차", "전대차", "lease", "rental"]),
@@ -149,8 +149,14 @@ def merge_inference(
             is_inferred=not (user_entity and user_contract_type),
         )
 
+    # 파일명 캐시는 **추정값**만 담는다(update_cache 는 is_inferred 일 때만 불린다).
+    # 본문으로 유형·회사를 판단할 수 있는데 캐시를 앞세우면, 한 번 틀린 추정이 같은
+    # 파일명에 영구히 붙고 이름이 같은 다른 계약에도 옮겨 간다(2026-10-21 실측:
+    # 분류기를 고친 뒤에도 같은 파일이 '앱개발' 로 재분류됐다). 본문이 답하지 못할
+    # 때만 캐시를 쓴다.
+    _text_decides = text_contract_type not in ("", "기타/미분류") and text_entity not in ("", "미상")
     inferred = (
-        infer_from_cache(filename, file_path)
+        (None if _text_decides else infer_from_cache(filename, file_path))
         or infer_from_verified_meta(filename)
         or infer_from_path(file_path or filename)
     )

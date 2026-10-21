@@ -1443,9 +1443,12 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       _filteredClauseResults = itemsAll;
       _hiddenFindingIds = _gateOut.hidden;
       const issueClauseCount = Number(revSum.issue_clause_count || meta0.issue_clause_count || 0) || 0;
-      const mustCount = itemsAll.filter(x => x && (x.approval_required || x.high_risk)).length;
-      const medCount = itemsAll.filter(x => x && !x.approval_required && !x.high_risk && (String(x.risk_tier || '').toUpperCase() === 'MEDIUM')).length;
-      const lowCount = itemsAll.filter(x => x && !x.approval_required && !x.high_risk && (String(x.risk_tier || '').toUpperCase() === 'LOW')).length;
+      // 건수는 카드 목록(renderClauseList)과 같은 기준으로 센다 — 중복생략·현행유지 항목까지 세면
+      // 상단은 "필수수정 4"인데 카드와 DOCX 는 1건인 불일치가 생겼다(2026-10-21 실측).
+      const itemsCounted = itemsAll.filter(x => x && !x.dedup_suppressed && !x.keep_as_is);
+      const mustCount = itemsCounted.filter(x => x.approval_required || x.high_risk || String(x.risk_tier || '').toUpperCase() === 'HIGH').length;
+      const medCount = itemsCounted.filter(x => !x.approval_required && !x.high_risk && (String(x.risk_tier || '').toUpperCase() === 'MEDIUM')).length;
+      const lowCount = itemsCounted.filter(x => !x.approval_required && !x.high_risk && (String(x.risk_tier || '').toUpperCase() === 'LOW')).length;
 
       const suggested = (draftSuggest && Array.isArray(draftSuggest.suggested_template_ids)) ? draftSuggest.suggested_template_ids : [];
 

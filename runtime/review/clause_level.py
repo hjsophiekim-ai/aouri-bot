@@ -805,9 +805,16 @@ def _article_int(v: Any) -> int | None:
         return None
 
 
-def _is_hard_block_clause(*, article_int: int | None, title: str, clause_topic: str | None = None) -> bool:
+def _is_hard_block_clause(
+    *, article_int: int | None, title: str, clause_topic: str | None = None, contract_text: str = "",
+) -> bool:
     if article_int in (1, 2, 3):
-        return True
+        # 번호가 아니라 내용으로 본다(2026-10-19 지시 4항) — 제1~3조가 업무 범위·대금 지급·계약기간처럼
+        # 실질 의무를 정하는 계약이 흔하다. 실측(2026-10-21): 5개 조 용역계약의 제1~3조(용역 범위·비용
+        # 지급·비밀유지) 지적이 번호만으로 전부 삭제됐다. 원문을 모를 때만 종전처럼 막는다.
+        if not contract_text:
+            return True
+        return _is_declarative_clause(_article_text_for(contract_text, article_int, {}))
     t = str(title or "").strip()
     if not t:
         t = ""
@@ -828,7 +835,16 @@ def _is_hard_block_clause(*, article_int: int | None, title: str, clause_topic: 
     return False
 
 
+_RX_ANNEX_DISPLAY = re.compile(r"^\[\s*(?:별\s*첨|별\s*표|부\s*칙|부속서|첨\s*부|Appendix|Schedule|Exhibit)", re.IGNORECASE)
+
+
 def _article_int_from_cr(cr: dict[str, Any]) -> int | None:
+    # 별첨·부칙 구간(clause_id "AP-1", 경로 "[별첨] 4. 4)")은 본문 조가 아니다. 2026-10-13 실측: "AP-1"·"AP-2" 의
+    # 숫자가 제1·2조로 읽혀 제1~3조 보호 규칙이 별첨 충돌 finding 6건을 LOW 로 지웠다.
+    if not str(cr.get("article_number") or "").strip() and (
+            _RX_ANNEX_DISPLAY.match(str(cr.get("display_path") or "").strip())
+            or re.search(r"(?:^|__)AP-\d", str(cr.get("clause_id") or ""))):
+        return None
     return (
         _article_int(cr.get("article_number"))
         or _article_int(cr.get("clause_id"))
@@ -1074,6 +1090,10 @@ def _apply_rental_filter(clause_results: list[dict[str, Any]], is_rental: bool) 
         # 물품공급 어디에나 있는 보편 개념이다. 그대로 두면 "소유권 이전시점을
         # 늦추라" 는 선이행 리스크 제안이 통째로 지워진다(2026-09-11 실측).
         if bool(cr.get("is_risk_package")) or bool(cr.get("is_effect_baseline")):
+            continue
+        # 사용자 지정 조항 판단·법무 핵심 finding 은 이 계약 원문에서 만든 것이다 — "반품·반환" 낱말로
+        # 렌탈 템플릿 취급하지 않는다(2026-10-13: 제16조 원화 반품·대금 반환 수정안이 지워졌다).
+        if bool(cr.get("is_user_focus")) or bool(cr.get("legal_core")):
             continue
         combined = (cr.get("suggested_rewrite") or "") + " " + (cr.get("rewrite_reason") or "")
         if _RENTAL_COMMENT_KW.search(combined):
@@ -2679,6 +2699,34 @@ def _is_dealer_trademark_ip_clause(title: str, text: str) -> bool:
     return bool(_DEALER_TRADEMARK_GUARD_KW.search(combined))
 
 
+_RX_DECLARATIVE = re.compile(
+    r"목적(?:이|으로)\s*(?:있다|한다)|목적을\s*둔다|신의(?:와|에\s*따라|\s*성실)|성실(?:히|하게)\s*이행"
+    r"|(?:이라|라)\s*한다|(?:을|를)\s*말한다|(?:을|를)\s*의미한다|용어의\s*정의"
+)
+#: 실질 의무·권리·범위를 정하는 문형. 하나라도 있으면 선언 조항이 아니다.
+_RX_SUBSTANTIVE = re.compile(
+    r"수행한다|지급한다|제출한다|제공한다|게시한다|하여야\s*한다|할\s*수\s*있다|할\s*수\s*없다"
+    r"|포함되지\s*않는다|포함하지\s*아니한다|정하여\s*정한다|협의하여\s*정한다|에\s*따른다"
+    r"|유효기간|기간은|연장|종료(?:된다|한다)|만료"
+)
+
+
+def _article_text_for(text: str, article: int, cr: dict[str, Any]) -> str:
+    """보호 여부를 판정할 조 원문 — 조 전체가 없으면 finding 이 인용한 원문."""
+    from runtime.review.redline_instruction import article_raw_text
+
+    body = article_raw_text(str(text or ""), article) or ""
+    return body or str(cr.get("original_text") or "")
+
+
+def _is_declarative_clause(article_text: str) -> bool:
+    """목적·원칙·정의만 말하는 조항인가."""
+    body = re.sub(r"\s+", " ", str(article_text or ""))
+    if not body:
+        return True  # 원문을 모르면 종전 보호를 유지한다
+    return bool(_RX_DECLARATIVE.search(body)) and not _RX_SUBSTANTIVE.search(body)
+
+
 def _apply_zero_hallucination_guardrail(
     clause_results: list[dict[str, Any]],
     contract_type: str,
@@ -2696,11 +2744,15 @@ def _apply_zero_hallucination_guardrail(
         if not isinstance(cr, dict):
             continue
 
-        # ── 규칙 1: 제1·2·3조 절대 보호 (목적·원칙·정의 조항) ──────────────
+        # ── 규칙 1: 선언 조항 보호 (목적·원칙·정의) ─────────────────────────
+        # 번호(제1~3조)로 보호하지 않는다 — 제2조가 업무 범위·제외 업무를 정하는 계약도
+        # 흔하다. 실측(2026-10-21 프리랜서 용역계약): 제2조 제2항의 잘못된 상호참조
+        # 지적이 "제1·2·3조 절대 보호" 로 LOW·문구 삭제됐다. 조항 문언이 목적·원칙·
+        # 정의만 말할 때 보호하고, 의무·권리·범위를 정하면 일반 조항처럼 검토한다.
         a_i = _article_int_from_cr(cr)
         # 당사자 법인명 오기 정정은 조항 내용을 바꾸지 않는다 — 제1~3조(당사자
         # 정의가 흔히 있는 자리)라도 막지 않는다 (2026-09-29 지시).
-        if a_i is not None and a_i in (1, 2, 3) and not cr.get("is_entity_name_correction"):
+        if a_i is not None and a_i in (1, 2, 3) and not cr.get("is_entity_name_correction")                 and _is_declarative_clause(_article_text_for(text, a_i, cr)):
             cr["suggested_rewrite"] = None
             cr["changed_segments"] = []
             cr["risk_tier"] = "LOW"
@@ -4368,7 +4420,7 @@ def build_clause_level_result(
 
         a_i = _article_int(article_number) or _article_int(clause_id) or _article_int(it.get("display_path")) or _article_int(clause_title)
         ct_hb = clause_topic if isinstance(clause_topic, str) else None
-        if _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb):
+        if _is_hard_block_clause(contract_text=str(text or ""), article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb):
             suggested_rewrite = None
             rewrite_reason = "원문 유지(하드 블록: 메타/분쟁 조항)."
             risk_tier = "LOW"
@@ -4399,15 +4451,15 @@ def build_clause_level_result(
                 "factual_matches": factual_match_codes,
                 "factual_hit": bool(factual_hit),
                 "factual_match_titles": [derived_title_by_code_obj.get(str(c), str(c)) for c in factual_match_codes if str(c)],
-                "detected_issue_list": ([] if _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb) else (it.get("detected_issues") if isinstance(it.get("detected_issues"), list) else [])),
+                "detected_issue_list": ([] if _is_hard_block_clause(contract_text=str(text or ""), article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb) else (it.get("detected_issues") if isinstance(it.get("detected_issues"), list) else [])),
                 "related_rules": related_rules,
                 "question_context_hit": bool(question_context_hit),
                 "related_laws": None,
                 "rewrite_reason": rewrite_reason,
-                "suggested_direction": ([] if _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb) else (it.get("suggested_direction") if isinstance(it.get("suggested_direction"), list) else [])),
+                "suggested_direction": ([] if _is_hard_block_clause(contract_text=str(text or ""), article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb) else (it.get("suggested_direction") if isinstance(it.get("suggested_direction"), list) else [])),
                 "suggested_rewrite": suggested_rewrite,
-                "approval_required": bool(it.get("approval_required")) if not (keep_as_is or _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb)) else False,
-                "high_risk": bool(it.get("high_risk")) if not (keep_as_is or _is_hard_block_clause(article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb)) else False,
+                "approval_required": bool(it.get("approval_required")) if not (keep_as_is or _is_hard_block_clause(contract_text=str(text or ""), article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb)) else False,
+                "high_risk": bool(it.get("high_risk")) if not (keep_as_is or _is_hard_block_clause(contract_text=str(text or ""), article_int=a_i, title=str(clause_title or ""), clause_topic=ct_hb)) else False,
                 "risk_tier": risk_tier,
                 "must_fix": must_fix,
                 "review_tier": review_tier,
@@ -4428,7 +4480,7 @@ def build_clause_level_result(
                 continue
             a = _article_int(c.article_number) or _article_int(cid) or _article_int(c.display_path) or _article_int(c.title)
             # 하드블록 조항은 dealer screening에서도 제외
-            if _is_hard_block_clause(article_int=a, title=str(c.title or "")):
+            if _is_hard_block_clause(contract_text=str(text or ""), article_int=a, title=str(c.title or "")):
                 continue
             hay_key = (str(c.display_path or "") + " " + str(c.title or "")).strip()
             is_key_by_title = any(
@@ -4522,7 +4574,7 @@ def build_clause_level_result(
         for _, c in scored[:max_extra]:
             # 하드블록 조항(제1·2·3조 등 선언적)은 screening에서도 제외
             _a_screen = _article_int(c.article_number) or _article_int(str(c.clause_id or "")) or _article_int(c.display_path) or _article_int(c.title)
-            if _is_hard_block_clause(article_int=_a_screen, title=str(c.title or "")):
+            if _is_hard_block_clause(contract_text=str(text or ""), article_int=_a_screen, title=str(c.title or "")):
                 continue
             ct = classify_clause_topic(title=str(c.title or ""), text=str(c.text or ""))
             focus_match_codes = [code for code, ts in focus_topics_by_code.items() if ct in ts]
@@ -4785,6 +4837,7 @@ def build_clause_level_result(
     clause_results = [
         cr for cr in clause_results
         if not _is_hard_block_clause(
+            contract_text=str(text or ""),
             article_int=_article_int_from_cr(cr),
             title=str(cr.get("clause_title") or ""),
         )
@@ -5842,6 +5895,39 @@ def build_clause_level_result(
     except Exception as exc:  # noqa: BLE001
         logger.warning("user focus / remedy balance checks failed: %s", exc)
 
+    # ── [본계약 ↔ 별첨 구조 비교 · 별첨의 가맹사업 실질] (2026-10-13 긴급 보정 4·5·7·8·9항) ─────────
+    # 별첨을 항목별로 나눠 본문 조·항과 축별(역할·대금·재고·반품·하자·IP·브랜드·광고판촉·구입강제·해지·
+    # 유효기간·우선순위)로 비교한다. finding 은 별첨이 계속적 거래 구조(가맹 요소)를 담거나 사용자가 별첨을
+    # 지정했을 때만 만든다 — 단가표 같은 단순 별첨에 "기간 연동 없음" 을 붙이지 않기 위함이다.
+    _annex_review = None
+    try:
+        from runtime.review.annex_conflict_review import review_annex as _review_annex
+
+        _annex_review = _review_annex(clauses=clauses, full_text=str(text or ""),
+                                      parties=list(_entity_resolution.parties))
+        if _annex_review.applies:
+            _annex_focus = any(getattr(t, "annex", "") for t in _focus_targets)
+            if _annex_review.franchise or _annex_focus:
+                clause_results.extend(_annex_review.findings)
+            else:
+                _annex_review.findings = []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("annex conflict review failed: %s", exc)
+
+    # ── [계약 원문 내부 상호참조 검증] (2026-10-21 지시 3·4항) ──────────────────────
+    # 검토 결과의 인용이 아니라 계약서 자체의 "제N항 제A호에 따른 …" 이 그 대상을 가리키는지 본다.
+    # 실측: "큐레이션형 뉴스레터(제2조 제1항 제5호)" — 제5호는 진행 상황 공유다.
+    try:
+        from runtime.review.cross_reference_check import (
+            build_findings as _xref_findings,
+            find_cross_reference_errors as _find_xref_errors,
+        )
+
+        _xref_errors = _find_xref_errors(clauses)
+        clause_results.extend(_xref_findings(_xref_errors, clauses))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cross reference check failed: %s", exc)
+
     # ── [리스크 사슬 검토] (2026-09-10 지시 항목 1) ────────────────────────────
     # 조항별 나열이 아니라 거래위험을 사슬로 연결해 본다. 특히 선이행 구조는
     # 선제공 → 소유권 이전 → 상대방 미이행 → 반환·환수 → 손해배상 → 담보까지
@@ -6167,7 +6253,7 @@ def build_clause_level_result(
         a0i = int(a0s) if a0s.isdigit() else None
         title0 = str(cr.get("clause_title") or "")
         ct0 = str(cr.get("clause_topic") or "").strip()
-        if _is_hard_block_clause(article_int=a0i, title=title0, clause_topic=ct0):
+        if _is_hard_block_clause(contract_text=str(text or ""), article_int=a0i, title=title0, clause_topic=ct0):
             cr["risk_tier"] = "LOW"
             cr["must_fix"] = False
             cr["review_tier"] = "NOTE"
@@ -6621,6 +6707,17 @@ def build_clause_level_result(
         clauses=clauses,
         review_focus=review_focus,
     )
+    # 별첨 지정 요청도 필수 검토항목이다 — 조 번호 인용만 세던 목록에서 "[별첨]" 이 빠져 "최초 요청사항 반영
+    # 여부" 에 제16조만 표시됐다(2026-10-13). 위험도는 뒤의 지정 쟁점 검증이 최종 finding 으로 채운다.
+    if any(getattr(t, "annex", "") for t in _focus_targets) and isinstance(_mandatory_target_status, list):
+        _ax_ids = [str(c.get("clause_id") or "") for c in clause_results if isinstance(c, dict)
+                   and str(c.get("clause_id") or "").startswith("ax_") and not c.get("dedup_suppressed")]
+        if not any(str(r.get("display_path") or "") == "[별첨]" for r in _mandatory_target_status if isinstance(r, dict)):
+            _mandatory_target_status.append({
+                "raw_citation": "[별첨]", "display_path": "[별첨]",
+                "status": "flagged" if _ax_ids else "checked_low_risk",
+                "matched_clause_ids": _ax_ids, "severity": "", "final_tier": "",
+            })
 
     frc1 = contract_context.get("final_review_context") if isinstance(contract_context, dict) else None
     if isinstance(frc1, dict) and bool(frc1.get("expert_mode")):
@@ -6884,6 +6981,21 @@ def build_clause_level_result(
     for _cr_rl in clause_results:
         if not isinstance(_cr_rl, dict) or bool(_cr_rl.get("dedup_suppressed")):
             continue
+        # 항이 없는 조의 청크 원문은 조 제목 줄("계약내용의 변경")로 시작한다. 그것을 원문 인용·교체
+        # 대상·수정문안 머리에 그대로 두면 원문 대조가 실패하고, 문안이 제목을 본문으로 끼워 넣는다
+        # (2026-10-21 실측: 제9조).
+        _title_rl = str(_cr_rl.get("clause_title") or "").strip()
+        if _title_rl:
+            # 원문이 제목 줄로 시작할 때만, 문안 머리의 "제목 + 공백"(줄을 이어 붙인 결과)도 제목으로 본다 —
+            # 제목과 같은 낱말로 시작하는 정상 문장("비밀유지 의무는…")은 건드리지 않는다.
+            _heading_rl = str(_cr_rl.get("original_text") or "").lstrip().startswith(_title_rl + "\n")
+            for _fld_rl in ("original_text", "replace_text", "suggested_rewrite"):
+                _v_rl = _cr_rl.get(_fld_rl)
+                if not isinstance(_v_rl, str):
+                    continue
+                _s_rl = _v_rl.lstrip()
+                if _s_rl.startswith(_title_rl + "\n") or (_heading_rl and _s_rl.startswith(_title_rl + " ")):
+                    _cr_rl[_fld_rl] = _s_rl[len(_title_rl) + 1:].lstrip()
         if str(_cr_rl.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
             continue
         if isinstance(_cr_rl.get("redline_instruction"), dict):
@@ -7503,6 +7615,10 @@ def build_clause_level_result(
     } if _filtered_output else set()
     from runtime.review.self_check import run_self_check as _run_self_check
     _self_check_report = _run_self_check(
+        our_labels=tuple(
+            str(getattr(_p, "label", "") or "") for _p in (_entity_resolution.parties or [])
+            if getattr(_p, "is_our_company", False) and getattr(_p, "label", "")
+        ),
         clause_results=clause_results,
         contract_type_code=_canonical_profile.contract_type,
         contract_class=_contract_class,
@@ -7539,6 +7655,8 @@ def build_clause_level_result(
         pass
 
     meta = {
+        "annex_conflict_review": (_annex_review.to_dict() if _annex_review is not None and _annex_review.applies
+                                  else {"applies": False}),
         "self_check": _self_check_report,
         # canonical_transaction_facts(2026-09-04 지시) — UI/DOCX/PDF가 이
         # 값을 그대로 표시해야 한다(원문을 다시 보고 재추정 금지). 사용자
@@ -7749,6 +7867,21 @@ def build_clause_level_result(
         axis_labels=dict(_LM_AXES),
     )
     meta["legal_map_grounding"] = _map_grounding.to_dict()
+    # 요약 헤더(IP 귀속·검수·대금)가 조항별 검토와 같은 근거를 쓰게 한다 — 헤더가
+    # 읽는 detailed_contract_profile 에는 이 축을 채우는 단계가 없어 실재하는
+    # 조항이 "미기재" 로 나갔다(2026-10-21 프리랜서 용역계약 실측).
+    from runtime.review.legal_map_grounding import resolve_summary_facts as _resolve_summary_facts
+
+    _summary_facts = _resolve_summary_facts(
+        _legal_map.fields, clause_index=_clause_index, contract_text=str(text or ""),
+    )
+    meta["contract_fact_status"] = _summary_facts
+    if isinstance(meta.get("detailed_contract_profile"), dict):
+        for _fk, _fv in _summary_facts.items():
+            meta["detailed_contract_profile"][_fk] = _fv["display"]
+        meta["detailed_contract_profile"]["_fact_articles"] = {
+            _fk: _fv["article"] for _fk, _fv in _summary_facts.items() if _fv.get("article")
+        }
 
     # 유형은 **canonical 값**으로 넘긴다. 구조 판정기의 코드를 그대로 쓰면
     # 상호 NDA 가 development_service 로 읽혀 대가 지급·검수/준공이 필수 축이
@@ -7931,6 +8064,32 @@ def build_clause_level_result(
                 _touched = True
         if _touched:
             _name_fixed_ids.append(str(_cr_nm.get("clause_id") or ""))
+    # 계약이 정의하지 않은 "당사" 가 수정 문안에 남으면 원문에 넣을 수 없다 —
+    # 당사자 지도가 확정한 우리 측 표기(갑/을 등)로 맞춘다(2026-10-21 실측).
+    from runtime.review.party_label_binding import normalize_undefined_our_term as _norm_our_term
+
+    _our_party_label = next(
+        (str(getattr(p_, "label", "") or "") for p_ in (_entity_resolution.parties or [])
+         if getattr(p_, "is_our_company", False)), "",
+    )
+    if _our_party_label:
+        for _cr_nm in clause_results:
+            if not isinstance(_cr_nm, dict):
+                continue
+            _before_nm = json.dumps([_cr_nm.get("suggested_rewrite"), _cr_nm.get("redline_instruction")], ensure_ascii=False)
+            for _key_nm in ("suggested_rewrite", "recommendation_text", "addition_text"):
+                if isinstance(_cr_nm.get(_key_nm), str):
+                    _cr_nm[_key_nm] = _norm_our_term(_cr_nm[_key_nm], text=str(text or ""), our_label=_our_party_label)
+            _ri_nm = _cr_nm.get("redline_instruction")
+            if isinstance(_ri_nm, dict):
+                for _key_nm in ("replacement_text", "final_clause_text"):
+                    if isinstance(_ri_nm.get(_key_nm), str):
+                        _ri_nm[_key_nm] = _norm_our_term(_ri_nm[_key_nm], text=str(text or ""), our_label=_our_party_label)
+            _pp_nm = _cr_nm.get("practical_position")
+            if isinstance(_pp_nm, dict) and isinstance(_pp_nm.get("text"), str):
+                _pp_nm["text"] = _norm_our_term(_pp_nm["text"], text=str(text or ""), our_label=_our_party_label)
+            if json.dumps([_cr_nm.get("suggested_rewrite"), _cr_nm.get("redline_instruction")], ensure_ascii=False) != _before_nm:
+                _name_fixed_ids.append(str(_cr_nm.get("clause_id") or ""))
     # [Entity Resolution 지시 7항] 검토의견·협상포지션·손해배상·지급주체 서술에서
     # 브랜드를 권리·의무 주체로 쓰면 법인명을 앞세운다("주식회사 시디즈(알로소)가").
     from runtime.review.entity_resolution import normalize_findings as _normalize_party_findings
@@ -7949,6 +8108,12 @@ def build_clause_level_result(
     if isinstance(meta.get("canonical_state"), dict) and _entity_resolution.our_company is not None:
         meta["canonical_state"]["our_legal_entity"] = _entity_resolution.our_company.legal_entity_name
         meta["canonical_state"]["our_brand"] = _entity_resolution.our_company.brand_name
+        # 상대방도 법인 기준 — 서두 파서가 "㈜일룸(이하 “갑”)와/과 ㈜아트앤라이프" 의 조사 표기("와/과")를
+        # 상대방 이름에 붙였다(2026-10-13 보고서 상단 "상대방: 와/과 ㈜아트앤라이프").
+        _cp_parties = [p for p in _entity_resolution.legal_parties if not p.is_our_company]
+        if len(_cp_parties) == 1:
+            meta["canonical_state"]["counterparty_legal_entity"] = (
+                _cp_parties[0].legal_entity_name or _cp_parties[0].written_name)
     # [복합계약 구성, 2026-09-30 지시 1항] canonical 유형은 그대로 두고, 실제 거래의
     # 성격과 구성요소를 함께 싣는다(보고서 상단 "계약 성격").
     from runtime.review.contract_composition import build_contract_composition as _build_composition
@@ -7973,6 +8138,17 @@ def build_clause_level_result(
             "secondary_contract_elements": ["연구 수행", "연구보고서 제출", "연구비 분할 지급", "성과물·지식재산권 귀속"],
             "is_composite": True,
             "canonical_label": _RESEARCH_PRIMARY,
+        }
+    if _annex_review is not None and _annex_review.franchise:
+        # 별첨이 가맹사업 요소를 담으면 그것이 이 계약의 부수 요소다 — 낱말 빈도로 센 "제작·IP 이용허락" 이
+        # 아니다(2026-10-13: "제작보류"·"재 제작"·영업표지 "사용권" 이 구성요소로 세어졌다).
+        _base_label = str((meta.get("canonical_state") or {}).get("contract_type_label") or "물품 구매·공급 계약")
+        meta["contract_composition"] = {
+            "primary_contract_type": _base_label,
+            "secondary_contract_elements": ["프랜차이즈 가맹 요소(별첨 — 영업표지 사용허락·영업표준화·구입강제·초도물량)"],
+            "is_composite": True,
+            "canonical_label": _base_label,
+            "not_contract_types": ["광고계약", "콘텐츠 제작계약", "매체 집행계약", "산학협력계약", "건설계약"],
         }
     meta["research_model"] = _research_model.to_dict()
     meta["online_sales_model"] = _sales_model.to_dict()
@@ -9025,7 +9201,38 @@ def build_clause_level_result(
             risk_state_conflicts as _risk_conflicts,
             verify_focus as _verify_focus,
         )
+        from runtime.review.user_focus_review import supersede_keeps as _supersede_keeps
+        _superseded = _supersede_keeps(clause_results, ((meta.get("senior_counsel_audit") or {}).get("triage")))
+        if _superseded:
+            from runtime.review.output_filter import build_final_findings as _bff_keep
+            meta["final_findings"] = _bff_keep(
+                clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+            )
         _focus_results = _verify_focus(_focus_targets, clause_results, clauses)
+        # 별첨 지정 요청의 답은 "가장 높은 finding 한 건의 이유" 가 아니라 축별 비교 결과 전체다(지시 7항).
+        if _annex_review is not None and _annex_review.applies:
+            _live_ax = [c for c in clause_results if isinstance(c, dict)
+                        and str(c.get("clause_id") or "").startswith("ax_") and not c.get("dedup_suppressed")
+                        and str(c.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")]
+            for _fr in _focus_results:
+                if not getattr(_fr.target, "annex", ""):
+                    continue
+                _rows = _annex_review.conflicts
+                _head = (f"본문과 별첨을 {len([r for r in _annex_review.rows if r.status != 'n/a'])}개 축으로 비교한 결과 "
+                         f"충돌·불일치 {len(_rows)}건({', '.join(r.axis for r in _rows)})"
+                         + (" — CONTRACT_APPENDIX_CONFLICT" if _rows else " — 충돌 없음"))
+                _fran = (_annex_review.franchise or {}).get("conclusion", "")
+                _fr.conclusion = "\n".join(
+                    [((f"[{ {'HIGH': '필수 수정', 'MEDIUM': '권장 수정'}.get(_fr.tier, _fr.tier)}] ") if _fr.needs_revision else "")
+                     + _head]
+                    + [f"· {ln}" for ln in _annex_review.summary_lines()]
+                    + ([f"[가맹사업법 실질 검토] {_fran}"] if _fran else []))
+                if _live_ax:
+                    _fr.proposed = [f"{c.get('display_path')}: {str(c.get('suggested_rewrite') or '').strip()}"
+                                    for c in _live_ax if str(c.get("suggested_rewrite") or "").strip()] or _fr.proposed
+                    _fr.clause_paths = list(dict.fromkeys(
+                        [str(c.get("display_path") or "") for c in _live_ax]
+                        + [p for r in _rows for p in r.main_refs])) or _fr.clause_paths
         _cov_now = [r for r in (meta.get("user_review_coverage") or []) if isinstance(r, dict)]
 
         def _key(s: Any) -> str:
@@ -9249,6 +9456,45 @@ def build_clause_level_result(
         a["key"] for a in meta["v14_final_self_check"]["axes"] if not a["ok"]
     ]
 
+    # ── [현재 파일만 Source of Truth · Cross-Case 오염 차단 · 별첨 역할 정정] (2026-10-13 긴급 보정) ──
+    # 현재 계약서·이번 요청에 없는 거래 영역(광고 매체·콘텐츠 제작·연구·건설)의 표지어를 말하는 finding 은
+    # 내보내지 않고 기록한다. 법률 적용성·요청 답변은 그 문장만 걷어낸다. 가맹사업법은 요건별 판단 행으로 대체.
+    try:
+        from runtime.review.source_grounding_gate import run_source_grounding_gate as _source_gate
+
+        _sg = _source_gate(
+            contract_text=str(text or ""),
+            review_focus=str(review_focus or "") if isinstance(review_focus, str) else "",
+            answers=answers, clause_results=clause_results, meta=meta, annex_review=_annex_review,
+        )
+        meta["source_grounding_gate"] = _sg
+        if _sg.get("removed_findings") or _sg.get("role_corrections"):
+            from runtime.review.output_filter import build_final_findings as _bff_sg
+            meta["final_findings"] = _bff_sg(
+                clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+            )
+            logger.warning("source grounding gate: %s", _sg.get("detail") or _sg.get("role_correction_code"))
+        if _sg.get("status"):
+            meta["review_status"] = str(_sg["status"])
+            meta["review_status_detail"] = str(_sg.get("detail") or "")
+        from runtime.review.source_grounding_gate import allowed_source as _allowed_src, scrub_value as _scrub_src
+        _allowed_norm = _allowed_src(contract_text=str(text or ""),
+                                     review_focus=str(review_focus or "") if isinstance(review_focus, str) else "",
+                                     answers=answers)
+        _sg_hits: list[str] = []
+        executive_summary = _scrub_src(executive_summary, _allowed_norm, _sg_hits)
+        risk_scenarios = _scrub_src(risk_scenarios, _allowed_norm, _sg_hits)
+        strategic_questions = _scrub_src(strategic_questions, _allowed_norm, _sg_hits)
+        if _sg_hits:
+            _sg.setdefault("scrubbed", []).append({"section": "executive_summary/risk_scenarios", "terms": _sg_hits})
+        from runtime.review.source_grounding_gate import fix_roles_value as _fix_roles_value
+        executive_summary = _fix_roles_value(executive_summary, _annex_review)
+        risk_scenarios = _fix_roles_value(risk_scenarios, _annex_review)
+        strategic_questions = _fix_roles_value(strategic_questions, _annex_review)
+    except Exception as exc:  # noqa: BLE001 - 게이트 실패를 기록하되 검토 전체를 막지 않는다
+        logger.warning("source grounding gate failed: %s", exc)
+        meta["source_grounding_gate"] = {"error": str(exc)}
+
     # ── [계약별 상태 격리 · 당사자/역할 단일 지도 · 조항 출처 · 정합성 hard gate] (2026-10-07) ──
     # 출력 직전 — 당사자 수(서두·서명란), 역할 표기, 계약유형, 적용 법률, 조항 참조가 모든 섹션에서
     # 현재 문서 하나로 설명되는지 본다. 고칠 수 있는 것은 고치고 기록하며, 남으면 상태 코드를 세운다.
@@ -9280,6 +9526,19 @@ def build_clause_level_result(
     except Exception as exc:  # noqa: BLE001 - 게이트 실패를 조용히 넘기지 않되 검토 전체를 막지 않는다
         logger.warning("contract isolation gate failed: %s", exc)
         meta["contract_isolation_gate"] = {"error": str(exc)}
+
+    # ── [수정안 전부 반영 검증] (2026-10-21 지시 3항) ─────────────────────────────
+    # 모든 수정안을 함께 넣었을 때의 조 번호·항 위치·참조·기존 보호를 본다. 마지막 단계에 두는
+    # 이유: 앞 게이트들이 위치를 정정·재앵커한 뒤라야 실제로 넣을 위치가 확정된다.
+    try:
+        from runtime.review.revision_set_check import check_revision_set as _check_revision_set
+
+        meta["revision_set_check"] = _check_revision_set(
+            clause_results, clause_index=_clause_index, contract_text=str(text or ""),
+        )
+    except Exception as exc:  # noqa: BLE001 - 검증 실패가 검토 결과 전체를 막지 않게
+        logger.warning("revision set check failed: %s", exc)
+        meta["revision_set_check"] = {"error": str(exc)}
 
     # [Entity Resolution] 당사자 법인명 불일치는 다른 게이트가 상태를 적지 않았을
     # 때만 대표 상태가 된다. 불일치 목록 자체는 meta["entity_resolution"] 에 늘 남는다.

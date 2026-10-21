@@ -179,6 +179,12 @@ class ContractReviewState:
     risk_findings: list[str]
     reset_previous_contract_state: bool = RESET_PREVIOUS_CONTRACT_STATE
     ungrounded: list[str] = field(default_factory=list)
+    #: 2026-10-13 긴급 보정 1항 — 매 검토가 새로 만드는 나머지 상태. 이전 검토의 golden case·예시·지정 쟁점·
+    #: 위험 라벨을 넘겨받는 입력 경로가 없다는 것을 상태 자체에 적어 둔다(prior_* 는 항상 비어 있다).
+    transaction_structure: dict[str, Any] = field(default_factory=dict)
+    annex_party_roles: dict[str, Any] = field(default_factory=dict)
+    legal_issue_map: dict[str, Any] = field(default_factory=dict)
+    redlines: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -196,6 +202,14 @@ class ContractReviewState:
             "clause_map": list(self.clause_map),
             "risk_findings": list(self.risk_findings),
             "ungrounded": list(self.ungrounded),
+            "RESET_ALL_CONTRACT_CONTEXT": True,
+            "transaction_structure": dict(self.transaction_structure),
+            "annex_party_roles": dict(self.annex_party_roles),
+            "user_request": list(self.user_focus),
+            "legal_issue_map": dict(self.legal_issue_map),
+            "findings": list(self.risk_findings),
+            "redlines": list(self.redlines),
+            "prior_examples": [], "prior_golden_case": None, "prior_user_focus": [], "prior_risk_labels": [],
         }
 
 
@@ -226,6 +240,15 @@ def build_contract_state(
         applicable_laws=laws,
         clause_map=[f"제{a}조" for a in arts],
         risk_findings=[str(c.get("clause_id") or "") for c in clause_results if _live(c)],
+        transaction_structure={
+            k: v for k, v in (meta.get("contract_composition") or {}).items()
+            if k in ("primary_contract_type", "secondary_contract_elements", "not_contract_types")
+        },
+        annex_party_roles=dict(((meta.get("annex_conflict_review") or {}).get("roles") or {})),
+        legal_issue_map={str(r.get("statute") or ""): str(r.get("applicability") or "")
+                         for r in meta.get("legal_applicability_review") or [] if isinstance(r, dict)},
+        redlines=[str(c.get("clause_id") or "") for c in clause_results
+                  if _live(c) and str(c.get("suggested_rewrite") or "").strip()],
     )
     # 현재 문서에 근거가 없는 값 = 다른 검토에서 넘어온 값이다.
     doc = _core(body)

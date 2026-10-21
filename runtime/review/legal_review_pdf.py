@@ -139,8 +139,17 @@ def _issue_block(pdf: FPDF, issue: ReviewIssue, *, index: int | None = None) -> 
     elif issue.legal_business_reason and issue.legal_business_reason != issue.problem:
         _label(pdf, "법적/실무상 이유")
         _body(pdf, issue.legal_business_reason)
+    _ri = issue.redline_instruction if isinstance(issue.redline_instruction, dict) else None
+    if _ri and _ri.get("edit_location"):
+        # DOCX 와 같은 수정 지시(위치·방식·보류)를 싣는다 — PDF 만 위치 없이 문안을 보여 주면 어디에
+        # 넣을지 두 문서가 다르게 읽힌다.
+        _label(pdf, "수정 위치")
+        _body(pdf, str(_ri.get("edit_location") or ""))
+        if _ri.get("held"):
+            _label(pdf, "자동 적용 보류")
+            _body(pdf, str(_ri.get("hold_reason") or ""))
     _label(pdf, "수정문안")
-    _body(pdf, issue.proposed_revision)
+    _body(pdf, str((_ri or {}).get("final_clause_text") or "") or issue.proposed_revision)
     from runtime.review.legal_review_docx import linked_edit_heading
     for e in getattr(issue, "linked_edits", None) or []:
         _label(pdf, f"함께 수정·추가할 문구 {linked_edit_heading(e)}")

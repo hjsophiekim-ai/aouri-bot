@@ -81,7 +81,8 @@ def axis_of(cr: dict[str, Any], topic_key: str | None, relations: list[str]) -> 
         return "legal_entity"
     if "agency" in relations:
         return "authority"
-    if {"ip_license", "derivative", "background_ip", "ip_assignment", "physical_ownership"} & set(relations):
+    if {"ip_license", "derivative", "background_ip", "ip_assignment", "physical_ownership",
+            "ip_ownership_absent"} & set(relations):
         return "ip"
     if re.search(r"상위\s*(?:지원사업\s*)?협약|운영기준|운영지침", _title(cr)):
         return "project"
@@ -154,6 +155,13 @@ _RX_DEFECT_BOUNDARY = re.compile(r"귀책|책임\s*(?:범위|경계)|구분|부�
 _RX_SETTLEMENT_CONCRETE = re.compile(r"월별\s*정산|다음\s*달\s*말일|익월|산정\s*(?:기준|내역)|×\s*\d+\s*%|정산\s*(?:주기|기준)")
 
 
+_RX_SCOPE_ASK = re.compile(r"(?:과업|개발|업무)\s*범위|사양|SOW|변경\s*(?:관리|요청)")
+#: 범위 변경을 사전 서면 합의(동의·승인)로 묶는 문장 — 같은 문장 안에서 비용까지 다룰 때만 쓴다.
+_RX_SCOPE_CHANGE_WRITTEN = re.compile(
+    r"(?:과업|업무|용역)\s*(?:의\s*)?(?:범위|내용)[^.]{0,60}변경[^.]{0,100}?(?:사전에?\s*)?서면(?:으로)?\s*(?:합의|동의|승인)"
+)
+
+
 def keep_reason(cr: dict[str, Any], axis: str, text: str, article_text: str) -> str:
     """이미 다른 조항(또는 같은 조)이 같은 보호효과를 주면 그 사유. 아니면 ""."""
     title = _title(cr)
@@ -167,6 +175,13 @@ def keep_reason(cr: dict[str, Any], axis: str, text: str, article_text: str) -> 
     if axis == "payment" and re.search(r"정산|증빙|산정|양식|세금계산서", title) \
             and not _RX_MONEY_STRONG.search(title) and _RX_SETTLEMENT_CONCRETE.search(text):
         return "정산 주기·기한·산정 기준이 이미 구체적이다 — 정산 실무 세부는 계약 수정 사항이 아니다"
+    if _RX_SCOPE_ASK.search(title):
+        # 2026-10-21 실측: "과업 범위·변경은 갑의 서면 승인으로 확정" 을 넣자는 지적이, 같은 계약 제9조가
+        # 이미 "범위 변경 시 변경 내용·일정·비용을 사전에 서면으로 합의" 하도록 정한 상태에서 나왔다.
+        flat = re.sub(r"\s+", " ", text)
+        m = _RX_SCOPE_CHANGE_WRITTEN.search(flat)
+        if m and re.search(r"비용|대금|금액|보수", m.group(0)):
+            return "과업 범위·비용의 변경은 이미 사전 서면 합의 사항이다 — 합의 없는 추가 비용 청구는 그 조항으로 막힌다"
     return ""
 
 
@@ -191,7 +206,9 @@ def triage_one(
         return DROP, "국내 법인 간 관할·통지 등 일반 boilerplate", scores
     # ac_* 결정론 점검은 이미 "현행 문언으로 부족한 경우"에만 만들어진다 — 정산 세부 KEEP 규칙이
     # 결제창 Case A/B 정리까지 KEEP 으로 덮지 않게 한다.
-    kr = "" if str(cr.get("clause_id") or "").startswith("ac_") else keep_reason(
+    # uf_* 는 사용자가 지정한 조항을 실질 검토한 답이다 — "하자 조항이 이미 있다" 는 이유로 KEEP 하면 지시 6항
+    # ("하자보증 조항이 있으니 KEEP 금지")을 그대로 어긴다(2026-10-13 그림·액자 하자보증).
+    kr = "" if str(cr.get("clause_id") or "").startswith(("ac_", "uf_", "ax_")) else keep_reason(
         cr, axis, contract_text, article_text)
     if kr:
         return KEEP, kr, scores

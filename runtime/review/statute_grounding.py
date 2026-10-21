@@ -80,6 +80,9 @@ STATUTES: tuple[Statute, ...] = (
     _s(_CR, "45", "2", "저작재산권의 양도",
        "저작재산권의 전부를 양도하는 경우에 특약이 없는 때에는 제22조에 따른 2차적저작물작성권은 포함되지 아니한 것으로 추정한다.",
        {"assignment_derivative"}, "전부 양도 시 2차적저작물작성권 특약 — 특약이 없으면 양도에서 빠진 것으로 추정"),
+    _s(_CR, "10", "1", "저작권",
+       "저작자는 제11조 내지 제13조의 규정에 따른 권리(저작인격권)와 제16조 내지 제22조의 규정에 따른 권리(저작재산권)를 가진다.",
+       {"ip_ownership_absent"}, "저작권은 창작자에게 귀속 — 양도 약정이 없으면 의뢰인은 권리를 취득하지 못한다"),
     _s(_CR, "45", "1", "저작재산권의 양도",
        "저작재산권은 전부 또는 일부를 양도할 수 있다.",
        {"ip_assignment"}, "권리 양도 구조 — 양도 대상 권리의 범위를 특정해야 한다"),
@@ -185,6 +188,7 @@ RELATION_REASON: dict[str, str] = {
     "background_ip": "프로젝트 이전부터 협업자가 보유한 작품·디자인·기법의 권리는 협업자에게 남습니다. 결과물에 그 기존 저작물이 포함되면 그 부분도 이용허락의 대상이어야 제품화·판매가 가능합니다.",
     "derivative": "작품을 제품의 형태로 변형·재구성하는 것은 2차적저작물 작성에 해당할 수 있고, 그 권리는 저작자에게 있습니다. 이용허락이 2차적저작물의 작성·이용까지 포함하는지 따로 정해야 합니다.",
     "assignment_derivative": "저작재산권 전부를 양도받더라도 특약이 없으면 2차적저작물작성권은 양도되지 않은 것으로 추정되므로, 양도 조항에 그 권리를 명시해야 합니다.",
+    "ip_ownership_absent": "성과물의 저작권은 이를 창작한 상대방에게 귀속되므로, 계약에 양도(귀속) 약정이 없으면 우리는 이용허락을 받은 범위 안에서만 쓸 수 있습니다. 양도할 권리의 범위와 이전 시점을 계약에 정해야 합니다.",
     "ip_assignment": "저작재산권 양도 구조이므로 양도되는 권리의 범위(복제·배포·전시·2차적저작물작성권 등)를 특정해야 합니다.",
     "moral_right": "저작인격권은 저작자에게 전속해 양도할 수 없으므로, 변경 이용이 필요하면 귀속 조항이 아니라 불행사·사전 협의 약정으로 다뤄야 합니다.",
     "credit": "작가는 성명표시권을 가지므로 크레딧 표시 방법과 생략 가능한 경우를 정해 두어야 분쟁을 피할 수 있습니다.",
@@ -315,6 +319,16 @@ def _title_hay(cr: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+#: 조항이 저작권·지식재산권을 한쪽에 귀속·양도·이전시키는 문형(양도 구조).
+_RX_IP_VESTING = _rx(
+    r"(?:지식재산권?|저작(?:재산)?권|권리)[^.\n]{0,60}(?:귀속(?:된다|한다|되며|하며|되고)|양도(?:한다|된다|하며|되며)|이전(?:된다|한다|되며|하며))"
+)
+#: 조항이 이용을 허락하는 문형(이용허락 구조).
+_RX_LICENSE_GRANT = _rx(
+    r"(?:이용|사용)(?:권)?(?:을|하는\s*것을)?\s*허락(?:한다|하며|하고)|(?:이용|사용)권(?:을)?\s*(?:부여|허여)"
+)
+
+
 def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
     """finding 의 법률관계.
 
@@ -339,12 +353,28 @@ def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
             rx = dict(RELATION_PATTERNS)[key]
             if rx.search(detail):
                 found.append(key)
+    # 조항 원문의 법률효과가 권리 귀속·양도인가(2026-10-21 지시 2항). "갑에게 귀속된다"
+    # 는 양도 구조다 — 제목에 "사용권" 이 있다고 이용허락(제46조)으로 설명하면 "양도가
+    # 아니라 이용허락" 이라는 정반대 법률 설명이 붙는다(프리랜서 용역계약 실측).
+    vests = bool(_RX_IP_VESTING.search(original))
+    if vests and any(k in found for k in ("ip_license", "derivative", "moral_right")) \
+            and "ip_assignment_word" not in found:
+        found.append("ip_assignment_word")
     rel: list[str] = []
     for key in found:
         if key == "ip_assignment_word":
-            # 양도는 이용허락과 다른 구조다 — 조항 문언이 양도를 말할 때만(지시 3항).
-            if re.search(r"양도", original):
+            # 양도는 이용허락과 다른 구조다 — 조항 문언이 양도·귀속을 말할 때만(지시 3항).
+            if vests:
                 rel.append("ip_assignment")
+            continue
+        if key == "ip_license" and vests and not _RX_LICENSE_GRANT.search(original):
+            # 권리를 넘겨받는 조항에서의 "사용권" 은 이용허락 관계가 아니다.
+            continue
+        if key == "ip_license" and not vests and not _RX_LICENSE_GRANT.search(original) \
+                and re.search(r"귀속|이전|양도|소유", title):
+            # 권리 이전을 다루는 지적인데 인용 원문에 귀속·양도 문언도 이용허락 문언도 없다 — 귀속 규정이
+            # 비어 있는 것이다. 인용된 다른 조항(제공 자료 사용 등)을 "이 조항은 이용허락" 으로 설명하지 않는다.
+            rel.append("ip_ownership_absent")
             continue
         if key == "defect":
             rel.append("defect_sale" if archetype in ("goods_supply", "distribution_resale") else "defect_works")
@@ -352,7 +382,7 @@ def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
         rel.append(key)
     if "ip_assignment" in rel and "derivative" in rel:
         rel.append("assignment_derivative")
-    elif "derivative" in rel and "ip_license" not in rel:
+    elif "derivative" in rel and "ip_license" not in rel and "ip_ownership_absent" not in rel:
         # 양도가 아닌 구조에서의 2차적 이용은 이용허락의 범위 문제다 — 제22조만 붙이면
         # "왜 이 계약에서" 가 빠진다(지시 5항: 이용허락 → 제46조, 2차적 → 제22조).
         rel.insert(rel.index("derivative"), "ip_license")

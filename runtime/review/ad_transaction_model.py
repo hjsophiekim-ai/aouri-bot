@@ -93,6 +93,29 @@ _RX_ADVERTISING = _rx(
     r"광고|advertis|캠페인\s*집행|매체\s*집행|홍보\s*콘텐츠"
 )
 
+#: 광고 **거래** 고유의 어휘 — 이 중 하나라도 있어야 광고계약으로 본다.
+#:
+#: 2026-10-13 실측(일룸 ↔ ㈜아트앤라이프 물품공급계약 + 프랜차이즈 별첨): 별첨의
+#: "9. 광고"(가맹본부의 판촉 광고) 한 줄이 `_RX_ADVERTISING` 을 통과시켰고, 본문의
+#: "공사가 중단"·"사용을 중단"·"전산 시스템상 … 게재된 때" 가 매체 신호로 세어져
+#: 집행형(확신)이 됐다. 그 결과 물품공급계약에 광고기간·송출·매체사 HIGH 3건이
+#: 붙었다. "중단·게재·민원" 은 어느 계약에나 있다 — 광고계약이라는 판단은 광고
+#: 거래에서만 쓰는 말이 있을 때만 한다. "광고비" 는 가맹·대리점 계약의 판촉비
+#: 분담에도 나오므로 넣지 않는다.
+_RX_AD_CORE = _rx(
+    r"광고주|광고물|광고료|광고\s*대행|광고\s*기간|광고\s*소재|광고\s*매체|광고\s*집행\s*(?:명세|대행|위탁|의뢰)|광고\s*(?:촬영|모델|출연)"
+    r"|매체사|송출|크리에이터|인플루언서|협찬|브랜디드|홍보\s*콘텐츠|광고\s*(?:계약|용역)"
+    r"|(?:콘텐츠|컨텐츠|영상)\s*제작|advertis"
+)
+
+#: 사용자가 **광고계약이 아니라고** 직접 말했다(설명·사전질문 답변).
+#: 2026-10-13 실측: 광고 사전질문 4개에 "광고계약이 아님"·"광고계약 아니라고" 라고
+#: 답했는데도 거래모델은 원문 신호만으로 집행형을 확정했다. 담당자의 부정 답변은
+#: 원문의 약한 신호보다 우선한다.
+_RX_USER_NOT_AD = _rx(
+    r"광고\s*(?:계약|거래)?(?:서)?\s*(?:이|가)?\s*(?:아님|아니|아닙니다|아니에요|아니야)"
+)
+
 #: 매체에 **싣는** 행위. 집행형의 핵심 급부다.
 _RX_MEDIA_ACT = _rx(
     r"송출|표출|게재|게첩|노출|방영|상영|게시|디스플레이|전광판|사이니지"
@@ -217,6 +240,19 @@ def classify_ad_transaction_model(
     if not (_RX_ADVERTISING.search(body) or _RX_ADVERTISING.search(desc)
             or "advertis" in str(contract_type_code or "").lower()):
         return AdTransactionModel(model=AD_NOT_ADVERTISING, basis="광고 거래 신호 없음")
+
+    if _RX_USER_NOT_AD.search(desc) and not _RX_USER_PRODUCTION.search(desc):
+        return AdTransactionModel(
+            model=AD_NOT_ADVERTISING, confident=True, user_signal=AD_NOT_ADVERTISING,
+            basis="담당자가 광고계약이 아니라고 답변했습니다.",
+        )
+    if not (_RX_AD_CORE.search(body) or _RX_AD_CORE.search(desc)
+            or "advertis" in str(contract_type_code or "").lower()):
+        return AdTransactionModel(
+            model=AD_NOT_ADVERTISING,
+            basis="광고 거래 고유 어휘(광고주·광고료·매체사·송출·광고물 등)가 없어 광고계약으로 보지 않습니다 "
+                  "— '광고' 는 부수 조항(판촉 등)에만 나옵니다.",
+        )
 
     signals = {
         "media_act": _count(_RX_MEDIA_ACT, body),

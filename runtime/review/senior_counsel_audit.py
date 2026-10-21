@@ -353,6 +353,9 @@ _RX_BROKEN = re.compile(
 
 
 def _parens_balanced(s: str) -> bool:
+    # "1) 2)" 호 번호와 "12. 2)" 같은 별첨 세목 표기는 닫는 괄호만 쓴다 — 괄호 짝 검사에서 뺀다
+    # (2026-10-13: 별첨 세목을 고친 수정안 전부가 "문장이 깨진 수정안" 으로 거둬졌다).
+    s = re.sub(r"(?:(?<=^)|(?<=[\s.]))\d{1,2}\)", "", str(s or ""), flags=re.MULTILINE)
     depth = 0
     for ch in s:
         if ch in "(（":
@@ -455,6 +458,12 @@ def _ground(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> bool:
     # 원문 칸에는 계약 문언이 들어 있다 — "관련 조항" 같은 낱말은 계약 문장에도 나오므로
     # 원문 쪽은 "해당 조항 없음·신설 필요" 표지만 본다.
     claims_new = bool(_RX_NEW_ARTICLE.search(path) or _RX_ABSENT_ORIGINAL.search(original))
+
+    # 별첨·부칙 세목("[별첨] 12. 2)", "[부칙] 제3항")은 본문 조가 아니어도 실재하는 위치다. 2026-10-13 실측:
+    # 별첨 충돌 finding 이 전부 제21조·제15조 같은 본문 조로 옮겨졌다(별첨 원문을 인용한 채로).
+    if not art and not claims_new and original.strip() and re.match(
+            r"^\[\s*(?:별\s*첨|별\s*표|부\s*칙|부속서|첨\s*부)", path.strip()):
+        return True
 
     if art and not claims_new:
         # 2026-10-07 지시 3항 — 인용한 원문이 **다른 조**의 문언이면 조항번호가 틀린 것이다. 실측: 손해배상
@@ -870,7 +879,10 @@ def _ground_statutes(cr: dict[str, Any], index: list[ClauseRef], *, archetype: s
                 uniq.append(r)
         paths = _format_paths(uniq, extra) or [str(cr.get("display_path") or "")]
 
-    reasons = [RELATION_REASON[r] for r in rels if r in RELATION_REASON][:3]
+    # 양도 구조의 2차적 이용은 제45조 제2항 설명이 맡는다 — "이용허락이 2차적저작물까지
+    # 포함하는지" 라는 derivative 설명을 같이 붙이면 귀속 조항을 이용허락으로 읽게 된다.
+    _skip = {"derivative"} if ("assignment_derivative" in rels or "ip_ownership_absent" in rels) else set()
+    reasons = [RELATION_REASON[r] for r in rels if r in RELATION_REASON and r not in _skip][:3]
     business = (
         strip_law_mentions(lbr)
         or strip_law_mentions(str(cr.get("problem") or ""))
@@ -1293,7 +1305,10 @@ def _limit_counts(clause_results: list[dict[str, Any]], audit: _Audit) -> None:
                 if not str(cr.get("high_severity_basis") or "").strip():
                     audit.set_tier(cr, "MEDIUM", "FINDING_COUNT_LIMIT",
                                    f"HIGH {MAX_HIGH}건 초과 — 치명 근거가 서술되지 않음")
+        # 사용자가 지정한 조항·별첨의 답(uf_*, 별첨 축별 비교 ax_*)은 건수로 내리지 않는다 — 지정 쟁점 유실 금지
+        # (2026-10-13 AI 경로: AI 논점이 늘자 별첨 공급가격·기간 연동 finding 이 "MEDIUM 5건 초과분" 으로 LOW 가 됐다).
         mediums = [c for c in clause_results if _visible(c) and not c.get("is_entity_name_correction")
+                   and not c.get("is_user_focus") and not c.get("is_annex_conflict")
                    and str(c.get("risk_tier")).upper() == "MEDIUM"]
         if len(mediums) > MAX_MEDIUM:
             mediums.sort(key=_priority)

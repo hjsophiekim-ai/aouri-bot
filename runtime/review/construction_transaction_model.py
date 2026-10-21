@@ -112,6 +112,17 @@ _CONSTRUCTION_SIGNALS: dict[str, re.Pattern[str]] = {
 #: 이것만으로도 건설공사 도급임이 사실상 확정되는 강한 표지.
 _STRONG_CONSTRUCTION = ("works_contract", "progress_payment", "design_change")
 
+#: 공사를 **수행한다**는 축. 이 중 하나는 있어야 건설공사 도급이다.
+_WORKS_CORE = (
+    "works_contract", "commencement", "completion", "schedule",
+    "progress_payment", "design_change", "construction_act",
+)
+
+#: 담당자가 공사계약이 아니라고 직접 말했다(설명·사전질문 답변).
+_RX_USER_NOT_CONSTRUCTION = _rx(
+    r"(?:건설|인테리어|공사)\s*(?:도급)?\s*(?:계약)?(?:서)?\s*(?:이|가)?\s*(?:아님|아니|아닙니다|아니에요|아니야)"
+)
+
 
 # ── 2. 당사자 지위 신호 ─────────────────────────────────────────────────────
 #: 우리가 도급받는 쪽임을 사용자가 설명한 경우.
@@ -284,6 +295,13 @@ def _is_construction_contract(hits: dict[str, int]) -> tuple[bool, bool]:
     """
     axes = sum(1 for v in hits.values() if v)
     strong = sum(1 for key in _STRONG_CONSTRUCTION if hits.get(key))
+    # 공사 **수행** 축(착공·준공·공정·시공·기성·설계변경·공사도급)이 하나도 없으면
+    # 건설공사가 아니다. 2026-10-13 실측: 물품공급계약이 "발주자"(계약 변경 요청자)·
+    # "하자보증"·"계약금액"·"발주시방서" 4개 축만으로 건설로 판정돼 "이 건설·인테리어
+    # 공사 계약에서 우리 회사의 지위는?" 이 첫 사전질문으로 나갔다. 그 넷은 물품
+    # 매매에도 그대로 나오는 말이다.
+    if not any(hits.get(key) for key in _WORKS_CORE):
+        return False, False
     if axes >= 6 or (strong >= 2 and axes >= 3):
         return True, True
     if axes >= 4 or (strong >= 1 and axes >= 3):
@@ -445,13 +463,19 @@ def classify_construction_transaction(
             is_construction = True
             confident = confident or sum(1 for v in hits.values() if v) >= 4
 
+    desc_all = "\n".join(x for x in (desc, *_answer_values(answers)) if str(x).strip())
+    if is_construction and _RX_USER_NOT_CONSTRUCTION.search(desc_all):
+        return ConstructionTransactionModel(
+            is_construction=False, text_signals=hits,
+            role_basis="담당자가 건설·공사계약이 아니라고 답변했습니다.",
+        )
+
     if not is_construction:
         return ConstructionTransactionModel(
             is_construction=False, text_signals=hits,
             role_basis="건설공사 도급의 신호가 충분하지 않습니다.",
         )
 
-    desc_all = "\n".join(x for x in (desc, *_answer_values(answers)) if str(x).strip())
     has_sub_text = bool(_RX_SUBCONTRACT_IN_TEXT.search(body))
     has_sub_user = bool(_RX_USER_SUBCONTRACT.search(desc_all))
     has_subcontracting = has_sub_text or has_sub_user

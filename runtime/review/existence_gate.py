@@ -419,6 +419,10 @@ def enforce_semantic_anchor(
         if clause_effects and finding_effects:
             if effects_overlap(clause_effects, finding_effects):
                 continue
+            from runtime.review.finding_integrity_gates import damages_scope_compatible
+
+            if damages_scope_compatible(article.exact_text, str(cr.get("suggested_rewrite") or "")):
+                continue  # 손해배상 조에 붙은 배상 범위 보완 — 손해 원인 낱말로 연결을 끊지 않는다
             axis = "legal_effect"
         else:
             # 한쪽이라도 효과 태그가 비면 주제 축으로 본다. 조항 전문과 지적

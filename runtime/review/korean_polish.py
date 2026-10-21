@@ -64,13 +64,35 @@ _COLLOQUIAL_TO_FORMAL: list[tuple[str, str]] = [
 # "본 계약 제N조"처럼 검토대상 계약서 자신의 조항 번호는 앞에 법령명(~법/~법률)이
 # 오지 않으므로 이 패턴에 매치되지 않는다 — 법령명 뒤에 붙은 조문 번호만 제거한다.
 _LAW_ARTICLE_NUMBER_RX = re.compile(
-    r"([가-힣A-Za-z]{1,15}(?:법률|법))\s*제\d+조(?:의\d+)?(?:\s*\([^)]{0,60}\))?"
+    r"([가-힣A-Za-z]{1,15}(?:법률|법))\s*제\s*(\d+)\s*조(?:의\s*\d+)?"
+    # 조를 지우면서 뒤의 항·호를 남기면 "저작권법 제2항" 같은 없는 인용이 된다(2026-10-21 실측).
+    r"(?:\s*제\s*\d+\s*항)?(?:\s*제?\s*\d+\s*호)?(?:\s*\([^)]{0,60}\))?"
 )
 
 
+def _verified_articles() -> set[tuple[str, str]]:
+    """검증된 조문 표(statute_grounding.STATUTES)의 (법령명, 조) — 이것은 지우지 않는다."""
+    try:
+        from runtime.review.statute_grounding import STATUTES
+    except Exception:  # noqa: BLE001 - 표를 못 읽으면 종전처럼 모두 지운다
+        return set()
+    return {(st.law.replace(" ", ""), str(st.article)) for st in STATUTES}
+
+
 def _strip_unverified_law_article_numbers(text: str) -> str:
-    """Drop unverified external-law article numbers, keeping only the law name."""
-    return _LAW_ARTICLE_NUMBER_RX.sub(r"\1", text)
+    """Drop unverified external-law article numbers, keeping only the law name.
+
+    검증된 조문 표에 있는 조문(예: 저작권법 제45조)은 그대로 둔다 — 그 표가 바로 '검증된 DB' 다.
+    """
+    verified = _verified_articles()
+
+    def _sub(m: re.Match[str]) -> str:
+        law = m.group(1).replace(" ", "")
+        if any(art == m.group(2) and (law.endswith(v_law) or v_law.endswith(law)) for v_law, art in verified):
+            return m.group(0)
+        return m.group(1)
+
+    return _LAW_ARTICLE_NUMBER_RX.sub(_sub, text)
 
 
 def _collapse_immediate_repeated_phrases(text: str, max_phrase_words: int = 6) -> str:

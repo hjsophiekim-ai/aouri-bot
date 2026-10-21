@@ -14,6 +14,8 @@ DOCX 를 기준으로 통일했다(사용자 지시) — 즉 PDF 가 DOCX 쪽으
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -136,7 +138,8 @@ def build_section1_rows(
     # 허용 수령자, 개인정보 처리 '별도 계약')는 이 계약에 성립하지 않는다
     # (2026-09-28 실측: 직원 서약서 리포트 상단에 그대로 나갔다).
     _employee_nda = str(_gt.get("subtype") or "") == "employee_nda"
-    _counterparty = format_val(dp.get("counterparty"))
+    _counterparty = str(cs.get("counterparty_legal_entity") or "").strip() or format_val(dp.get("counterparty"))
+    _counterparty = re.sub(r"^\s*(?:와/과|과/와|와|과)\s+", "", str(_counterparty or ""))
     if _employee_nda and str(_counterparty or "").strip() in ("", "상대방", "미확정", "미상"):
         _counterparty = str(cs.get("counterparty_label") or "") or _counterparty
     # 온라인 판매·공급 거래(2026-10-01 와이어드 지시 2항) — 상대방을 "구매자"로 적지 않는다.
@@ -186,17 +189,22 @@ def build_section1_rows(
         if _pd:
             rows.append(HeaderRow(f"개인정보 취급 구조: {_pd}"))
     else:
+        # 같은 조항에 지적이 걸려 있으면 "규정 있음" 만으로 끝내지 않는다 — 요약은
+        # 있다고 하고 상세는 부족하다고 하는 모순을 한 줄 안에서 풀어 준다.
+        _fact_articles = dp.get("_fact_articles") if isinstance(dp.get("_fact_articles"), dict) else {}
+        _issue_articles = {
+            _issue_attr(i, "article_number") for i in list(high_issues or []) + list(medium_issues or [])
+        } - {""}
         for r in _structure_rows(struct_code, dp, include_missing=True):
-            if r["key"] in ("our_party", "counterparty", "contract_type"):
-                continue  # 위에서 이미 출력했다
-            rows.append(HeaderRow(f"{r['label']}: {r['value']}", is_high_risk=bool(r["is_high_risk"])))
+            if r["key"] in ("our_party", "counterparty", "contract_type", "our_legal_role"):
+                continue  # 위에서 이미 출력했다(우리 측 지위가 코드값으로 한 번 더 찍혔다)
+            value = r["value"]
+            if str(_fact_articles.get(r["key"]) or "") in _issue_articles and value.startswith("규정 있음"):
+                value += " · 일부 보완 필요(아래 상세 검토 참조)"
+            rows.append(HeaderRow(f"{r['label']}: {value}", is_high_risk=bool(r["is_high_risk"])))
 
-    conf = dp.get("confidence")
-    if conf is not None:
-        try:
-            rows.append(HeaderRow(f"분석 신뢰도: {float(conf):.0%}"))
-        except (TypeError, ValueError):
-            pass
+    # "분석 신뢰도 NN%" 는 계약유형 분류기의 휴리스틱 점수였다 — 법률 판단의
+    # 정확도처럼 읽히는데 검증된 산정 근거가 없어 내보내지 않는다(2026-10-19 지시 10항).
 
     # 직원 서약서는 사용자(회사)가 직원에게 받는 문서다 — 상대방 양식이 아니다.
     rows.append(HeaderRow(

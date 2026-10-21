@@ -58,6 +58,19 @@ def _tags(value: Any) -> list[str]:
     return [str(x) for x in value if isinstance(x, str) and x in LEGAL_EFFECT_TAGS]
 
 
+#: 손해배상 의무를 정하는 문형(원문·문안 양쪽에서 본다). "그 손해(명성 등을 포함한다)를 전부 배상" 처럼
+#: 손해 뒤에 괄호가 오는 원문도 받는다.
+_RX_DAMAGES_DUTY = re.compile(
+    r"손해(?:\s*\([^)]{0,60}\))?(?:액)?(?:를|을)?\s*(?:전부\s*|모두\s*)?배상(?:하여야|한다|할|하며|하고)"
+)
+
+
+def damages_scope_compatible(original_text: str, proposed_text: str) -> bool:
+    """원문과 문안이 모두 손해배상 의무를 다루는가 — 손해 원인 나열 때문에 다른 효과로 읽지 않기 위함."""
+    return bool(_RX_DAMAGES_DUTY.search(str(original_text or ""))
+                and _RX_DAMAGES_DUTY.search(str(proposed_text or "")))
+
+
 def _proposed_text(cr: dict[str, Any]) -> str:
     """이 finding이 계약에 실제로 넣으라고 제안하는 **문안**만 모은다.
 
@@ -140,6 +153,12 @@ def enforce_clause_semantic_gate(
         original_tags = _tags(cr.get("original_effect_tags")) or infer_legal_effects(original_text)
         proposed_tags = _tags(cr.get("rewrite_effect_tags")) or infer_legal_effects(proposed)
         if not original_tags or not proposed_tags or effects_overlap(original_tags, proposed_tags):
+            kept.append(cr)
+            continue
+        if damages_scope_compatible(original_text, proposed):
+            # 손해배상 조항의 배상 범위를 보완하는 문안 — 손해 원인으로 "비밀유지의무 위반·광고 집행 중단" 을
+            # 나열했다고 다른 효과의 문안이 아니다(2026-10-21: 정당한 손해배상 범위 지적이 통째로 지워졌다).
+            # 공통 분류표에 태그를 더하지 않고 이 게이트에서만 본다 — 태그를 더하면 최소수정 문안 선택까지 바뀐다.
             kept.append(cr)
             continue
 

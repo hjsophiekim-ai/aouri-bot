@@ -53,6 +53,10 @@ def _norm(text: str) -> str:
     s = unicodedata.normalize("NFKC", str(text or ""))
     s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
     s = re.sub(r"\s+", "", s)
+    # "제2조(비용 및 지급) 갑은 …" 의 제목 괄호 — 청크 원문은 "비용 및 지급 갑은 …" 로 괄호 없이 이어진다.
+    # 괄호 모양 차이로 실재하는 원문을 가짜 인용으로 지우지 않는다(2026-10-21 실측: 86% 로 인용 삭제 →
+    # 원문 없는 지적이 출력 필터에서 탈락해 지급 유보 HIGH 가 사라졌다).
+    s = re.sub(r"[()\[\]{}【】「」『』<>]", "", s)
     return s
 
 

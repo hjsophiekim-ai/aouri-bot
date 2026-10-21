@@ -109,6 +109,21 @@ _RX_KR_ARTICLE_REF_TAIL = re.compile(
 )
 
 
+#: "제 10 조. [계약의 해지]" 처럼 괄호 대신 마침표·대괄호로 제목을 다는 양식. 그대로 두면 조 제목이
+#: ". [계약의 해지]" 가 되어 보고서에 "[. [비밀유지]]" 로 찍히고, 제목 대조 게이트가 정상 finding 의
+#: 조항번호를 지운다(2026-10-19 외부 에디터 용역계약 실측).
+_RX_KR_BRACKET_TITLE = re.compile(r"^[.:·\s]*[\[【〔]\s*([^\]】〕]{1,80}?)\s*[\]】〕]\s*(.*)$")
+
+
+def _clean_heading_rest(rest: str) -> str:
+    """괄호 없는 조 제목 줄의 나머지에서 제목만 — 마침표·대괄호 장식을 걷는다."""
+    r = (rest or "").strip()
+    m = _RX_KR_BRACKET_TITLE.match(r)
+    if m:
+        return " ".join(x for x in (m.group(1).strip(), m.group(2).strip()) if x)
+    return re.sub(r"^[.:·]\s*", "", r)
+
+
 def _is_kr_article_heading(match: "re.Match[str]") -> bool:
     """괄호 제목이 있으면 조 제목, 없으면 뒤따르는 글자로 판별한다."""
     if (match.group(2) or "").strip():
@@ -135,7 +150,7 @@ def is_article_heading_line(line: str) -> tuple[str, str] | None:
     num = re.sub(r"[^\d]", "", m.group(1) or "")
     if not num:
         return None
-    title = (m.group(2) or "").strip() or (m.group(3) or "").strip()
+    title = (m.group(2) or "").strip() or _clean_heading_rest(m.group(3) or "")
     return num, title
 
 
@@ -541,13 +556,26 @@ def _strip_stray_circled_number_tail(text: str) -> str:
 
 
 _RX_APPENDIX_HEAD = re.compile(
-    r"^\[\s*(별표|부속서|첨부(?:\s*서류)?|Appendix|Schedule|Exhibit)\s*\]\s*(.*)$",
+    r"^\[\s*(별\s*표|별\s*첨|부\s*속\s*서|첨\s*부(?:\s*서류)?|Appendix|Schedule|Exhibit)\s*(\d*)\s*\]\s*(.*)$"
+    r"|^(부\s*칙)\s*$",
     re.IGNORECASE,
 )
 _RX_SIGNATURE_BLOCK_START = re.compile(
     r"^(계약\s*체결일|체결일|계약일)\s*[:：]"
     r"|^(갑|을)\s*[\(（](甲|乙)[\)）]\s*$"
+    # 2026-10-13 실측(일룸 물품거래계약서): "2026년 9 월 30 일" → "[갑] 주 소 …" 서명란이
+    # 부칙·별첨과 함께 제27조 원문으로 인용됐다.
+    r"|^\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일\s*$"
+    r"|^\[\s*(갑|을)\s*\]\s*주\s*소"
 )
+
+
+def _appendix_title(m: "re.Match[str]") -> str:
+    if m.group(4):
+        return "부칙"
+    word = re.sub(r"\s+", "", m.group(1) or "") or "별표"
+    num = (m.group(2) or "").strip()
+    return f"{word}{num}" if num else word
 
 
 def _split_trailing_appendix_and_signature(
@@ -565,37 +593,29 @@ def _split_trailing_appendix_and_signature(
     chunk (it references real clause content, e.g. 제8조 rates); a signature
     marker is pure boilerplate and is dropped entirely, never quoted in any
     finding.
+
+    2026-10-13: 부칙 → 서명란 → [별 첨] 처럼 구간이 여럿이면 각각을 따로 끊는다.
+    종전에는 첫 표지 하나만 보아 부칙·서명란·별첨 전체(4천여 자)가 제27조(유효기간)
+    원문이 됐고, 사용자가 지정한 "[별첨]" 검토 요청이 제27조로 매핑됐다.
     """
-    app_idx: int | None = None
-    app_title = ""
-    sig_idx: int | None = None
-    for i, line in enumerate(body_lines):
+    clause_body: list[str] = []
+    sections: list[tuple[str, list[str]]] = []
+    mode = "body"
+    for line in body_lines:
         l = (line or "").strip()
-        if not l:
+        m = _RX_APPENDIX_HEAD.match(l) if l else None
+        if m:
+            sections.append((_appendix_title(m), [line]))
+            mode = "appendix"
             continue
-        if app_idx is None:
-            m = _RX_APPENDIX_HEAD.match(l)
-            if m:
-                app_idx = i
-                app_title = (m.group(1) or "").strip()
-                continue
-        if sig_idx is None and _RX_SIGNATURE_BLOCK_START.match(l):
-            sig_idx = i
-            if app_idx is not None:
-                break
-
-    if app_idx is None and sig_idx is None:
-        return body_lines, []
-
-    cut_idx = app_idx if app_idx is not None else sig_idx
-    clause_body = body_lines[:cut_idx]
-    appendix_sections: list[tuple[str, list[str]]] = []
-    if app_idx is not None:
-        appendix_end = sig_idx if (sig_idx is not None and sig_idx > app_idx) else len(body_lines)
-        appendix_lines = body_lines[app_idx:appendix_end]
-        if appendix_lines:
-            appendix_sections.append((app_title or "별표", appendix_lines))
-    return clause_body, appendix_sections
+        if l and _RX_SIGNATURE_BLOCK_START.match(l):
+            mode = "signature"
+            continue
+        if mode == "body":
+            clause_body.append(line)
+        elif mode == "appendix":
+            sections[-1][1].append(line)
+    return clause_body, sections
 
 
 def _parse_kr_article_hierarchy(
@@ -955,7 +975,7 @@ def extract_clauses(text: str) -> tuple[list[ClauseChunk], ClauseExtractionRepor
             idxs.append(i)
             head = (m.group(1) or "").strip()
             name = (m.group(2) or "").strip()
-            rest = (m.group(3) or "").strip()
+            rest = (m.group(3) or "").strip() if name else _clean_heading_rest(m.group(3) or "")
             title = " ".join(x for x in [name, rest] if x).strip() or head
             titles[i] = title
             num = re.sub(r"[^\d의\s]", "", head)
