@@ -129,6 +129,13 @@ class RuleQueryService:
             out.append("개인정보/처리위탁")
         if self._any_keyword(text, ["광고", "마케팅", "협찬", "marketing", "sponsor", "모델"]):
             out.append("광고/마케팅/협찬")
+        # 2026-10-30 실측(천안 상가 임대차): 철거대상 목록의 "광고물", "인테리어 공사", "제품판매" 낱말로
+        # 부동산 임대차에 대리점·공사·물류·광고 규칙 묶음이 붙어 요약 근거가 대리점법·산업안전보건법이 됐다.
+        # 실제 거래가 부동산 임대차로 확인되면 이 낱말들은 거래 유형의 신호가 아니다.
+        from runtime.review.deal_assessment import NATURE_REAL_ESTATE_LEASE, classify_nature
+
+        if classify_nature(text, [])[0] == NATURE_REAL_ESTATE_LEASE:
+            out = [x for x in out if x == "개인정보/처리위탁"]
         return list(dict.fromkeys(out))
 
     def _entity_match(self, rule_entity: str, input_entity: str) -> bool:

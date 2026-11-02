@@ -226,7 +226,9 @@ def derive_mandatory_review_issues(
         tuple(default_issues) if default_issues is not None
         else DEFAULT_ISSUE_MAP_BY_CONTRACT_TYPE.get(code, ())
     )
-    low = (review_focus or "").lower()
+    # 사전질문 답변 블록은 요청이 아니라 사실이다 — AI 가 만든 질문 문구("출연자 초상권·음성권…")의 낱말로
+    # 사용자가 개인정보 쟁점을 물은 것처럼 되어 "수정 필요" 가 나갔다(2026-10-21). user_review_request 와 같게 뗀다.
+    low = str(review_focus or "").split("[사용자 확인 답변]", 1)[0].lower()
 
     def _asked(issue: MandatoryReviewIssue) -> bool:
         return bool(low.strip()) and any(k.lower() in low for k in issue.focus_keywords if k)

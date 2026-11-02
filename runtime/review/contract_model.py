@@ -52,6 +52,7 @@ IP_ANCILLARY_TYPES: frozenset[str] = frozenset({
     "purchase_supply",
     "product_supply",
     "rental",
+    "real_estate_lease",
     "dealer_rental_service_contract",
     "dealer_agency",
     "distribution_resale",

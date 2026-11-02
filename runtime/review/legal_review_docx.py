@@ -92,6 +92,11 @@ class ReviewIssue:
     redline_instruction: dict[str, Any] | None = None
     legal_grounding: dict[str, Any] | None = None
     linked_edits: list[dict[str, str]] = field(default_factory=list)
+    # 거래 전체 판단의 핵심 위험(2026-10-30) — output_filter.ReviewIssue 와 같은 의미.
+    review_category: str = ""
+    loss_path_text: str = ""
+    required_actions: list[str] = field(default_factory=list)
+    action_only: bool = False
 
     @property
     def display_bucket(self) -> str:
@@ -251,14 +256,15 @@ def _render_redline_instruction(body: ET.Element, redline: dict[str, Any], *, co
         _para(body, f"※ 자동 적용 보류: {redline.get('hold_reason') or ''}", bold=True, color=COLOR_HIGH, indent=1)
     _para(body, "수정 문구:", bold=True, color=color, indent=1)
     final_text = str(redline.get("final_clause_text") or "")
-    for line in final_text.splitlines()[:20] or [""]:
+    # 완성 문구는 줄 수·글자 수로 자르지 않는다 — 잘린 문안("기존 예금의 해지와…")은 붙여 넣을 수 없다(2026-10-30 지시 5항).
+    for line in final_text.splitlines() or [""]:
         line = line.strip()
         if line:
             p_line = _p(body)
             r_line = _r(p_line, color=color)
             t_elem = ET.SubElement(r_line, _w("t"))
             t_elem.set(f"{{{XML_NS}}}space", "preserve")
-            t_elem.text = "      " + safe_truncate(_clean_text(line), 400)
+            t_elem.text = "      " + _clean_text(line, max_len=100000)
     reason = str(redline.get("reason") or "")
     if reason:
         _para(body, f"수정 이유: {safe_truncate(reason, 350)}", indent=1, italic=True)
@@ -286,6 +292,17 @@ def _render_linked_edits(body: ET.Element, issue: "ReviewIssue", *, color: str) 
                 t_elem = ET.SubElement(r_line, _w("t"))
                 t_elem.set(f"{{{XML_NS}}}space", "preserve")
                 t_elem.text = "      " + safe_truncate(_clean_text(line.strip()), 600)
+
+
+def _render_lines(body: ET.Element, lines: list[tuple[str, str, str]], *, indent: int = 0) -> None:
+    """deal_report 의 (종류, 문장, 색) 줄을 그린다 — PDF 와 같은 줄."""
+    tones = {"high": COLOR_HIGH, "medium": COLOR_MEDIUM, "low": COLOR_LOW}
+    for kind, text, tone in lines:
+        if kind == "heading":
+            _heading1(body, text)
+        else:
+            _para(body, text, bold=kind == "bold", color=tones.get(tone), italic=kind == "note",
+                  indent=indent + (1 if kind == "bullet" else 0))
 
 
 def _separator(body: ET.Element) -> None:
@@ -364,7 +381,8 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         original_text=safe_truncate(str(d.get("original_text") or ""), 500),
         problem=safe_truncate(str(d.get("problem") or d.get("rewrite_reason") or ""), 400),
         legal_business_reason=safe_truncate(str(d.get("legal_business_reason") or d.get("problem") or ""), 400),
-        proposed_revision=safe_truncate(str(d.get("proposed_revision") or d.get("suggested_rewrite") or ""), 800),
+        # 수정 문구는 자르지 않는다 — "…" 로 끝난 문안은 그대로 붙여 넣을 수 없다(2026-10-30 지시 5항).
+        proposed_revision=str(d.get("proposed_revision") or d.get("suggested_rewrite") or "").strip(),
         negotiation_position=safe_truncate(neg, 300),
         # output_filter.build_final_findings() emits "related_clause_ids"
         # (ReviewIssue.to_dict()'s key there); legal_review_docx.py's own
@@ -378,6 +396,10 @@ def _review_issue_from_dict(d: dict, *, is_counterparty_form: bool = True) -> Re
         redline_instruction=d.get("redline_instruction") if isinstance(d.get("redline_instruction"), dict) else None,
         legal_grounding=d.get("legal_grounding") if isinstance(d.get("legal_grounding"), dict) else None,
         linked_edits=linked_edit_rows(d),
+        review_category=str(d.get("review_category") or ""),
+        loss_path_text=str(d.get("loss_path_text") or ""),
+        required_actions=[str(a) for a in (d.get("required_actions") or []) if str(a).strip()],
+        action_only=bool(d.get("action_only")),
     )
 
 
@@ -401,7 +423,8 @@ def grounding_lines(issue: "ReviewIssue") -> list[tuple[str, str]]:
     statutes = [s for s in (g.get("statutes") or []) if isinstance(s, dict)]
     if statutes:
         for st in statutes:
-            out.append(("관련 법령", f"{st.get('citation')}({st.get('title')}) — {st.get('role')}"))
+            _title = f"({st.get('title')})" if str(st.get("title") or "").strip() else ""
+            out.append(("관련 법령", f"{st.get('citation')}{_title} — {st.get('role')}"))
     elif g.get("statute_note"):
         out.append(("관련 법령", str(g["statute_note"])))
     if str(g.get("legal_reason") or "").strip():
@@ -447,7 +470,8 @@ def _build_review_issues(
             neg = fallback_neg
 
         # Validate
-        if not sr or _has_placeholder(sr):
+        _action_only = bool(cr.get("action_only")) and bool(cr.get("required_actions"))
+        if (not sr or _has_placeholder(sr)) and not _action_only:
             if sev == "HIGH" and not cr.get("is_mandatory"):
                 logger.error("HIGH issue clause_id=%s has no proposed_revision", cr.get("clause_id"))
             continue
@@ -487,7 +511,7 @@ def _build_review_issues(
             original_text=safe_truncate(ot, 500) if ot else f"[{cr.get('clause_title', '')}] 관련 조항",
             problem=safe_truncate(problem, 400),
             legal_business_reason=safe_truncate(lr, 400),
-            proposed_revision=safe_truncate(sr, 800),
+            proposed_revision=sr,
             negotiation_position=safe_truncate(neg, 300),
             related_clauses=[str(r) for r in related[:6]],
             confidence=float(cr.get("confidence") or 0.75),
@@ -496,6 +520,10 @@ def _build_review_issues(
             redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
             legal_grounding=cr.get("legal_grounding") if isinstance(cr.get("legal_grounding"), dict) else None,
             linked_edits=linked_edit_rows(cr),
+            review_category=str(cr.get("review_category") or ""),
+            loss_path_text=str(cr.get("loss_path_text") or ""),
+            required_actions=[str(a) for a in (cr.get("required_actions") or []) if str(a).strip()],
+            action_only=_action_only,
         )
         issues.append(ri)
 
@@ -682,6 +710,8 @@ def build_legal_review_docx(
     # [2026-09-10 지시] 법률 적용요건 선판단 결론. 조항별 검토보다
     # 앞에 표시해, 어떤 법률이 왜 적용/비적용인지부터 읽히게 한다.
     statute_gate_decisions: list[dict[str, Any]] | None = None,
+    # [2026-10-30] 거래 전체 판단 — 조항 검토보다 먼저 보인다.
+    deal_assessment: dict[str, Any] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review DOCX.
 
@@ -732,6 +762,15 @@ def build_legal_review_docx(
     _para(body, "- LOW / 참고: 파란색, 기본 숨김", color=COLOR_LOW)
     _blank(body)
 
+    # ── Section 0-1: 거래 전체 판단 (2026-10-30) ─────────────────────────────
+    from runtime.review.deal_report import deal_section_lines, issue_extra_lines, request_row_lines, requests_complete
+    _deal_lines = deal_section_lines(deal_assessment)
+    if _deal_lines:
+        _render_lines(body, _deal_lines)
+        _blank(body)
+        _separator(body)
+    _requests_done = requests_complete(user_review_coverage)
+
     # ── Section 0: 최초 요청사항 반영 여부 요약표 ───────────────────────────
     # review_focus에서 사용자가 직접 인용한 조항번호(예: "제5조 제2항 제1호")가
     # 최종 결과에서 누락되지 않았는지 한눈에 확인할 수 있는 표. 모든 항목이
@@ -745,6 +784,9 @@ def build_legal_review_docx(
             "checked_no_issue": "검토완료 · 특이사항 없음",
             "clause_not_found": "계약서에서 조항 확인 불가",
         }
+        if not _requests_done:
+            # 요청에 실질 답이 없으면 지정 조항을 "검토완료" 로 표시하지 않는다(2026-10-30).
+            _status_label = {k: v.replace("검토완료", "검토 미완료(요청 답변 부족)") for k, v in _status_label.items()}
         for t in mandatory_review_targets:
             if not isinstance(t, dict):
                 continue
@@ -831,6 +873,10 @@ def build_legal_review_docx(
         }
         for r in user_review_coverage:
             if not isinstance(r, dict):
+                continue
+            if r.get("source") == "deal_request":
+                _render_lines(body, request_row_lines(r))
+                _blank(body)
                 continue
             verdict = str(r.get("review_status") or "미답변")
             color = _verdict_color2.get(verdict, COLOR_HIGH)
@@ -1006,6 +1052,7 @@ def build_legal_review_docx(
                 _para(body, f"원문: {safe_truncate(issue.original_text, 300)}", indent=1)
 
             _para(body, f"문제점: {safe_truncate(issue.problem, 350)}", indent=1)
+            _render_lines(body, issue_extra_lines(issue), indent=1)
             _g_lines = grounding_lines(issue)
             if _g_lines:
                 for _label, _text in _g_lines:
@@ -1017,7 +1064,7 @@ def build_legal_review_docx(
                 _render_redline_instruction(body, issue.redline_instruction, color=COLOR_HIGH)
             elif issue.proposed_revision:
                 _para(body, "수정문안:", bold=True, color=COLOR_HIGH, indent=1)
-                for line in issue.proposed_revision.splitlines()[:15]:
+                for line in issue.proposed_revision.splitlines():
                     line = line.strip()
                     if line:
                         p_line = _p(body)
@@ -1025,7 +1072,7 @@ def build_legal_review_docx(
                         t_elem = ET.SubElement(r_line, _w("t"))
                         t_elem.set(f"{{{XML_NS}}}space", "preserve")
                         t_elem.text = "      " + safe_truncate(_clean_text(line), 250)
-            else:
+            elif not issue.action_only:
                 logger.error("HIGH issue %s has no proposed_revision", issue.clause_id)
             _render_linked_edits(body, issue, color=COLOR_HIGH)
 
@@ -1058,11 +1105,12 @@ def build_legal_review_docx(
                 _para(body, f"원문: {safe_truncate(issue.original_text, 200)}", indent=1)
 
             _para(body, f"문제점: {safe_truncate(issue.problem, 300)}", indent=1)
+            _render_lines(body, issue_extra_lines(issue), indent=1)
             for _label, _text in grounding_lines(issue):
                 _para(body, f"[{_label}] {safe_truncate(_text, 360)}", indent=1)
             if issue.redline_instruction:
                 _render_redline_instruction(body, issue.redline_instruction, color=COLOR_MEDIUM)
-            else:
+            elif not issue.action_only:
                 _para(body, f"수정방향: {safe_truncate(issue.proposed_revision, 350)}", indent=1)
             _render_linked_edits(body, issue, color=COLOR_MEDIUM)
 
@@ -1082,6 +1130,10 @@ def build_legal_review_docx(
                    and c.get("triage") == "KEEP"]
     _finance_items = [c for c in clause_results if isinstance(c, dict) and c.get("finance_check")
                       and not c.get("dedup_suppressed")]
+    # 수정 지적이 남긴 "사업부가 정할 사항"(배분액·기한 등) — 계약에 없는 수치를 지어내지 않고 확인사항으로 싣는다.
+    _business_rows = [(c, [str(x) for x in c.get("business_items") or [] if str(x).strip()])
+                      for c in clause_results if isinstance(c, dict) and not c.get("dedup_suppressed")
+                      and c.get("business_items") and str(c.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")]
     if _keep_items:
         _separator(body)
         _heading1(body, "현행 유지(KEEP) 판단 — 검토했으나 수정하지 않는 조항")
@@ -1098,15 +1150,20 @@ def build_legal_review_docx(
                 _para(body, f"[기존 관련조항] {', '.join(_kg['contract_clauses'])}", indent=1)
             for _st in _kg.get("statutes") or []:
                 _para(body, f"[관련 법령] {_st.get('citation')}({_st.get('title')}) — {_st.get('role')}", indent=1)
-    if _finance_items:
+    if _finance_items or _business_rows:
         _separator(body)
         _heading1(body, "재경·사업부 확인사항 — 법무 수정사항 아님")
+        for _bc, _bi in _business_rows:
+            _para(body, f"[사업부 확인] {_bc.get('display_path') or ''} — 수정안에 넣을 조건", bold=True)
+            _para(body, "정할 사항: " + ", ".join(_bi), indent=1)
         for _f in _finance_items:
             _ft = ""
             for _d in _f.get("detected_issue_list") or []:
                 if isinstance(_d, dict) and _d.get("issue_title"):
                     _ft = str(_d["issue_title"]); break
-            _para(body, f"[재경 확인] {_f.get('display_path') or ''} {_ft}".strip(), bold=True)
+            _tag = ("사실 확인" if _f.get("statute_premise_unconfirmed") else
+                    "사업부 확인" if _f.get("business_check") else "재경 확인")
+            _para(body, f"[{_tag}] {_f.get('display_path') or ''} {_ft}".strip(), bold=True)
             _fp = str(_f.get("problem") or _f.get("rewrite_reason") or "")
             if _fp:
                 _para(body, safe_truncate(_fp, 300), indent=1)
@@ -1216,8 +1273,11 @@ def build_legal_review_docx(
 
     _blank(body)
     ET.SubElement(body, _w("sectPr"))
+    return pack_document(doc)
 
-    # ── Build DOCX zip ──────────────────────────────────────────────────────
+
+def pack_document(doc: ET.Element) -> bytes:
+    """word/document.xml 하나로 된 최소 DOCX 패키지 — 내부 분석본·사업팀 전달본 공용."""
     document_xml = ET.tostring(doc, encoding="utf-8", xml_declaration=True)
 
     types_root = ET.Element(f"{{{PKG_TYPES_NS}}}Types")

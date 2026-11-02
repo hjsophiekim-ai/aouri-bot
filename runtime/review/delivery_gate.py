@@ -159,6 +159,7 @@ STATUS_LABELS: dict[str, str] = {
     "REVIEW_FAILED_USER_LEGAL_SCOPE_MISSING": "담당자가 언급한 법률에 대한 판단이 누락됨",
     "REVIEW_FAILED": "자동 검증에서 확인이 필요한 항목이 있음",
     "REVIEW_NEEDS_ATTENTION": "최종 자가점검 10개 항목 중 확인이 필요한 항목이 있음",
+    "REVIEW_INCOMPLETE_UNANSWERED_REQUEST": "검토요청 중 실질적인 답을 내지 못한 항목이 있어 검토 미완료 — 필요한 자료를 확인한 뒤 재검토 필요",
     "REVIEW_FAILED_COUNTERPARTY_ROLE_CONFLICT": "상대방 당사자 지위 판정이 일관되지 않아 확인이 필요함",
     "REVIEW_FAILED_STATUTE_CONFLICT": "비적용으로 판단한 법률의 의무를 주장하는 검토의견이 있어 제거함",
     "REVIEW_BLOCKED_ROLE_STRUCTURE_MISMATCH": "당사자 지위 판정이 계약서상 거래구조와 어긋나 결과를 생성하지 않음 — 당사자 정의를 확인한 뒤 재검토 필요",

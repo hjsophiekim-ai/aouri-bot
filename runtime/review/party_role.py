@@ -70,6 +70,7 @@ _CANONICAL_SERVICE_RECIPIENT_TYPE_CODES = frozenset({
     "store_operation_outsourcing", "creative_agency_service",
     "content_production_service", "advertising_content_production",
     "advertising_media_placement",
+    "advertising_sponsorship",
 })
 
 _TESTING_SERVICE_KW = [

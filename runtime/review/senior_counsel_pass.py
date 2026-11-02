@@ -227,6 +227,11 @@ def _mergeable(cr: dict[str, Any]) -> bool:
         return False
     if bool(cr.get("is_mandatory_review_target")):
         return False
+    if bool(cr.get("is_transaction_package")) or bool(cr.get("business_check")):
+        # 원문 문형으로 쟁점을 따로 세운 거래 package·사업부 확인 항목은 (조, 대략적 주제, 효과) 가 같다는 이유로
+        # 합치지 않는다 — 같은 조의 "조회수 보장 기준" 과 "쇼츠 사양" 이 하나로 뭉개졌다(2026-10-21).
+        # 같은 손실 시나리오의 흡수는 senior_counsel_audit 의 package 흡수가 맡는다.
+        return False
     return True
 
 

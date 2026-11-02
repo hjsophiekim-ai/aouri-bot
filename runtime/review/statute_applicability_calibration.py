@@ -151,6 +151,42 @@ def calibrate_subcontract_act_applicability(result: dict[str, Any], full_text: s
     return out
 
 
+#: 대상 콘텐츠가 온라인 플랫폼 채널에 게시되는 신호.
+_RX_ONLINE_CHANNEL = re.compile(r"YouTube|유튜브|인스타그램|틱톡|TikTok|웹\s*예능|온라인\s*(?:채널|플랫폼)|네이버\s*TV", re.IGNORECASE)
+#: 방송법상 방송사업자의 방송으로 송출되는 신호.
+_RX_BROADCAST_SIGNAL = re.compile(r"지상파|종합편성|케이블\s*(?:TV|방송)|방송사업자|IPTV|위성방송|홈쇼핑")
+_RX_BROADCAST_STATUTE = re.compile(r"방송법|협찬고지")
+
+
+def calibrate_broadcasting_act_applicability(result: dict[str, Any], full_text: str) -> dict[str, Any]:
+    """방송법·협찬고지 규칙 — 계약상 준수 약정과 법률의 직접 적용을 구분한다(2026-10-21).
+
+    실측(유튜브 채널 예능 협찬): 계약이 "방송법 및 협찬고지에 관한 규칙을 위반하지 않는다" 고 약정했다는
+    이유로 AI 가 방송법을 "직접 적용·높음" 으로 판정했다. 배포 매체가 온라인 플랫폼이면 방송법이 바로 적용되는지는
+    그 채널이 방송사업자의 방송인지에 달려 있다. 매체 신호가 온라인뿐이면 '확인 필요' 로 두고 이유를 적는다.
+    ceiling 만 적용한다 — 방송사업자 신호가 있으면 손대지 않는다.
+    """
+    if not _RX_BROADCAST_STATUTE.search(str(result.get("statute") or "")):
+        return result
+    body = str(full_text or "")
+    if not _RX_ONLINE_CHANNEL.search(body) or _RX_BROADCAST_SIGNAL.search(body):
+        return result
+    out = dict(result)
+    out["applicability"] = "확인 필요"
+    out["risk_level"] = "MEDIUM"
+    out["reasoning"] = (
+        "[매체 보정] 계약은 이 규정의 준수를 당사자 간 의무로 약정하고 있으나, 대상 콘텐츠는 온라인 플랫폼 채널에 "
+        "게시됩니다. 방송법·협찬고지 규칙이 직접 적용되는지는 그 채널이 방송사업자의 방송에 해당하는지에 따라 달라 "
+        "확인이 필요합니다. 온라인 게시물의 협찬·광고 표시는 표시·광고의 공정화에 관한 법률과 관련 심사지침의 문제로 "
+        "따로 검토합니다."
+    )
+    facts = [str(x) for x in (result.get("additional_facts_needed") or []) if str(x).strip()]
+    facts.append("대상 채널이 방송사업자의 방송(지상파·종편·케이블 등)으로도 송출되는지")
+    out["additional_facts_needed"] = facts
+    out["applicability_calibrated"] = "broadcasting_act_online_channel"
+    return out
+
+
 def calibrate_statute_applicability_results(
     results: list[dict[str, Any]], full_text: str, legal_map_fields: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -163,5 +199,6 @@ def calibrate_statute_applicability_results(
             continue
         r = calibrate_dealer_act_applicability(r, full_text, legal_map_fields)
         r = calibrate_subcontract_act_applicability(r, full_text)
+        r = calibrate_broadcasting_act_applicability(r, full_text)
         out.append(r)
     return out

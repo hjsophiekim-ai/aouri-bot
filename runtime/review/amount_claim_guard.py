@@ -127,3 +127,38 @@ def split_finance_confirmation(cr: dict[str, Any], finance_note: str) -> None:
     existing = str(cr.get("legal_business_reason") or "").strip()
     if label not in existing:
         cr["legal_business_reason"] = f"{existing}\n{label}".strip() if existing else label
+
+
+# ── 근거 없는 업계 관행·수용 가능성 단정 (2026-10-21 지시 5항) ─────────────────
+#
+# "글로벌 플랫폼 활용은 광고주 표준 요구사항이므로 상대방도 수용 가능성이 높음", "공제·상계의 사전 통지와 증빙
+# 요구는 실무상 무리한 요구가 아닙니다"(다른 쟁점에 붙은 템플릿) — 계약서에도 사용자 답변에도 근거가 없는
+# 업계 관행·상대방 반응 예측이다. 담당자가 그 말을 믿고 협상하면 근거 없이 양보 여지를 판단하게 된다.
+# 그 문장만 빼고, 협상 서술이 비면 중립 문장을 둔다. 지적 자체는 건드리지 않는다.
+_RX_PRACTICE_CLAIM = re.compile(
+    r"[^.。\n]*(?:업계\s*(?:표준|관행|일반)|관행상|통상\s*관행|표준\s*요구사항|일반적으로\s*수용|"
+    r"수용\s*가능성이\s*(?:높|크)|실무상\s*무리한\s*요구가\s*아닙|대부분의\s*(?:광고주|매체사|제작사)는)[^.。\n]*[.。]?"
+)
+_PRACTICE_FIELDS = ("negotiation_position", "negotiation_strategy")
+NEUTRAL_NEGOTIATION = "상대방의 수용 여부는 협상에서 확인해야 합니다."
+
+
+def scrub_unfounded_practice_claims(clause_results: list[dict[str, Any]]) -> list[str]:
+    touched: list[str] = []
+    for cr in clause_results or []:
+        if not isinstance(cr, dict):
+            continue
+        changed = False
+        for field in _PRACTICE_FIELDS:
+            v = cr.get(field)
+            if isinstance(v, str) and _RX_PRACTICE_CLAIM.search(v):
+                cleaned = re.sub(r"\s{2,}", " ", _RX_PRACTICE_CLAIM.sub("", v)).strip(" .")
+                cr[field] = (cleaned + ".") if cleaned else NEUTRAL_NEGOTIATION
+                changed = True
+        pp = cr.get("practical_position")
+        if isinstance(pp, dict) and isinstance(pp.get("reason"), str) and _RX_PRACTICE_CLAIM.search(pp["reason"]):
+            pp["reason"] = re.sub(r"\s{2,}", " ", _RX_PRACTICE_CLAIM.sub("", pp["reason"])).strip() or NEUTRAL_NEGOTIATION
+            changed = True
+        if changed:
+            touched.append(str(cr.get("clause_id") or ""))
+    return touched

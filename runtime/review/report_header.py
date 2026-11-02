@@ -34,6 +34,7 @@ _ROLE_LABELS: dict[str, str] = {
     "rental_provider": "렌탈업자",
     "principal": "위탁자",
     "client": "의뢰인",
+    "sponsor": "광고주(협찬사)",
     "unknown": "미확인",
 }
 
@@ -41,6 +42,7 @@ _ROLE_LABELS: dict[str, str] = {
 _CONTRACT_TYPE_LABELS: dict[str, str] = {
     "advertising_content_production": "제품 광고 콘텐츠 제작 대행 계약",
     "advertising_media_placement": "광고매체 집행 계약 (상대방은 송출·게재만 수행)",
+    "advertising_sponsorship": "프로그램 협찬·PPL(간접광고) 계약",
     "content_production_service": "콘텐츠 제작 용역 계약",
     "creative_agency_service": "광고 대행 용역 계약",
     "consignment_sales_agency": "위탁판매 대리점 계약 / 고객 직접계약형 판매지원 구조",
@@ -54,6 +56,7 @@ _CONTRACT_TYPE_LABELS: dict[str, str] = {
     "purchase_supply": "물품 구매·공급 계약",
     "equipment_purchase_installation": "장비 구매·설치 계약",
     "rental": "렌탈·임대 계약",
+    "real_estate_lease": "부동산(상가) 임대차계약",
     "construction": "건설·공사 계약",
     "nda_confidentiality": "비밀유지계약(NDA)",
 }

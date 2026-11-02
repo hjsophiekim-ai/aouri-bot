@@ -312,8 +312,22 @@ def parse_numbered_requests(text: str) -> list[tuple[int, str]]:
 
     번호 목록이 없으면 빈 목록을 돌려준다 — 없는 것을 지어내지 않는다.
     """
+    return [(n, body) for n, body, _ in parse_numbered_requests_detailed(text)]
+
+
+_RX_SUB_ITEM = re.compile(r"^\s*(?:[-–·•▪◦*]|[가-하]\s*[.)]|\(\s*[가-하]\s*\))\s*(\S.*)$")
+
+
+def parse_numbered_requests_detailed(text: str) -> list[tuple[int, str, list[str]]]:
+    """번호 요청사항과 그 아래 세부 줄("- …")까지. (번호, 요청, 세부 목록).
+
+    2026-10-30 실측(천안 임대차 검토요청): 신청배경의 "1. ○○리 1809 임대차계약 추진중" 이 요청 1번이
+    되고 진짜 요청 "1. 임대차계약서 초안 검토" 는 번호가 안 맞아 버려졌다. "요청사항" 머리말이 나오면
+    그 뒤의 목록이 요청이다 — 머리말에서 번호를 다시 센다. 요청 2번 아래 "- 2.5억 근저당권 보호",
+    "- 주차장 공동담보 설정여부" 같은 세부 질문도 그 요청에 붙인다(빠뜨리면 답할 대상이 사라진다).
+    """
     lines = str(text or "").split("\n")
-    out: list[tuple[int, str]] = []
+    out: list[tuple[int, str, list[str]]] = []
     expected = 1
     seen_header = False
     for raw in lines:
@@ -322,7 +336,15 @@ def parse_numbered_requests(text: str) -> list[tuple[int, str]]:
             continue
         if _RX_REQUEST_HEADER.search(line) and len(line) <= 30:
             seen_header = True
+            out, expected = [], 1
             continue
+        sub = _RX_SUB_ITEM.match(line)
+        if sub and out and not _RX_NUMBERED_ITEM.match(line):
+            out[-1][2].append(_norm(sub.group(1)))
+            continue
+        if out and line.startswith("[") and line.endswith("]"):
+            # "[사용자 확인 답변]" 같은 다음 구획 — 세부 줄 붙이기를 멈춘다.
+            break
         m = _RX_NUMBERED_ITEM.match(line)
         if not m:
             continue
@@ -334,7 +356,7 @@ def parse_numbered_requests(text: str) -> list[tuple[int, str]]:
             continue
         if len(body) < 6:
             continue
-        out.append((num, body))
+        out.append((num, body, []))
         expected += 1
     if not out:
         return []

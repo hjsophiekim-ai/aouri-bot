@@ -458,6 +458,12 @@ def _apply_missing_consumer_product_liability_check(
         return
     if _RX_CONSUMER_PRODUCT_LIABILITY_ALLOCATION.search(text):
         return
+    from runtime.review.deal_assessment import NATURE_REAL_ESTATE_LEASE, classify_nature
+
+    if classify_nature(text, [])[0] == NATURE_REAL_ESTATE_LEASE:
+        # 상가 임대차의 "제품판매 등의 사업을 영위" 는 임차인의 영업 목적이지 이 계약의 판매 구조가 아니다 — 소비자 상품책임
+        # 배분 조항을 요구하면 임대차에 도급 하자 조문(민법 제667조)까지 붙었다(2026-10-30 실측, 천안 임대차).
+        return
 
     # [사전질문 답변 반영, 2026-09-04 지시] — 사용자가 이미 "실제 판매자/
     # 소유자"가 누구인지 답변했다면(Contract Legal Map의 seller/owner_of_goods

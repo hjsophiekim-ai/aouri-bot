@@ -43,10 +43,11 @@ class Statute:
     relations: frozenset[str]
     role: str               # 이 조문이 finding 에서 하는 역할
     item: str = ""          # "1호 타목" 등
+    sub: str = ""           # 가지조문 — 제428조의3 의 "3"
 
     @property
     def citation(self) -> str:
-        s = f"{self.law} 제{self.article}조"
+        s = f"{self.law} 제{self.article}조" + (f"의{self.sub}" if self.sub else "")
         if self.paragraph:
             s += f" 제{self.paragraph}항"
         if self.item:
@@ -54,8 +55,9 @@ class Statute:
         return s
 
 
-def _s(law: str, art: str, para: str, title: str, effect: str, relations: set[str], role: str, item: str = "") -> Statute:
-    return Statute(law, art, para, title, effect, frozenset(relations), role, item)
+def _s(law: str, art: str, para: str, title: str, effect: str, relations: set[str], role: str, item: str = "",
+       sub: str = "") -> Statute:
+    return Statute(law, art, para, title, effect, frozenset(relations), role, item, sub)
 
 
 _CR = "저작권법"
@@ -76,7 +78,7 @@ STATUTES: tuple[Statute, ...] = (
        {"license_transfer"}, "이용권의 제3자 양도·재허락 제한"),
     _s(_CR, "22", "", "2차적저작물작성권",
        "저작자는 그의 저작물을 원저작물로 하는 2차적저작물을 작성하여 이용할 권리를 가진다.",
-       {"derivative"}, "2차적 이용 — 변형·재구성해 제품화하려면 2차적저작물 작성·이용에 대한 허락이 따로 필요하다"),
+       {"derivative"}, "2차적 이용 — 변형·재구성해 이용하려면 2차적저작물 작성·이용에 대한 허락이 따로 필요하다"),
     _s(_CR, "45", "2", "저작재산권의 양도",
        "저작재산권의 전부를 양도하는 경우에 특약이 없는 때에는 제22조에 따른 2차적저작물작성권은 포함되지 아니한 것으로 추정한다.",
        {"assignment_derivative"}, "전부 양도 시 2차적저작물작성권 특약 — 특약이 없으면 양도에서 빠진 것으로 추정"),
@@ -99,6 +101,9 @@ STATUTES: tuple[Statute, ...] = (
        "미술저작물등의 원본의 소유자나 그의 동의를 얻은 자는 그 저작물을 원본에 의하여 전시할 수 있다.",
        {"physical_ownership"}, "원본 소유와 저작권의 구분 — 원본 소유자는 원본 전시는 할 수 있으나 복제·상품화·이미지 이용에는 이용허락이 따로 필요하다"),
     # ── 소유권 ──────────────────────────────────────────────────────────────
+    _s(_CIV, "537", "", "채무자위험부담주의",
+       "쌍무계약의 당사자 일방의 채무가 당사자쌍방의 책임없는 사유로 이행할 수 없게 된 때에는 채무자는 상대방의 이행을 청구하지 못한다.",
+       {"impossibility_risk"}, "쌍방 귀책 없는 이행불능 — 이행하지 못한 쪽은 그 부분의 대가를 청구할 수 없다"),
     _s(_CIV, "211", "", "소유권의 내용",
        "소유자는 법률의 범위 내에서 그 소유물을 사용, 수익, 처분할 권리가 있다.",
        {"physical_ownership"}, "실물 소유권의 내용 — 실물의 사용·처분 권한"),
@@ -165,6 +170,34 @@ STATUTES: tuple[Statute, ...] = (
     _s(_CIV, "34", "", "법인의 권리능력",
        "법인은 법률의 규정에 좇아 정관으로 정한 목적의 범위 내에서 권리와 의무의 주체가 된다.",
        {"legal_entity"}, "권리·의무의 주체는 법인 — 브랜드·그룹명은 당사자가 될 수 없다"),
+    # ── 담보·보증 (2026-10-30 — 임대차 보증금 보호) ─────────────────────────
+    _s(_CIV, "428", "1", "보증의 방식",
+       "보증은 그 의사가 보증인의 기명날인 또는 서명이 있는 서면으로 표시되어야 효력이 발생한다.",
+       {"suretyship"}, "보증 의사는 보증인의 기명날인·서명이 있는 서면으로", sub="2"),
+    _s(_CIV, "428", "2", "근보증",
+       "불확정한 다수의 채무를 보증하는 경우 채무의 최고액을 서면으로 특정하지 아니한 보증계약은 효력이 없다.",
+       {"suretyship"}, "장래 손해배상처럼 금액이 정해지지 않은 채무를 보증하면 최고액을 서면에 금액으로 적어야 한다", sub="3"),
+    _s(_CIV, "357", "1", "근저당",
+       "저당권은 그 담보할 채무의 최고액만을 정하고 채무의 확정을 장래에 보류하여 설정할 수 있다.",
+       {"mortgage"}, "근저당은 채권최고액 한도에서만 우선변제"),
+    _s(_CIV, "356", "", "저당권의 내용",
+       "저당권자는 담보로 제공된 부동산에 대하여 다른 채권자보다 자기채권의 우선변제를 받을 권리가 있다.",
+       {"mortgage"}, "저당권의 우선변제 — 선순위 담보권보다는 뒤에 배당"),
+    _s(_CIV, "349", "1", "지명채권에 대한 질권의 대항요건",
+       "지명채권을 목적으로 한 질권의 설정은 제3채무자에게 통지하거나 제3채무자가 승낙하여야 제3채무자 기타 제3자에게 대항할 수 있다.",
+       {"pledge_claim"}, "예금질권은 은행의 확정일자 있는 승낙(또는 통지)이 있어야 제3자에게 주장할 수 있다"),
+    _s(_CIV, "353", "1", "질권의 목적이 된 채권의 실행방법",
+       "질권자는 질권의 목적이 된 채권을 직접 청구할 수 있다.",
+       {"pledge_claim"}, "질권자는 예치 은행에 직접 청구할 수 있다"),
+    _s(_CIV, "265", "", "공유물의 관리, 보존",
+       "공유물의 관리에 관한 사항은 공유자의 지분의 과반수로써 결정한다. 그러나 보존행위는 각자가 할 수 있다.",
+       {"co_ownership"}, "공유 토지의 사용 방법은 지분 과반수로 정한다 — 소수 지분권자의 승인만으로는 사용이 보장되지 않는다"),
+    _s(_CIV, "629", "1", "임차권의 양도, 전대의 제한",
+       "임차인은 임대인의 동의없이 그 권리를 양도하거나 임차물을 전대하지 못한다.",
+       {"sublease"}, "전대에는 임대인 동의가 필요"),
+    _s(_CIV, "623", "", "임대인의 의무",
+       "임대인은 목적물을 임차인에게 인도하고 계약존속중 그 사용, 수익에 필요한 상태를 유지하게 할 의무를 부담한다.",
+       {"lease_repair"}, "임대인의 수선·유지 의무"),
     _s(_CIV, "667", "1", "수급인의 담보책임",
        "완성된 목적물 또는 완성 전의 성취된 부분에 하자가 있는 때에는 도급인은 수급인에 대하여 상당한 기간을 정하여 그 하자의 보수를 청구할 수 있다.",
        {"defect_works"}, "제작물 하자 보수 청구"),
@@ -184,9 +217,9 @@ STATUTES: tuple[Statute, ...] = (
 
 #: 법률관계마다 법률상 이유(조문이 이 조항에 주는 효과)를 한 문장으로.
 RELATION_REASON: dict[str, str] = {
-    "ip_license": "이 조항은 저작재산권 양도가 아니라 이용허락입니다. 허락받은 이용 방법·조건(기간·매체·지역·용도) 밖의 이용은 저작권 침해가 되므로, 제품화·복제·판매·홍보에 필요한 이용 범위가 허락 문언에 빠짐없이 들어 있어야 합니다.",
+    "ip_license": "이 조항은 저작재산권 양도가 아니라 이용허락입니다. 허락받은 이용 방법·조건(기간·매체·지역·용도) 밖의 이용은 저작권 침해가 되므로, 이 계약의 실제 이용 목적(복제·배포·편집·광고·홍보 등)에 필요한 이용 범위가 허락 문언에 빠짐없이 들어 있어야 합니다.",
     "background_ip": "프로젝트 이전부터 협업자가 보유한 작품·디자인·기법의 권리는 협업자에게 남습니다. 결과물에 그 기존 저작물이 포함되면 그 부분도 이용허락의 대상이어야 제품화·판매가 가능합니다.",
-    "derivative": "작품을 제품의 형태로 변형·재구성하는 것은 2차적저작물 작성에 해당할 수 있고, 그 권리는 저작자에게 있습니다. 이용허락이 2차적저작물의 작성·이용까지 포함하는지 따로 정해야 합니다.",
+    "derivative": "저작물을 변형·재구성(편집·재가공 등)해 이용하는 것은 2차적저작물 작성에 해당할 수 있고, 그 권리는 저작자에게 있습니다. 이용허락이 2차적저작물의 작성·이용까지 포함하는지 따로 정해야 합니다.",
     "assignment_derivative": "저작재산권 전부를 양도받더라도 특약이 없으면 2차적저작물작성권은 양도되지 않은 것으로 추정되므로, 양도 조항에 그 권리를 명시해야 합니다.",
     "ip_ownership_absent": "성과물의 저작권은 이를 창작한 상대방에게 귀속되므로, 계약에 양도(귀속) 약정이 없으면 우리는 이용허락을 받은 범위 안에서만 쓸 수 있습니다. 양도할 권리의 범위와 이전 시점을 계약에 정해야 합니다.",
     "ip_assignment": "저작재산권 양도 구조이므로 양도되는 권리의 범위(복제·배포·전시·2차적저작물작성권 등)를 특정해야 합니다.",
@@ -213,8 +246,14 @@ RELATION_REASON: dict[str, str] = {
     "defect_sale": "매매 목적물에 하자가 있으면 매도인이 하자담보책임을 집니다.",
     "personal_data": "개인정보를 제3자에게 제공하려면 정보주체 동의 등 법정 요건이 필요합니다.",
     "standard_terms": "신의성실 원칙에 반해 공정성을 잃은 약관 조항은 무효입니다.",
-    "publicity": "작가의 성명·초상 등을 홍보에 쓰려면 사용 범위를 정한 동의가 필요합니다.",
+    "publicity": "출연자·작가 등 본인의 성명·초상·음성을 광고·홍보에 쓰려면 그 사람에게서 사용 범위를 정한 동의를 받아야 합니다.",
     "license_transfer": "이용권은 저작재산권자 동의 없이 제3자에게 넘길 수 없으므로, 생산 위탁·재허락이 필요하면 미리 동의를 받아 두어야 합니다.",
+    "suretyship": "보증은 보증인이 기명날인·서명한 서면이어야 하고, 손해배상처럼 금액이 정해지지 않은 채무까지 보증하면 그 최고액을 서면에 금액으로 적어야 효력이 있습니다.",
+    "mortgage": "근저당은 채권최고액 한도에서, 선순위 담보권자가 배당받고 남은 금액에서만 우선변제를 받습니다.",
+    "pledge_claim": "예금에 대한 질권은 예치 은행의 확정일자 있는 승낙(또는 통지)이 있어야 다른 채권자에게 주장할 수 있고, 갖추면 은행에 직접 청구할 수 있습니다.",
+    "co_ownership": "공유 토지를 어떻게 쓸지는 공유자 지분 과반수로 정하므로, 일부 지분권자만의 승인으로는 다른 공유자가 이의할 때 사용이 보장되지 않습니다.",
+    "sublease": "임차인이 전대하려면 임대인의 동의가 필요합니다.",
+    "lease_repair": "임대인은 임대차 기간 동안 목적물을 사용·수익에 필요한 상태로 유지할 의무를 집니다.",
 }
 
 
@@ -234,7 +273,15 @@ RELATION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("ownership_transfer", _rx(r"소유권[^.\n]{0,15}(?:이전|인도)\s*(?:시점|시기)")),
     ("agency", _rx(r"갤러리|에이전시|대리인|대리권|무권대리|위임(?:받|장)|권한\s*(?:부재|하자|위임|증빙|확보|확인|불충분)"
                      r"|(?:아티스트|작가|권리자)\s*(?:의\s*)?권한|권한\s*[·및]\s*보증")),
-    ("warranty", _rx(r"보증|진술\s*및\s*보장|권리\s*하자")),
+    # "보증금"·"연대보증"·"물상보증" 은 권리보증이 아니다 — 보증금 반환·인적 보증은 아래 suretyship·mortgage 가 맡는다
+    # (2026-10-30 실측: 보증금 근저당·연대보증 지적에 "권리보증 위반 손해배상(민법 제390조)" 이 붙었다).
+    ("warranty", _rx(r"(?<!연대)(?<!근)(?<!물상)(?<!연대\s)보증(?!\s*(?:금|인|채무|보험|최고액|한도|책임|범위|계약|서))"
+                     r"|진술\s*및\s*보장|권리\s*하자")),
+    ("suretyship", _rx(r"연대\s*보증|보증인|근\s*보증|보증\s*(?:채무|최고액|한도|책임|범위)")),
+    ("mortgage", _rx(r"근저당|저당권|채권\s*최고액|선순위|후순위|낙찰")),
+    ("pledge_claim", _rx(r"질권")),
+    ("co_ownership", _rx(r"공유자|공유\s*(?:지분|토지|부지)|주차장[^.\n]{0,12}지분")),
+    ("sublease", _rx(r"전대")),
     ("damages_scope", _rx(r"직접적인\s*손해|통상\s*손해|특별\s*손해|간접\s*손해|배상\s*범위|일실")),
     ("damages", _rx(r"손해\s*배상|배상\s*책임")),
     ("penalty", _rx(r"위약금|손해배상액의?\s*예정|지체상금")),
@@ -329,6 +376,16 @@ _RX_LICENSE_GRANT = _rx(
 )
 
 
+#: 저작권·지식재산 맥락 — "사용권" 이 이용허락(저작권법 제46조)인지는 이것이 있어야 한다.
+_RX_IP_CONTEXT = _rx(r"저작|지식\s*재산|콘텐츠|디자인|상표|이미지|영상|사진|라이선스|license|\bIP\b|초상|작품|결과물|성과물|소프트웨어|프로그램|폰트|음원|캐릭터")
+#: 해지·해제가 계약 해지가 아닌 문맥 — 예금 해지·담보 해제(2026-10-30 실측: 예금질권 재예치에 민법 제543조 해지권).
+_RX_NON_CONTRACT_TERMINATION = _rx(
+    r"(?:예금|적금|계좌|정기\s*예금|신탁)[^.\n]{0,12}(?:해지|해제)|(?:해지|해제)\s*(?:및|와|하고)\s*(?:인출|재예치)"
+    r"|(?:담보|근저당|저당권|질권|가압류|압류|등기)[^.\n]{0,8}(?:해지|해제|말소)"
+)
+_RX_LEASE = _rx(r"임대인|임차인|임대차")
+
+
 def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
     """finding 의 법률관계.
 
@@ -338,16 +395,23 @@ def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
     붙이던 오연결을 막는다(지시 3항). 원문 조항은 양도/이용허락 구분에만 쓴다.
     """
     title = re.sub(r"^\s*\[[^\]]{1,12}\]\s*", "", _title_hay(cr))
+    title = _RX_NON_CONTRACT_TERMINATION.sub(" ", title)
     detail = " ".join(str(cr.get(k) or "") for k in ("problem", "rewrite_reason"))
     original = str(cr.get("original_text") or "")
+    ip_context = bool(_RX_IP_CONTEXT.search(" ".join((title, detail, original, str(cr.get("suggested_rewrite") or "")))))
     found = [key for key, rx in RELATION_PATTERNS if rx.search(title)]
     if not found:
         # 제목이 법률관계를 말하지 않는 finding(규칙 id 제목 등)은 문제 서술의 **첫 문장**
         # (무엇이 문제인가)으로 정한다. 뒤 문장의 파급효과("지체상금·보증금이 연동")는
         # 그 finding 의 법률관계가 아니다.
         first = re.split(r"(?<=[.。])\s|(?<=다)\s", str(cr.get("problem") or cr.get("rewrite_reason") or ""), maxsplit=1)[0]
+        first = _RX_NON_CONTRACT_TERMINATION.sub(" ", first)
         found = [key for key, rx in RELATION_PATTERNS if rx.search(first)
                  and key not in _QUALIFIERS]
+    if not ip_context:
+        # 주차장 사용권·토지 사용 승낙처럼 저작물이 없는 "사용권" 에 저작권법 이용허락 조문을 붙이지 않는다(2026-10-30 실측).
+        found = [k for k in found if k not in ("ip_license", "background_ip", "derivative", "ip_assignment_word",
+                                               "moral_right", "credit", "license_transfer")]
     for key, parents in _QUALIFIERS.items():
         if key not in found and any(p in found for p in parents):
             rx = dict(RELATION_PATTERNS)[key]
@@ -377,7 +441,12 @@ def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
             rel.append("ip_ownership_absent")
             continue
         if key == "defect":
-            rel.append("defect_sale" if archetype in ("goods_supply", "distribution_resale") else "defect_works")
+            if archetype in ("real_estate_lease", "lease_rental") or (archetype not in ("goods_supply", "distribution_resale")
+                                                       and _RX_LEASE.search(original) and not re.search(r"도급|수급인|납품", original)):
+                # 임대차의 하자·수선은 임대인의 유지 의무 문제다 — 도급의 수급인 담보책임(제667조)이 아니다.
+                rel.append("lease_repair")
+            else:
+                rel.append("defect_sale" if archetype in ("goods_supply", "distribution_resale") else "defect_works")
             continue
         rel.append(key)
     if "ip_assignment" in rel and "derivative" in rel:
@@ -403,7 +472,7 @@ def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
     if "termination" not in rel:
         rel = [r for r in rel if r not in ("termination_cure", "termination_effect")]
     # 손해배상 일반은 더 구체적인 관계가 있으면 뺀다.
-    if "damages" in rel and any(r in rel for r in ("warranty", "agency", "penalty")):
+    if "damages" in rel and any(r in rel for r in ("warranty", "agency", "penalty", "suretyship")):
         rel.remove("damages")
     return list(dict.fromkeys(rel))
 
@@ -424,9 +493,9 @@ def statutes_for(relations: list[str], *, limit: int = 5) -> list[Statute]:
     return out[:limit]
 
 
-def _find_statute(law: str, art: str, para: str | None) -> Statute | None:
+def _find_statute(law: str, art: str, para: str | None, sub: str | None = None) -> Statute | None:
     law = _canonical_law(law)
-    cands = [s for s in STATUTES if s.law == law and s.article == art]
+    cands = [s for s in STATUTES if s.law == law and s.article == art and s.sub == (sub or "")]
     if not cands:
         return None
     if para:
@@ -442,10 +511,10 @@ def audit_cited_statutes(text: str, relations: list[str]) -> tuple[list[Statute]
     for m in _RX_CITATION.finditer(text or ""):
         law, art, para = m.group("law"), m.group("art"), m.group("para")
         cite = m.group(0).strip()
-        if m.group("sub"):
+        st = _find_statute(law, art, para, m.group("sub"))
+        if st is None and m.group("sub"):
             removed.append({"citation": cite, "reason": "검증된 조문 표에 없음(가지조문)"})
             continue
-        st = _find_statute(law, art, para)
         if st is None:
             removed.append({"citation": cite, "reason": "검증된 조문 표에 없거나 항이 다름 — 정확한 조문 특정 필요"})
             continue

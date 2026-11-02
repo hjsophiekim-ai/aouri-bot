@@ -168,6 +168,8 @@ def enforce_rewrite_completeness(
             continue  # 현행 유지 항목은 문안이 없는 것이 정상이다
         if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
             continue
+        if cr.get("action_only") and cr.get("required_actions"):
+            continue  # 체결 전 확인 — 문안이 아니라 확인·협상 조치가 답이다(2026-10-30)
         text = rewrite_text(cr)
         # 당사자 법인명 정정은 당사자란·서명란 한 줄("주식회사 시디즈(브랜드명:
         # 알로소)")을 통째로 바꿔 넣는 문안이다 — 규범 어미가 없어도 그대로

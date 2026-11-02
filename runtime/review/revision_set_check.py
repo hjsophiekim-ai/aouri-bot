@@ -46,8 +46,13 @@ _RX_NEW_ART_AFTER = re.compile(r"^\s*제\s*(\d+)\s*조(?:\([^)]*\))?\s*뒤에\s*
 
 
 def _live(cr: Any) -> bool:
+    # 수정본(clean)도 HIGH/MEDIUM 만 반영한다(docx_redline) — 반영하는 것과 검사하는 것이 같은 집합이다.
     return (isinstance(cr, dict) and not cr.get("dedup_suppressed") and not cr.get("keep_as_is")
             and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM"))
+
+
+#: 계약 문안이 아니라 수정 지시문 — "제12조 제3항을 다음과 같이 수정한다. '…'" 를 그대로 넣으면 계약서에 지시문이 남는다.
+_RX_INSTRUCTION = re.compile(r"다음과\s*같이\s*(?:수정|변경|개정|보완)(?:한다|함)|다음\s*(?:문단|문장|항|호|내용)을\s*(?:추가|신설)(?:한다|함)")
 
 
 def _norm(s: str) -> str:
@@ -85,6 +90,81 @@ def _retention(target: str, replacement: str) -> float:
         return 1.0
     rep = str(replacement or "")
     return sum(1 for t in toks if t in rep) / len(toks)
+
+
+#: 계약 전체에서 세는 보호 표지 — 담보·보증·상계·이용권·환급·해지·면책.
+_PROTECTION_MARKERS: tuple[tuple[str, str], ...] = (
+    ("근저당", r"근저당권?"), ("질권", r"질권"), ("상계", r"상계"), ("기한이익 상실", r"기한이\s*도래한\s*것으로\s*본다"),
+    ("보증", r"연대하여\s*보증|연대\s*보증|보증한다|보증인"), ("물상보증", r"물상보증"),
+    ("사용 승인", r"사용(?:을)?\s*(?:승인|승낙)"), ("환급·반환", r"반환(?:한다|하여야)|환급"),
+    ("대위변제", r"대신\s*변제"), ("손해배상", r"손해를?\s*배상"), ("해지권", r"해지할\s*수\s*있"),
+    ("면책", r"면책"), ("승계", r"승계"),
+)
+_RX_SUBJECT = re.compile(r"[“\"]([^”\"]{1,10})[”\"](?:은|는|이|가)\s")
+
+
+def _ws_pattern(text: str) -> re.Pattern[str]:
+    parts = [re.escape(p) for p in re.split(r"\s+", str(text or "").strip()) if p]
+    return re.compile(r"\s*".join(parts))
+
+
+def _inventory(text: str) -> dict[str, int]:
+    return {name: len(re.findall(rx, text or "")) for name, rx in _PROTECTION_MARKERS}
+
+
+def _apply(body: str, edits: list[tuple[dict[str, Any], dict[str, Any]]]) -> str:
+    out = body
+    for _cr, ri in edits:
+        if ri.get("held"):
+            continue
+        repl = str(ri.get("replacement_text") or ri.get("final_clause_text") or "")
+        if _is_new(ri):
+            out += "\n" + repl
+            continue
+        target = str(ri.get("target_text") or "")
+        if not target:
+            continue
+        m = _ws_pattern(target).search(out)
+        if m:
+            out = out[:m.start()] + repl + out[m.end():]
+    return out
+
+
+def _check_applied_set(edits: list[tuple[dict[str, Any], dict[str, Any]]], body: str,
+                       report: dict[str, Any]) -> dict[str, Any]:
+    """수정안 전부를 함께 반영한 계약에서 보호 표지가 줄었으면 원인 수정안의 자동 적용을 보류한다."""
+    before = _inventory(body)
+    after = _inventory(_apply(body, edits))
+    lost = {k: before[k] - after[k] for k in before if after.get(k, 0) < before[k]}
+    blamed: list[str] = []
+    for name in lost:
+        rx = dict(_PROTECTION_MARKERS)[name]
+        for cr, ri in edits:
+            if ri.get("held") or _is_new(ri):
+                continue
+            t = str(ri.get("target_text") or "")
+            r = str(ri.get("replacement_text") or ri.get("final_clause_text") or "")
+            if len(re.findall(rx, t)) > len(re.findall(rx, r)):
+                _hold(cr, ri, f"수정안을 모두 반영하면 계약 전체에서 기존 보호({name})가 줄어듦 — 보완 문장으로 넣을지 담당자가 확인해야 함", report)
+                blamed.append(str(cr.get("clause_id") or ""))
+    flipped: list[str] = []
+    for cr, ri in edits:
+        if ri.get("held") or _is_new(ri):
+            continue
+        t = str(ri.get("target_text") or "")
+        r = str(ri.get("replacement_text") or ri.get("final_clause_text") or "")
+        st, sr = _RX_SUBJECT.findall(t), _RX_SUBJECT.findall(r)
+        # 같은 문장인데 의무 주체 순서가 바뀌었다 — 책임 방향이 뒤집혔을 수 있다.
+        if st and sr and len(st) == len(sr) and st != sr and sorted(st) == sorted(sr):
+            _hold(cr, ri, "교체 문구에서 의무 주체가 바뀜(" + "→".join(st[:2]) + " ⇒ " + "→".join(sr[:2]) + ") — 책임 방향을 담당자가 확인해야 함", report)
+            flipped.append(str(cr.get("clause_id") or ""))
+    final_after = _inventory(_apply(body, edits))
+    return {
+        "edits_applied_together": sum(1 for _, ri in edits if not ri.get("held")),
+        "before": before, "after": final_after,
+        "lost_before_hold": lost, "held_for_protection_loss": blamed, "held_for_direction_change": flipped,
+        "preserved": all(final_after.get(k, 0) >= v for k, v in before.items()),
+    }
 
 
 def _hold(cr: dict[str, Any], ri: dict[str, Any], reason: str, report: dict[str, Any]) -> None:
@@ -160,6 +240,9 @@ def check_revision_set(
                 continue
             used_paras[art].add(num)
             ri["new_paragraph"] = f"{art}-{num}"
+            text_ = str(ri.get("final_clause_text") or ri.get("replacement_text") or "").strip()
+            if text_ and not re.match(r"^[①-⑳]", text_):
+                ri["final_clause_text"] = f"{paragraph_marker(num)} {text_}"
         elif ma:
             key = ma.group(2) + (f"의{ma.group(3)}" if ma.group(3) else "")
             if key in used_articles:
@@ -184,8 +267,8 @@ def check_revision_set(
             ri["edit_location"] = f"제{anchor}조 제{n - 1}항 뒤에 제{n}항 신설"
             ri["edit_type"] = EDIT_INSERT_PARAGRAPH
             ri["new_paragraph"] = f"{anchor}-{n}"
-            text_ = str(ri.get("final_clause_text") or ri.get("replacement_text") or "").strip()
-            if text_ and not re.match(r"^[①-⑳]", text_):
+            text_ = re.sub(r"^[①-⑳]\s*", "", str(ri.get("final_clause_text") or ri.get("replacement_text") or "").strip())
+            if text_:
                 ri["final_clause_text"] = f"{paragraph_marker(n)} {text_}"
             report["relocated"].append({"clause_id": str(cr.get("clause_id") or ""), "from": was,
                                         "to": ri["edit_location"]})
@@ -220,10 +303,33 @@ def check_revision_set(
         if target and _norm(target) not in _norm(body):
             _hold(cr, ri, "교체 대상 문구가 계약 원문에서 확인되지 않음 — 수정 위치를 담당자가 확정해야 함", report)
             continue
+        if _RX_INSTRUCTION.search(repl):
+            _hold(cr, ri, "문안에 수정 지시문(\"다음과 같이 수정한다\" 등)이 섞여 있음 — 계약 문장만 남겨 담당자가 확정해야 함", report)
+            continue
         lost = _protective_loss(target, repl)
-        if lost and _retention(target, repl) < 0.6:
+        kept_ratio = _retention(target, repl)
+        if lost and kept_ratio < 0.6:
             _hold(cr, ri, "교체하면 기존 보호 문구(" + "·".join(lost[:5]) + ")가 사라짐 — 보호 축소 여부를 담당자가 확인해야 함", report)
+        elif len(_norm(target)) >= 40 and kept_ratio < 0.35:
+            # 보호 낱말 목록에 없는 권리 문언(예: 마케팅 라이선스의 범위·재편집 권한)도 통째로 지워질 수 있다 —
+            # 실측(2026-10-21): 이용 범위 한 줄을 보완하려던 문안이 라이선스 호 전체를 대체했다.
+            _hold(cr, ri, "교체 문구가 기존 문언 대부분을 지움 — 기존 문언을 두고 보완 문장으로 넣을지 담당자가 확인해야 함", report)
         _sync_practical_position(cr, ri)
+
+    # 3-1. 같은 원문(또는 그 일부)을 두 수정안이 동시에 교체 — 나중 것이 앞의 수정을 덮는다. 등급이 낮은 쪽을 보류한다.
+    replaces = [(cr, ri) for cr, ri in edits if not _is_new(ri) and not ri.get("held")
+                and str(ri.get("target_text") or "").strip()]
+    rank = {"HIGH": 2, "MEDIUM": 1}
+    for i, (cr_a, ri_a) in enumerate(replaces):
+        for cr_b, ri_b in replaces[i + 1:]:
+            ta, tb = _norm(ri_a.get("target_text")), _norm(ri_b.get("target_text"))
+            if not (ta in tb or tb in ta) or ri_a.get("held") or ri_b.get("held"):
+                continue
+            loser_cr, loser_ri = (cr_b, ri_b) if rank.get(str(cr_a.get("risk_tier")).upper(), 0) >= rank.get(
+                str(cr_b.get("risk_tier")).upper(), 0) else (cr_a, ri_a)
+            winner = cr_a if loser_cr is cr_b else cr_b
+            _hold(loser_cr, loser_ri, f"같은 원문을 {winner.get('display_path') or winner.get('clause_id')} 수정안이 이미 교체함 — "
+                  "두 수정안을 합칠지 담당자가 확인해야 함", report)
 
     # 4. 반영 후 참조 — 신설 조·항을 포함한 실재 구조로 본다
     for cr, ri in edits:
@@ -262,6 +368,10 @@ def check_revision_set(
             errors = list(dict.fromkeys(errors))
             report["reference_errors"].append({"clause_id": str(cr.get("clause_id") or ""), "errors": errors})
             _hold(cr, ri, "반영 후 참조 오류 — " + "; ".join(errors[:3]), report)
+
+    # 5. 전체 반영 — 남은 수정안을 **모두 함께** 계약 원문에 넣은 뒤 기존 보호가 줄었는지, 의무 주체가 바뀌었는지 본다
+    #    (2026-10-30 천안 임대차: 제14조 특약을 짧은 문장으로 갈아 끼우면 상계·대위변제·연대보증·주차장 승인이 한꺼번에 사라진다).
+    report["protections_checked"] = _check_applied_set(edits, body, report)
 
     if report["held"]:
         report["status"] = "REVISION_SET_HELD"

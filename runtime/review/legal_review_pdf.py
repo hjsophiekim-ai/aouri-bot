@@ -105,6 +105,19 @@ def _rule(pdf: FPDF) -> None:
     pdf.ln(3)
 
 
+def _render_lines(pdf: FPDF, lines: list[tuple[str, str, str]]) -> None:
+    """deal_report 의 (종류, 문장, 색) 줄을 그린다 — DOCX 와 같은 줄."""
+    tones = {"high": COLOR_HIGH, "medium": COLOR_MEDIUM, "low": COLOR_LOW}
+    for kind, text, tone in lines:
+        if kind == "heading":
+            _heading(pdf, text)
+            continue
+        pdf.set_font(_FONT_FAMILY, "B" if kind == "bold" else "", 10 if kind != "note" else 9)
+        pdf.set_text_color(*(tones.get(tone) or (0, 0, 0)))
+        _mc(pdf, 0, 6, ("    " + text) if kind == "bullet" else text)
+        pdf.set_text_color(0, 0, 0)
+
+
 def _issue_block(pdf: FPDF, issue: ReviewIssue, *, index: int | None = None) -> None:
     color = _severity_color(issue.severity)
     pdf.set_font(_FONT_FAMILY, "B", 11)
@@ -129,6 +142,9 @@ def _issue_block(pdf: FPDF, issue: ReviewIssue, *, index: int | None = None) -> 
         _body(pdf, issue.original_text)
     _label(pdf, "문제점")
     _body(pdf, issue.problem)
+    from runtime.review.deal_report import issue_extra_lines
+
+    _render_lines(pdf, issue_extra_lines(issue))
     from runtime.review.legal_review_docx import grounding_lines
 
     _g_lines = grounding_lines(issue)
@@ -148,8 +164,9 @@ def _issue_block(pdf: FPDF, issue: ReviewIssue, *, index: int | None = None) -> 
         if _ri.get("held"):
             _label(pdf, "자동 적용 보류")
             _body(pdf, str(_ri.get("hold_reason") or ""))
-    _label(pdf, "수정문안")
-    _body(pdf, str((_ri or {}).get("final_clause_text") or "") or issue.proposed_revision)
+    if not (getattr(issue, "action_only", False) and not _ri):
+        _label(pdf, "수정문안")
+        _body(pdf, str((_ri or {}).get("final_clause_text") or "") or issue.proposed_revision)
     from runtime.review.legal_review_docx import linked_edit_heading
     for e in getattr(issue, "linked_edits", None) or []:
         _label(pdf, f"함께 수정·추가할 문구 {linked_edit_heading(e)}")
@@ -191,6 +208,8 @@ def build_legal_review_pdf(
     # [2026-09-10 지시] 법률 적용요건 선판단 결론. 조항별 검토보다
     # 앞에 표시해, 어떤 법률이 왜 적용/비적용인지부터 읽히게 한다.
     statute_gate_decisions: list[dict[str, Any]] | None = None,
+    # [2026-10-30] 거래 전체 판단 — DOCX 와 같은 줄.
+    deal_assessment: dict[str, Any] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review PDF.
 
@@ -238,6 +257,10 @@ def build_legal_review_pdf(
     _heading(pdf, "아우리봇 계약 검토·수정본 (법무팀 검토용)", size=15)
     _body(pdf, "표시 기준: HIGH/필수수정=빨간색 · MEDIUM/권장수정=주황색 · LOW/참고=파란색(기본 숨김)", size=9)
 
+    from runtime.review.deal_report import deal_section_lines, request_row_lines, requests_complete
+    _render_lines(pdf, deal_section_lines(deal_assessment))
+    _requests_done = requests_complete(user_review_coverage)
+
     if mandatory_review_targets:
         _heading(pdf, "0. 최초 요청사항 반영 여부")
         _status_label = {
@@ -246,6 +269,8 @@ def build_legal_review_pdf(
             "checked_no_issue": "검토완료 · 특이사항 없음",
             "clause_not_found": "계약서에서 조항 확인 불가",
         }
+        if not _requests_done:
+            _status_label = {k: v.replace("검토완료", "검토 미완료(요청 답변 부족)") for k, v in _status_label.items()}
         _rows = []
         for t in mandatory_review_targets:
             if not isinstance(t, dict):
@@ -298,6 +323,13 @@ def build_legal_review_pdf(
         for r in user_review_coverage:
             if not isinstance(r, dict):
                 continue
+            if r.get("source") == "deal_request":
+                if _cov_rows:
+                    _body(pdf, "\n\n".join(_cov_rows))
+                    _cov_rows = []
+                _render_lines(pdf, request_row_lines(r))
+                pdf.ln(2)
+                continue
             paths = r.get("relevant_clause_paths") or []
             _cov_rows.append(
                 f"요청사항: {str(r.get('original_user_text') or '')}\n"
@@ -346,8 +378,11 @@ def build_legal_review_pdf(
     # 조항별 검토를 읽기 전에 어떤 법률이 왜 적용/비적용인지부터 보이게 한다.
     if statute_gate_decisions:
         _heading(pdf, "적용 법률 판단 (조항별 검토의 전제)")
+        # DOCX 와 같다 — 비적용 법률은 이름만 한 줄로(2026-10-30: PDF 만 장문 나열하던 차이).
+        _na = [str(_d.get("statute") or "") for _d in statute_gate_decisions
+               if isinstance(_d, dict) and str(_d.get("conclusion") or "") == "비적용"]
         for _d in statute_gate_decisions:
-            if not isinstance(_d, dict):
+            if not isinstance(_d, dict) or str(_d.get("conclusion") or "") == "비적용":
                 continue
             _body(pdf, f"- {_d.get('statute')}: {_d.get('conclusion')}")
             _reason = str(_d.get("reason") or "").strip()
@@ -355,6 +390,8 @@ def build_legal_review_pdf(
                 _body(pdf, f"    {_reason}")
             for _f in (_d.get("facts_needed") or [])[:4]:
                 _body(pdf, f"    확인 필요: {_f}")
+        if _na:
+            _body(pdf, f"비적용으로 판단한 법률(상세 생략): {', '.join(x for x in _na if x)}")
 
     _next_sec = 2
     if legal_applicability_review:
@@ -427,10 +464,18 @@ def build_legal_review_pdf(
                 _body(pdf, f"기존 관련조항: {', '.join(g['contract_clauses'])}")
             for st in g.get("statutes") or []:
                 _body(pdf, f"관련 법령: {st.get('citation')}({st.get('title')}) — {st.get('role')}")
-    if _finance_items:
+    _business_rows = [(c, [str(x) for x in c.get("business_items") or [] if str(x).strip()])
+                      for c in clause_results if isinstance(c, dict) and not c.get("dedup_suppressed")
+                      and c.get("business_items") and str(c.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")]
+    if _finance_items or _business_rows:
         _heading(pdf, "재경·사업부 확인사항 — 법무 수정사항 아님")
+        for c, items in _business_rows:
+            _label(pdf, f"[사업부 확인] {c.get('display_path') or ''} — 수정안에 넣을 조건")
+            _body(pdf, "정할 사항: " + ", ".join(items))
         for c in _finance_items:
-            _label(pdf, f"[재경 확인] {c.get('display_path') or ''} {_first_title(c)}".strip())
+            _tag = ("사실 확인" if c.get("statute_premise_unconfirmed") else
+                    "사업부 확인" if c.get("business_check") else "재경 확인")
+            _label(pdf, f"[{_tag}] {c.get('display_path') or ''} {_first_title(c)}".strip())
             if c.get("problem") or c.get("rewrite_reason"):
                 _body(pdf, str(c.get("problem") or c.get("rewrite_reason")))
 

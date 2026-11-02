@@ -104,6 +104,14 @@ class ReviewIssue:
     # 연계 수정 문구(package_linked_edits) — 같은 finding 이 함께 고치거나 추가하는 다른 항의 **완성 문구**.
     # 여기 없으면 보고서에 조항 번호만 남고 문구가 빠진다(2026-10-07 실측: 제14조 을 귀책 ⑤~⑦).
     linked_edits: list[dict[str, str]] = field(default_factory=list)
+    # 거래 전체 판단의 핵심 위험(2026-10-30) — "사건 → 작동하지 않는 보호 → 손실" 과 분류(필수수정·체결 전 확인·
+    # 권장수정). 체결 전 확인 항목은 고칠 문장이 아니라 확인·협상 조치가 답이다(action_only) — 수정문구가 없다는
+    # 이유로 버리면 거래의 핵심 위험이 보고서에서 사라지고, 조치 문장을 수정문구 칸에 넣으면 다운로드 경로가
+    # 그것으로 조 전체를 교체한다.
+    review_category: str = ""
+    loss_path_text: str = ""
+    required_actions: list[str] = field(default_factory=list)
+    action_only: bool = False
 
     @property
     def display_bucket(self) -> str:
@@ -142,6 +150,10 @@ class ReviewIssue:
             "is_counsel_agent": self.is_counsel_agent,
             "counsel_axis": self.counsel_axis,
             "is_construction_checklist": self.is_construction_checklist,
+            "review_category": self.review_category,
+            "loss_path_text": self.loss_path_text,
+            "required_actions": list(self.required_actions),
+            "action_only": self.action_only,
             "legal_risk": self.legal_risk or self.severity,
             "business_exposure": self.business_exposure,
             "negotiation_priority": self.negotiation_priority,
@@ -218,6 +230,9 @@ def is_valid_issue(
         return False
     if _is_empty(issue.legal_business_reason):
         return False
+    if issue.action_only:
+        # 체결 전 확인 — 수정문구 대신 확인·협상 조치가 있어야 한다.
+        return bool(issue.required_actions) and bool(issue.loss_path_text)
     if _is_empty(issue.proposed_revision):
         return False
 
@@ -321,8 +336,10 @@ def _merge_same_clause_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
         # 법률효과 점검(ac_*)도 쟁점 하나를 겨냥한 별개 판단이다 — 조 단위로만 쪼개진 계약
         # (와이어드 초안 제7조: 가격·정산을 한 조에)에서 결제창 Case A/B 정리가 최저가 논점에
         # 흡수돼 사라졌다(2026-10-01 실측).
+        # 거래 재구성 package(sp_ 협찬·tx_ 연구)와 상호참조 지적(xref_)도 같다 — 위치가 같다는 이유로 다른 지적
+        # (예: 같은 항의 개인정보 기본점검)에 합쳐져 "대가로 받은 라이선스의 별도 승인 충돌" 이 사라졌다(2026-10-21).
         if issue.is_counsel_agent or issue.is_construction_checklist \
-                or str(issue.clause_id or "").startswith("ac_"):
+                or str(issue.clause_id or "").startswith(("ac_", "sp_", "tx_", "xref_", "deal_")):
             standalone.append(issue)
             continue
         key = _clause_identity_key(issue)
@@ -621,7 +638,7 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             original_text=ot[:500],
             problem=pb[:400],
             legal_business_reason=str(cr.get("legal_business_reason") or pb)[:400],
-            proposed_revision=pr[:600],
+            proposed_revision=pr,  # 수정 문구는 자르지 않는다(2026-10-30 지시 5항)
             negotiation_position=str(cr.get("negotiation_position") or cr.get("negotiation_strategy") or "").strip()[:300],
             confidence=float(cr.get("confidence") or 0.75),
             is_mandatory=bool(cr.get("is_mandatory_review_target") or cr.get("is_mandatory")),
@@ -644,6 +661,10 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
             redline_instruction=cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else None,
             legal_grounding=cr.get("legal_grounding") if isinstance(cr.get("legal_grounding"), dict) else None,
             linked_edits=linked_edit_rows(cr),
+            review_category=str(cr.get("review_category") or ""),
+            loss_path_text=str(cr.get("loss_path_text") or ""),
+            required_actions=[str(a) for a in (cr.get("required_actions") or []) if str(a).strip()],
+            action_only=bool(cr.get("action_only")),
         ))
     return out
 

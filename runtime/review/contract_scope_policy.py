@@ -115,6 +115,12 @@ CONTRACT_TYPE_HARD_BLOCKED_DOMAINS: dict[str, frozenset[str]] = {
     # `advertising_media_license`(광고 매체·게재·집행)는 **차단하지 않는다**.
     # 그것이 이 계약의 본체다. `payment_terms`·`delivery_and_acceptance` 등
     # 거래 일반 영역도 차단하지 않는다 — 광고료 지급조건은 핵심 검토축이다.
+    # 협찬·PPL — 저작권은 제작사에 남는 것이 통상이고 우리가 받는 것은 이용권이다. 저작권 양도·포트폴리오
+    # 축은 이 거래의 논점이 아니다. 출연자 초상·음악은 이용권의 실효성 문제라 차단하지 않는다(2026-10-21).
+    "advertising_sponsorship": frozenset({
+        "copyright_transfer_to_client",
+        "portfolio_usage",
+    }),
     "advertising_media_placement": frozenset({
         "content_production_inspection",
         "portrait_or_location_release",

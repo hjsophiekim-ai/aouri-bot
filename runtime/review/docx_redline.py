@@ -273,6 +273,40 @@ def _find_best_para(
     return best_idx if best_score >= 0.25 else None
 
 
+# ── 수정 지시(redline_instruction) 해석 ─────────────────────────────────────────
+
+_RX_DISPLAY_MARKER = re.compile(r"^\s*\[(?:추가\s*권고|수정\s*제안)[^\]]*\]\s*", re.MULTILINE)
+
+
+def _strip_display_markers(text: str) -> str:
+    """화면 표시용 표지("[추가 권고]")는 계약서 문안이 아니다 — 반영본에 넣지 않는다(2026-10-21)."""
+    return re.sub(r"\n{3,}", "\n\n", _RX_DISPLAY_MARKER.sub("", str(text or ""))).strip()
+
+
+_RX_ARTICLE_HEADING = re.compile(r"^\s*제\s*\d+\s*조(?:\s*의\s*\d+)?\s*(?:[(\[【<]|$)")
+_RX_ARTICLE_LEAD = re.compile(r"^\s*제\s*\d+\s*조(?:\s*의\s*\d+)?(?![가-힣]|\s*제\s*\d)")
+
+
+def _is_article_heading(text: str) -> bool:
+    """괄호 제목("제 4 조 (지급)")이거나, 제N조로 시작하는 짧은 단락(괄호 없는 제목)."""
+    return bool(_RX_ARTICLE_HEADING.match(text) or (_RX_ARTICLE_LEAD.match(text) and len(text.strip()) <= 30))
+
+
+def _article_end(paras: list[ET.Element], art_index: dict[str, list[int]], art: str) -> int | None:
+    """조의 마지막 내용 단락 인덱스."""
+    host = art_index.get(str(art))
+    if not host:
+        return None
+    start = next((i for i in host if _is_article_heading(_para_text(paras[i]))), host[0])
+    # 다음 조의 시작은 조 제목 단락으로만 본다 — 본문 속 "제9조 제3항에 따라" 같은 인용(방금 넣은 신설 항 포함)을
+    # 다음 조로 보면 그 앞에서 조가 끝나, 뒤에 넣을 항이 앞서 넣은 항보다 먼저 들어간다(2026-10-21).
+    end = next((i for i in range(start + 1, len(paras)) if _is_article_heading(_para_text(paras[i]))),
+               len(paras)) - 1
+    while end > start and not _para_text(paras[end]).strip():
+        end -= 1
+    return end
+
+
 # ── 텍스트→runs 교체 ────────────────────────────────────────────────────────────
 
 def _replace_para_with_tracked_changes(
@@ -298,6 +332,50 @@ def _replace_para_with_tracked_changes(
 
     for el in _make_del_ins(old_text, new_text, ids, author, date):
         para.append(el)
+
+
+def _substitute_in_para(
+    para: ET.Element, target: str, replacement: str, ids: _IDGen, author: str, date: str,
+    *, run_only: bool = False,
+) -> bool:
+    """단락 안의 한 문장만 del+ins 로 바꾼다. 문장이 한 run 안에 있으면 그 run 을 쪼개고(줄바꿈·서식 보존),
+    여러 run 에 걸치면 단락 전체 문안에서 그 문장만 바꾼 결과로 교체한다(내용 보존)."""
+    for run in [el for el in list(para) if el.tag == f"{W}r"]:
+        kids = [c for c in list(run) if c.tag != f"{W}rPr"]
+        hit = next((i for i, c in enumerate(kids) if c.tag == f"{W}t" and c.text and target in c.text), None)
+        if hit is None:
+            continue
+        before, after = kids[hit].text.split(target, 1)
+        rpr = run.find(f"{W}rPr")
+        idx = list(para).index(run)
+        para.remove(run)
+        head = _make_run(before, rpr)
+        if not before:
+            head.remove(head.find(f"{W}t"))
+        for k, c in enumerate(kids[:hit]):
+            head.insert(len(head) - (1 if before else 0), c)  # 앞쪽 줄바꿈·글자는 원래 순서대로 t(before) 앞에
+        tail = _make_run(after, rpr)
+        if not after:
+            tail.remove(tail.find(f"{W}t"))
+        for c in kids[hit + 1:]:
+            tail.append(c)
+        new_els: list[ET.Element] = []
+        if len([c for c in head if c.tag != f"{W}rPr"]):
+            new_els.append(head)
+        new_els.extend(_make_del_ins(target, replacement, ids, author, date))
+        if len([c for c in tail if c.tag != f"{W}rPr"]):
+            new_els.append(tail)
+        for k, el in enumerate(new_els):
+            para.insert(idx + k, el)
+        return True
+    if run_only:
+        # 이미 다른 수정이 들어간 단락 — 삭제 표시된 글자까지 합친 문안으로 단락을 다시 쓰면 앞 수정이 사라진다.
+        return False
+    full = _para_text(para)
+    if target not in full:
+        return False
+    _replace_para_with_tracked_changes(para, full, full.replace(target, replacement, 1), ids, author, date)
+    return True
 
 
 # ── 코멘트 XML 빌드 ─────────────────────────────────────────────────────────────
@@ -480,7 +558,22 @@ def build_redline_docx(
         and str(cr.get("original_text") or "").strip()
         and not bool(cr.get("dedup_suppressed"))
         and not bool(cr.get("keep_as_is"))
+        # 보고서·화면이 수정안으로 보여 주는 것(HIGH/MEDIUM)만 반영한다. LOW(참고·기본 숨김) 문안까지 넣으면 보고서에 없는
+        # 수정이 수정본에 들어가고, 검증되지 않은 문안이 엉뚱한 단락을 덮는다(2026-10-30 실측: 제4조 제3항용 문안이 담보
+        # 조건이 든 제4조 제2항을, 참고 문안이 제1조 소재지 줄을 덮었다).
+        and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
     ]
+
+    # 항 신설은 교체를 마친 뒤 항 번호 순으로 넣는다 — 같은 조 끝에 차례로 붙이므로 처리 순서가 곧 항 순서다
+    # (2026-10-21: ⑪ 이 ⑩ 보다 먼저 들어갔다).
+    def _insert_order(cr: dict[str, Any]) -> tuple[int, int, int]:
+        ri = cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else {}
+        if str(ri.get("edit_type") or "") not in ("insert_after", "new_clause"):
+            return (0, 0, 0)
+        m = re.search(r"제\s*(\d+)\s*조[^\n]*?제\s*(\d+)\s*(?:항|조)\s*신설", str(ri.get("edit_location") or ""))
+        return (1, int(m.group(1)), int(m.group(2))) if m else (1, 9999, 0)
+
+    applicable.sort(key=_insert_order)
 
     # 처리된 단락 추적 (중복 적용 방지)
     processed_paras: set[int] = set()
@@ -511,6 +604,52 @@ def build_redline_docx(
 
         if not original_text:
             continue
+        # 수정 지시가 있으면 그것을 따른다 — 위치·방식·보류 판단은 검토 파이프라인이 수정안 전부를 함께 놓고
+        # 한 것이다. 종전에는 suggested_rewrite 로 근거 원문 단락을 교체해, "항 신설" 로 정한 문안이 근거 호(예:
+        # "오프닝 PPL (30만 조회수 보장)")를 덮어썼고 자동 적용 보류도 무시됐다(2026-10-21).
+        _ri = cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else {}
+        if _ri.get("held"):
+            continue
+        _final = _strip_display_markers(str(_ri.get("final_clause_text") or _ri.get("replacement_text") or ""))
+        if str(_ri.get("edit_type") or "") in ("insert_after", "new_clause") and _final:
+            _loc = str(_ri.get("edit_location") or "")
+            _all = [el for el in body if el.tag == f"{W}p"]
+            _idx = _build_article_index(_all)
+            _m_art = re.search(r"제\s*(\d+)\s*조", _loc)
+            _host = _m_art.group(1) if _m_art else article_number
+            _end = _article_end(_all, _idx, _host) if _host else None
+            if _end is None and _idx:
+                _last = max(_idx, key=lambda k: _idx[k][0])
+                _end = _article_end(_all, _idx, _last)
+            if _end is None:
+                continue
+            _after = _all[_end]
+            _base = _after.find(f"{W}pPr")
+            _at = list(body).index(_after) + 1
+            _lines = [ln.strip() for ln in _final.split("\n") if ln.strip()]
+            _m_new = re.search(r"제\s*(\d+)\s*조(?:\s*의\s*\d+)?\s*신설", _loc)
+            if str(_ri.get("edit_type")) == "new_clause" and _m_new and not re.match(r"^\s*제\s*\d+\s*조", _lines[0]):
+                _lines.insert(0, _m_new.group(0).replace("신설", "").strip())
+            _first = None
+            for _ln in _lines:
+                _np = _make_ins_paragraph(_ln, ids, author, date, _base)
+                body.insert(_at, _np)
+                _at += 1
+                _first = _first if _first is not None else _np
+            if _first is not None and (reason or risk):
+                c_id = comment_id_counter[0]
+                comment_id_counter[0] += 1
+                comments.append({"id": c_id, "author": author, "date": date,
+                                 "text": f"[{risk}] {reason}" if reason else f"[{risk}] 신설"})
+                crs, cre, ref = _make_comment_markup(c_id)
+                _first.insert(0, crs)
+                _first.append(cre)
+                _first.append(ref)
+            continue
+        if _final and str(_ri.get("edit_type") or "") == "replace":
+            suggested = _final
+        suggested = _strip_display_markers(suggested)
+        addition_text = _strip_display_markers(addition_text)
         if not suggested and not has_addition:
             continue
 
@@ -530,6 +669,24 @@ def build_redline_docx(
         if para_idx is None:
             continue
         if para_idx in processed_paras:
+            # 한 Word 단락에 여러 호가 들어 있으면(제14조 제6항 제1~4호) 서로 다른 문장을 고치는 수정이 같은 단락을 가리킨다.
+            # 종전에는 두 번째 수정을 건너뛰어, 보고서·전체반영 검사에는 있는 주차장 승계 문구가 수정본에 빠졌다(2026-10-30 실측).
+            # 문장 단위 수정은 함께 반영하고, 단락 전체 교체만 한 번으로 막는다.
+            _ri2 = cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else {}
+            _t2 = str(_ri2.get("target_text") or "").strip()
+            _r2 = _strip_display_markers(str(_ri2.get("replacement_text") or "")).strip()
+            _same_para = all_paras[para_idx]
+            if (str(_ri2.get("edit_type") or "") == "replace" and _t2 and _r2
+                    and _substitute_in_para(_same_para, _t2, _r2, ids, author, date, run_only=True)):
+                if reason or risk:
+                    c_id = comment_id_counter[0]
+                    comment_id_counter[0] += 1
+                    comments.append({"id": c_id, "author": author, "date": date,
+                                     "text": f"[{risk}] {reason}" if reason else f"[{risk}] 수정 필요"})
+                    crs, cre, ref = _make_comment_markup(c_id)
+                    _same_para.insert(0, crs)
+                    _same_para.append(cre)
+                    _same_para.append(ref)
             continue
         processed_paras.add(para_idx)
 
@@ -566,9 +723,21 @@ def build_redline_docx(
             continue
 
         # 일반 수정: del+ins 교체 또는 신규 단락 삽입
+        # 문장 단위 보완(2026-10-30): 교체 대상이 단락 안의 한 문장이면 그 문장만 바꾼다. 한 Word 단락에 여러 항·호가
+        # 줄바꿈으로 들어 있으면(제14조 제6항 제1~4호) 단락 전체를 문장 하나로 바꿀 때 다른 호(연대보증·주차장 승인)가 사라지고,
+        # 거의 같은 문안이라 "신규 항 추가" 로 처리하면 같은 단락이 중복된다.
+        _sub_target = str(_ri.get("target_text") or "").strip()
+        _sub_repl = _strip_display_markers(str(_ri.get("replacement_text") or "")).strip()
+        _substituted = (
+            str(_ri.get("edit_type") or "") == "replace" and bool(_sub_target) and bool(_sub_repl)
+            and _sub_target in _para_text(target_para) and len(_sub_target) < len(_para_text(target_para))
+            and _substitute_in_para(target_para, _sub_target, _sub_repl, ids, author, date)
+        )
         is_replacement = _text_sim(original_text, suggested) < 0.95
 
-        if is_replacement:
+        if _substituted:
+            pass
+        elif is_replacement:
             _replace_para_with_tracked_changes(
                 target_para, original_text, suggested, ids, author, date
             )

@@ -108,6 +108,7 @@ def detect_our_party_from_text(text: str, hint_entity: str = "") -> str | None:
 _TYPE_TO_ROLE_BUCKET: dict[str, tuple[str, str]] = {
     "advertising_content_production": ("service_recipient", "service_provider"),
     "advertising_media_placement": ("service_recipient", "service_provider"),
+    "advertising_sponsorship": ("service_recipient", "service_provider"),
     "content_production_service": ("service_recipient", "service_provider"),
     "creative_agency_service": ("service_recipient", "service_provider"),
     "consignment_sales_agency": ("supplier", "dealer"),
@@ -123,6 +124,7 @@ _TYPE_TO_ROLE_BUCKET: dict[str, tuple[str, str]] = {
     "software_app_development": ("service_recipient", "service_provider"),
     "ai_search_marketing": ("service_recipient", "service_provider"),
     "rental": ("buyer", "supplier"),
+    "real_estate_lease": ("lessee", "lessor"),
     "construction": ("ordering_party", "contractor"),
     "nda_confidentiality": ("party", "party"),
     "general": ("unknown", "unknown"),
@@ -774,6 +776,9 @@ def _infer_legal_roles(
         # 아니다 — 상대방이 만드는 것이 없으므로 도급 어휘를 쓰면 검수·납품·
         # 산출물 논점이 그 라벨을 따라 들어온다(2026-09-16 지시 3항).
         return "광고주(매체 이용자)", "광고매체 운영자(송출·게재 수행)"
+    if type_code == "advertising_sponsorship":
+        # 협찬금을 내고 노출·이용권을 받는 쪽이다 — 발주자·구매자가 아니다(2026-10-21).
+        return "광고주(협찬사)", "제작·채널 운영사(협찬 수령)"
     if type_code in ("advertising_content_production", "content_production_service", "creative_agency_service"):
         return "도급인/발주자/콘텐츠 사용권자", "콘텐츠 제작 수탁자"
     if type_code == "consignment_sales_agency":
@@ -798,6 +803,8 @@ def _infer_legal_roles(
         return "ordering_party", "developer"
     if type_code == "rental":
         return "renter", "rental_provider"
+    if type_code == "real_estate_lease":
+        return "임차인", "임대인"
     if type_code == "construction":
         return "ordering_party", "contractor"
     if type_code == "nda_confidentiality":
@@ -938,12 +945,14 @@ def _compute_confidence(type_code: str, reasons: list[str], text: str) -> float:
         "dealer_rental_service_contract",
         "software_app_development",
         "rental",
+        "real_estate_lease",
         "construction",
         "store_operation_outsourcing",
         "testing_inspection_service",
         # 거래모델 판정(누가 만드는가)으로 확정된 유형이다 — 낱말 하나에
         # 기대는 분류가 아니므로 강한 신호로 다룬다(2026-09-16 지시 1항).
         "advertising_media_placement",
+        "advertising_sponsorship",
     }
     if "no_strong_signal" in reasons:
         return 0.40

@@ -54,12 +54,16 @@ _ROLE_PAIRS: dict[str, tuple[str, str]] = {
     "content_production_service": ("발주자", "제작사"),
     "creative_agency_service": ("광고주", "대행사"),
     "advertising_media_placement": ("광고주", "매체사"),
+    "advertising_sponsorship": ("광고주", "제작·채널 운영사"),
 }
 _ROLE_CODES: dict[str, str] = {
     "client": "발주자", "service_provider": "수행사", "supplier": "공급자", "buyer": "구매자",
     "seller_or_supplier": "공급자", "contractor": "수급인", "ordering_party": "도급인",
     "principal": "위탁자", "dealer": "대리점", "licensor": "라이선서", "licensee": "라이선시",
+    "lessee": "임차인", "lessor": "임대인",
 }
+#: 역할 명사로 끝나는 약칭(임대인·임차인·토지소유자·수탁자·제작사 …).
+_ROLE_NOUN_LABEL = re.compile(r"(?:[인자사처점]|기관|단체|보증인)$")
 #: 갑·을류 자리 약칭 — 역할 명사가 아니다.
 _POSITION_LABEL = re.compile(r"^(?:[갑을병정](?:사)?|당사|회사|본인)$")
 #: 서명하지 않는데 본문에 자주 나오는 사람·기관 — 당사자 수에 넣지 않는다.
@@ -127,6 +131,11 @@ def build_party_map(entity_resolution: Any, text: str, contract_type: str = "",
         role_alias = next((a for a in aliases if not _POSITION_LABEL.match(a)), "")
         if role_alias:
             role = role_alias
+        elif _ROLE_NOUN_LABEL.search(p.label) and not _POSITION_LABEL.match(p.label) \
+                and p.label not in str(p.legal_entity_name or p.written_name or ""):
+            # 약칭 자체가 역할 명사("임대인"·"토지소유자")면 그것이 역할이다 — 유형 기본값(공급자/구매자)으로
+            # 덮으면 부동산 임대차의 임대인이 "공급자" 가 된다(2026-10-30 실측).
+            role = p.label
         elif pair:
             role = pair[0] if p.is_our_company else pair[1]
         else:

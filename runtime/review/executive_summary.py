@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 #  구체적 조문 번호(제N조)는 여기서 출력하지 않는다 — 국가법령정보 API/검증된
@@ -21,6 +22,21 @@ _TOPIC_LEGAL_BASIS: dict[str, str] = {
     "dealer_unfair": "공정거래법 및 대리점법상 불이익 제공 금지 법리 (정확한 조문은 법무 확인 필요)",
     "confidentiality": "부정경쟁방지법상 영업비밀 보호 및 민법상 불법행위 법리 (정확한 조문은 법무 확인 필요)",
     "training_operations": "산업안전보건법상 안전보건교육 실시 의무 (정확한 조문은 법무 확인 필요)",
+}
+
+#: 주제 서식이 전제하는 법률 — finding 자체에 이 낱말이 있을 때만 그 서식을 쓴다.
+_TOPIC_LAW_WORDS: dict[str, str] = {
+    "termination": r"대리점",
+    "cost_burden": r"대리점|공정거래|거래상\s*지위",
+    "payment_settlement": r"하도급",
+    "personal_data": r"개인정보",
+    "ip_ownership": r"저작|지식재산|산출물",
+    "safety": r"안전|산업안전|중대재해",
+    "safety_compliance": r"안전|산업안전|중대재해",
+    "damage": r"제조물|손해배상",
+    "dealer_unfair": r"대리점|불이익",
+    "confidentiality": r"비밀|영업비밀",
+    "training_operations": r"교육|안전",
 }
 
 _TOPIC_REVISION_STRATEGY: dict[str, str] = {
@@ -144,15 +160,35 @@ def generate_executive_summary(
         rewrite_reason = str(cr.get("rewrite_reason") or "")[:120]
 
         status = rewrite_reason or f"{prefix}{clause_title} — {tier} 리스크 감지"
-        legal_basis = _TOPIC_LEGAL_BASIS.get(topic, "관련 법령 및 판례에 따른 계약 리스크")
-        revision_strategy = _TOPIC_REVISION_STRATEGY.get(
-            topic,
-            (cr.get("suggested_direction") or ["수정 제안 참조"])[0]
-            if cr.get("suggested_direction") else "수정 제안 참조",
-        )
-        expected_effect = _TOPIC_EXPECTED_EFFECT.get(
-            topic, "사고·분쟁 발생 시 당사의 면책 가능성 및 협상력 증대"
-        )
+        # 2026-10-30 실측(천안 상가 임대차): 주제 낱말("종료"→termination)만으로 "대리점법 … 과징금 30~50% 감소",
+        # "산업안전보건법 …" 이 요약 근거가 됐다. 주제 서식은 그 법률이 finding 자체에 등장할 때만 쓰고,
+        # 그 밖에는 finding 이 가진 손실 경로·법조문 근거·조치를 그대로 쓴다.
+        own = " ".join(str(cr.get(k) or "") for k in ("rewrite_reason", "problem", "legal_business_reason"))
+        template_law = _TOPIC_LAW_WORDS.get(topic)
+        use_template = bool(template_law) and bool(re.search(template_law, own))
+        statutes = [str(s.get("citation") or "") for s in ((cr.get("legal_grounding") or {}).get("statutes") or [])
+                    if isinstance(s, dict) and str(s.get("citation") or "").strip()]
+        if str(cr.get("loss_path_text") or "").strip():
+            status = str(cr.get("issue_title") or status)[:120] + " — " + str(cr.get("loss_path_text"))[:200]
+        if use_template:
+            legal_basis = _TOPIC_LEGAL_BASIS[topic]
+        elif statutes:
+            legal_basis = ", ".join(statutes[:3]) + (" (조건부 — 사실 확인 전제)" if cr.get("conditional_judgment") else "")
+        else:
+            legal_basis = "계약상 약정(권리·의무) — 별도 법조문 인용 생략"
+        actions = [str(a) for a in (cr.get("required_actions") or []) if str(a).strip()]
+        if actions:
+            revision_strategy = " / ".join(actions[:2])
+        elif use_template:
+            revision_strategy = _TOPIC_REVISION_STRATEGY.get(topic, "수정 제안 참조")
+        else:
+            revision_strategy = (cr.get("suggested_direction") or ["수정 제안 참조"])[0]                 if cr.get("suggested_direction") else "수정 제안 참조"
+        if str(cr.get("loss_path_text") or "").strip():
+            expected_effect = "손실 경로 차단: " + str((cr.get("loss_path") or {}).get("loss") or "")[:120]
+        elif use_template:
+            expected_effect = _TOPIC_EXPECTED_EFFECT.get(topic, "")
+        else:
+            expected_effect = "해당 조항의 권리·의무를 명확히 해 분쟁 시 입증 부담을 줄인다"
 
         items.append({
             "risk_code": f"{tier}-{clause_id}",

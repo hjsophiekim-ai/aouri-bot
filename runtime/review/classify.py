@@ -136,7 +136,15 @@ def _classify_entity(text: str, filename: str | None) -> str:
     return "미상"
 
 
+_RX_AD_TITLE = re.compile(r"협\s*찬|\bPPL\b|간접\s*광고|광\s*고")
+
+
 def _classify_contract_type(text: str, filename: str | None) -> str:
+    # 계약서 제목이 협찬·PPL·광고 계약이라고 말하면 그것이 유형이다 — 본문의 "마케팅 라이선스" 한 줄이
+    # 우선순위(라이선스 390 > 광고 200)로 이겨 협찬 계약에 라이선스·오픈소스 규칙팩이 붙었다(2026-10-21).
+    title = next((ln.strip() for ln in str(text or "").splitlines() if ln.strip()), "")
+    if len(title) <= 40 and _RX_AD_TITLE.search(title):
+        return "광고/마케팅/협찬"
     s = (text or "") + "\n" + (filename or "")
     scored: list[tuple[int, int, str]] = []
     priority = {

@@ -839,6 +839,10 @@ def _ground_statutes(cr: dict[str, Any], index: list[ClauseRef], *, archetype: s
 
     tier = str(cr.get("risk_tier") or "").upper()
     lbr = str(cr.get("legal_business_reason") or "")
+    if cr.get("is_deal_core_risk") and ((cr.get("legal_grounding") or {}).get("statutes")):
+        # 거래 판단이 그 쟁점(근저당·질권·보증·공유)에 맞춰 붙인 조문을 낱말 패턴으로 덮어쓰지 않는다 — 덮어쓰면
+        # 보증금 근저당·연대보증에 "권리보증 위반 손해배상(민법 제390조)" 이 붙었다(2026-10-30 실측).
+        return
     if tier == "LOW" and not (cr.get("keep_as_is") and cr.get("triage") == "KEEP"):
         # 참고 사항은 조문을 강제하지 않는다 — 법률명 나열만 걷어 낸다. KEEP 판정은
         # "왜 현행으로 충분한가"의 근거이므로 조문을 싣는다.
@@ -1178,6 +1182,12 @@ def _absorb_into_transaction_packages(visible: list[dict[str, Any]], audit: _Aud
     for cr in visible:
         if cr.get("dedup_suppressed") or cr.get("is_transaction_package") or cr.get("is_entity_name_correction"):
             continue
+        if cr.get("business_check"):
+            continue  # 사업부 확인사항은 수정 package 의 하위 쟁점이 아니다 — 확인 칸에 그대로 남긴다
+        if re.search(r"세무|세금계산서|부가가치세|원천징수|가산세", _title(cr)):
+            # 세무 쟁점은 재경 확인으로 간다 — 지급·성과 package 에 흡수되면 그 package 의 근거 법령에 부가가치세법이
+            # 붙어 쟁점과 근거가 섞인다(2026-10-21).
+            continue
         if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
             continue
         if str(cr.get("clause_id") or "").startswith("uf_"):
@@ -1231,7 +1241,7 @@ def _merge_packages(visible: list[dict[str, Any]], audit: _Audit) -> None:
         # ac_* 는 쟁점 하나를 정밀하게 겨냥한 결정론 점검이다 — 같은 주제의 AI 논점에 흡수되면
         # 그 쟁점(결제창 Case A/B 등)이 하위 bullet 로 묻힌다(와이어드 실측).
         if cr.get("dedup_suppressed") or cr.get("is_entity_name_correction") \
-                or str(cr.get("clause_id") or "").startswith("ac_"):
+                or str(cr.get("clause_id") or "").startswith("ac_") or cr.get("business_check"):
             continue
         if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
             continue
@@ -1251,6 +1261,9 @@ def _merge_packages(visible: list[dict[str, Any]], audit: _Audit) -> None:
             -float(c.get("confidence") or 0),
         ))
         rep, rest = items[0], items[1:]
+        # 거래 package 끼리는 합치지 않는다 — 각자 원문 문형으로 다른 쟁점(보장 충돌·성과 기준·지급 시점)을
+        # 세운 것이라 한쪽의 하위 bullet 로 묻히면 그 수정안이 사라진다(2026-10-21).
+        rest = [c for c in rest if not c.get("is_transaction_package")]
         subs = rep.setdefault("sub_issues", [])
         paths = [str(rep.get("display_path") or "")]
         for cr in rest:
@@ -1309,6 +1322,7 @@ def _limit_counts(clause_results: list[dict[str, Any]], audit: _Audit) -> None:
         # (2026-10-13 AI 경로: AI 논점이 늘자 별첨 공급가격·기간 연동 finding 이 "MEDIUM 5건 초과분" 으로 LOW 가 됐다).
         mediums = [c for c in clause_results if _visible(c) and not c.get("is_entity_name_correction")
                    and not c.get("is_user_focus") and not c.get("is_annex_conflict")
+                   and not c.get("is_transaction_package")
                    and str(c.get("risk_tier")).upper() == "MEDIUM"]
         if len(mediums) > MAX_MEDIUM:
             mediums.sort(key=_priority)

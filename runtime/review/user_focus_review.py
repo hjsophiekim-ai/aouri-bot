@@ -528,6 +528,9 @@ def verify_focus(targets: list[FocusTarget], clause_results: list[dict[str, Any]
                 proposed=_edits_for(t, cr, direct),
                 finding_ids=[str(cr.get("clause_id"))] + [str(o.get("clause_id")) for o in others],
             )
+            if not res.proposed and cr.get("action_only"):
+                # 체결 전 확인 항목은 고칠 문장이 아니라 확인·협상 조치가 답이다(2026-10-30).
+                res.proposed = [f"[필요 조치] {a}" for a in cr.get("required_actions") or [] if str(a).strip()]
         else:
             keep = next((c for c in clause_results if isinstance(c, dict) and c.get("keep_as_is")
                          and t.covers(str(c.get("article_number") or ""), str(c.get("paragraph_number") or ""))), None)

@@ -129,6 +129,7 @@ _DOMAIN_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 _TYPE_CODE_DOMAIN: dict[str, str] = {
     "advertising_content_production": "content_production",
     "advertising_media_placement": "advertising_marketing",
+    "advertising_sponsorship": "advertising_marketing",
     "content_production": "content_production",
     "marketing_ai_search": "advertising_marketing",
     "software_dev": "software_development",
@@ -489,10 +490,12 @@ _RX_PERSONAL_DATA_PROCESSING = re.compile(
     r"개인정보(?:의)?\s*(?:수집|이용|제공|처리|위탁|파기|보유)"
     r"|정보주체|고유식별정보|민감정보|가명정보"
     r"|성명[^.\n]{0,20}연락처|연락처[^.\n]{0,20}제공"
-    r"|초상권|출연자[^.\n]{0,20}동의"
     r"|personal\s+(?:data|information)\s+(?:process|collect|transfer)",
     re.IGNORECASE,
 )
+#: 출연자 초상·성명 이용 — 초상권·퍼블리시티 문제다. 우리가 출연자 정보를 수집·이용·제공하는지는 계약 문언만으로
+#: 정해지지 않으므로 '적용' 으로 확정하지 않는다(2026-10-21: "초상권" 한 낱말로 "일부 적용·수정 필요" 가 됐다).
+_RX_PORTRAIT_USE = re.compile(r"초상권|초상\s*/?\s*음성|출연자[^.\n]{0,20}(?:동의|성명|초상)")
 
 
 #: 개인정보일 **가능성**이 있는 데이터가 오가는 신호. 확정 신호는 아니지만,
@@ -519,6 +522,16 @@ def assess_privacy_act(*, text: str) -> StatuteDecision:
             statute="개인정보보호법",
             conclusion=CONCLUSION_PARTIAL,
             reason="계약 이행 과정에서 개인정보(초상·연락처 등)를 수집·제공하는 구조가 확인되어 해당 부분에 적용됩니다.",
+        )
+    if _RX_PORTRAIT_USE.search(body):
+        return StatuteDecision(
+            statute="개인정보보호법",
+            conclusion=CONCLUSION_NEEDS_FACTS,
+            reason=(
+                "출연자 초상·음성·성명 이용은 초상권·퍼블리시티 문제입니다. 개인정보 보호법은 우리가 출연자 등의 개인정보를 "
+                "직접 수집·이용·제공하는 구조가 있을 때 적용되는데, 계약 문언만으로는 확인되지 않습니다."
+            ),
+            facts_needed=["우리가 출연자·시청자 등의 개인정보를 직접 수집·이용·제공하는지"],
         )
     if _RX_DATA_FLOW.search(body):
         return StatuteDecision(
@@ -830,7 +843,42 @@ def assess_statutes(
         assess_large_retail_act(text=text),
         assess_advertising_act(text=text),
     ]
+    if contract_type_code == "real_estate_lease":
+        decisions = _settle_for_real_estate_lease(decisions)
     return _settle_for_employee_nda(decisions, entity=entity, text=text, contract_type_code=contract_type_code)
+
+
+#: 부동산 임대차에서 거래 요건 자체가 없는 법률 — 위탁·재판매·공사도급·광고·납품 거래가 아니다.
+_NOT_LEASE_STATUTES = ("하도급법", "대리점법", "건설산업기본법", "산업안전보건법", "중대재해처벌법", "대규모유통업법",
+                       "표시광고법")
+
+
+def _settle_for_real_estate_lease(decisions: list[StatuteDecision]) -> list[StatuteDecision]:
+    """부동산(상가) 임대차 — 낱말("광고물" 철거, "인테리어 공사", "제품판매")로 위탁·공사·광고 법률을 판단하지 않는다.
+
+    2026-10-30 실측(천안 상가 임대차): 철거대상 목록의 "광고물" 한 낱말로 표시광고법 '일부 적용', 임차인의 인테리어
+    공사로 하도급법 '사실확인 필요' 가 결과 상단에 실렸다. 임대차의 실제 적용 법률은 상가건물 임대차보호법이다.
+    """
+    out: list[StatuteDecision] = []
+    for d in decisions:
+        if any(d.statute.startswith(s) for s in _NOT_LEASE_STATUTES):
+            out.append(StatuteDecision(
+                statute=d.statute, conclusion=CONCLUSION_NOT_APPLICABLE,
+                reason="부동산 임대차 — 이 법률이 요구하는 위탁·재판매·공사도급·광고 거래가 아닙니다(임차인의 인테리어 공사·간판은 "
+                       "임대차의 부수 행위).",
+                disabled_topics=list(d.disabled_topics),
+            ))
+        else:
+            out.append(d)
+    out.append(StatuteDecision(
+        statute="상가건물 임대차보호법",
+        conclusion=CONCLUSION_NEEDS_FACTS,
+        reason=("상가건물 임대차라 대항력(제3조)·갱신요구(제10조)·권리금(제10조의3 이하) 조항은 보증금 규모와 무관하게 적용됩니다"
+                "(제2조 제3항). 우선변제(제5조)는 환산보증금(보증금 + 월차임×100)이 지역별 기준 이하일 때만 적용되므로, "
+                "기준을 넘으면 보증금 회수는 약정 담보(근저당·질권·보증)에 달려 있습니다."),
+        facts_needed=["환산보증금과 목적물 소재지의 시행령 기준금액", "인도·사업자등록 일자(대항력 발생 시점)"],
+    ))
+    return out
 
 
 def _settle_for_employee_nda(
@@ -1130,4 +1178,53 @@ def scrub_inapplicable_statutes(
             }
             cr["statute_language_scrubbed"] = entry["removed_terms"]
             changed.append(entry)
+    return changed
+
+
+# ── 적용 전제가 미확인인 법률의 지적 — 확인사항으로 (2026-10-21 지시 2·5항) ────────
+#
+# "비적용" 법률의 지적은 위에서 끈다. 그런데 "사실확인 필요" 인 법률을 근거로 "동의 규정이 없어 과태료" 처럼
+# 위반을 단정하는 HIGH 가 그대로 나갔다(실측: 출연자 초상권 낱말로 개인정보 처리 구조가 있다고 보고, 개인정보
+# 동의·보유기간 부재를 HIGH 로 냈다). 전제 사실이 확인되면 필요한 조치로 두고, 수정 문안은 내지 않는다.
+CONDITIONAL_PREFIX = "[전제 확인 필요] "
+
+
+def conditionalize_unconfirmed_statute_findings(
+    clause_results: list[dict[str, Any]],
+    decisions: list[StatuteDecision],
+) -> list[dict[str, Any]]:
+    changed: list[dict[str, Any]] = []
+    pending = {d.statute: d for d in decisions if d.conclusion == CONCLUSION_NEEDS_FACTS}
+    if not pending:
+        return changed
+    for cr in clause_results:
+        if not isinstance(cr, dict) or cr.get("dedup_suppressed") or cr.get("business_check"):
+            continue
+        if str(cr.get("risk_tier") or "").upper() not in ("HIGH", "MEDIUM"):
+            continue
+        title = str(cr.get("issue_title") or "") + " " + " ".join(
+            str(d.get("issue_title") or "") for d in cr.get("detected_issue_list") or [] if isinstance(d, dict))
+        blob = title + " " + str(cr.get("problem") or "") + " " + str(cr.get("legal_business_reason") or "")
+        for statute, decision in pending.items():
+            topics = _TOPICS_BY_STATUTE.get(statute, ())
+            # 제목이 그 법률의 주제여야 한다 — 다른 쟁점의 설명에 법률명이 스친 것으로는 바꾸지 않는다.
+            if not any(t in title for t in topics) and not (
+                    any(t in blob for t in topics) and _RX_STATUTE_ASSERTION.search(blob)
+                    and str(cr.get("clause_id") or "").startswith("eb_")):
+                continue
+            facts = "; ".join(decision.facts_needed) or "법률 적용의 전제 사실"
+            cr["business_check"] = True
+            cr["risk_tier"] = "MEDIUM"
+            cr["severity"] = "MEDIUM"
+            cr["must_fix"] = False
+            cr["high_risk"] = False
+            cr["approval_required"] = False
+            cr["statute_premise_unconfirmed"] = statute
+            cr["problem"] = (CONDITIONAL_PREFIX + f"{statute} 적용 여부가 확인되지 않았습니다({facts}). "
+                             "확인되면 다음 조치가 필요합니다: " + str(cr.get("problem") or "").strip())
+            cr["suggested_rewrite"] = ""
+            cr["redline_instruction"] = None
+            cr["has_rewrite_change"] = False
+            changed.append({"clause_id": str(cr.get("clause_id") or ""), "statute": statute})
+            break
     return changed

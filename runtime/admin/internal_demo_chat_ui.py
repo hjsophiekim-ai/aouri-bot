@@ -350,6 +350,13 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
               <div class="meta" id="resultAnalyzeHint"></div>
             </div>
 
+            <div style="margin-top:12px;" id="briefPanelWrap" hidden>
+              <div class="badge" style="margin-bottom:8px;">검토 결과 (사업팀 전달본)</div>
+              <div id="briefPanel" style="font-size:13px;line-height:1.6;"></div>
+            </div>
+
+            <details id="internalDetail" style="margin-top:12px;">
+              <summary style="cursor:pointer;user-select:none;font-weight:600;">법무 상세 분석 (내부용 — 근거·법률 검토·자동 검증 기록)</summary>
             <div style="margin-top:12px;">
               <div class="badge" style="margin-bottom:8px;">사용자 요청 핵심 이슈 반영 결과</div>
               <div class="meta" id="focusSummary">-</div>
@@ -358,6 +365,11 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             <div style="margin-top:12px;">
               <div class="badge" style="margin-bottom:8px;">질문 답변 반영 요약</div>
               <div class="meta" id="answerSummary">-</div>
+            </div>
+
+            <div style="margin-top:12px;" id="dealPanelWrap" hidden>
+              <div class="badge" style="margin-bottom:8px;">거래 전체 판단 · 요청 답변</div>
+              <div class="meta" id="dealPanel" style="white-space:pre-wrap;"></div>
             </div>
 
             <div id="debugPanelWrap" style="margin-top:10px;display:none;">
@@ -371,10 +383,15 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
               <div class="badge" style="margin-bottom:8px;">조항별 수정 제안</div>
               <div id="clauseList"></div>
             </div>
+            <div class="row" style="margin-top:8px; justify-content:flex-end;">
+              <button class="btn btnSecondary" id="btnInternalDocx" onclick="confirmRevision('docx', 'internal')">내부 상세 분석본(.docx)</button>
+              <button class="btn btnSecondary" id="btnInternalPdf" onclick="confirmRevision('pdf', 'internal')">내부 상세 분석본(.pdf)</button>
+            </div>
+            </details>
 
             <div class="row" style="margin-top:12px; justify-content:flex-end;">
-              <button class="btn btnPrimary" id="btnConfirmRevision" onclick="confirmRevision('docx')">최종 수정본 다운로드(.docx)</button>
-              <button class="btn btnPrimary" id="btnConfirmRevisionPdf" onclick="confirmRevision('pdf')">최종 수정본 다운로드(.pdf)</button>
+              <button class="btn btnPrimary" id="btnConfirmRevision" onclick="confirmRevision('docx', 'brief')">검토 결과 다운로드(.docx)</button>
+              <button class="btn btnPrimary" id="btnConfirmRevisionPdf" onclick="confirmRevision('pdf', 'brief')">검토 결과 다운로드(.pdf)</button>
               <button class="btn btnSecondary" id="btnConfirmDraft" onclick="confirmDraft()">초안 작성 확정</button>
             </div>
             <div class="meta" id="confirmNote"></div>
@@ -1326,7 +1343,12 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
           if (mt.length) lines.push('중점 이슈 연결: ' + mt.slice(0, 3).join(' / '));
           if (ft.length) lines.push('답변 반영 쟁점: ' + ft.slice(0, 3).join(' / '));
           if (dirs.length) lines.push('방향: ' + dirs.slice(0, 3).join(' / '));
-          if (rr0) lines.push('사유: ' + rr0.slice(0, 240) + (rr0.length > 240 ? '…' : ''));
+          if (it.review_category) lines.push('분류: ' + String(it.review_category));
+          if (it.loss_path_text) lines.push('손실 경로: ' + String(it.loss_path_text).slice(0, 360));
+          if (it.action_only && Array.isArray(it.required_actions)) {
+            for (const a of it.required_actions.slice(0, 5)) lines.push('□ ' + String(a));
+          }
+          if (rr0 && !it.loss_path_text) lines.push('사유: ' + rr0.slice(0, 240) + (rr0.length > 240 ? '…' : ''));
           if (rw) lines.push(rw.includes('[추가 권고]') ? rw.slice(0, 400) : ('참고 문안: ' + rw.slice(0, 240) + (rw.length > 240 ? '…' : '')));
           right.innerHTML = `<div class="label">권장/참고(guidance)</div><div class="guidance"><div class="hintTitle">보완 권고</div>${escapeHtml(lines.join('\\n'))}</div>`;
         }
@@ -1590,6 +1612,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       document.getElementById('confirmNote').innerText = '';
       const btnRev = document.getElementById('btnConfirmRevision');
       const btnRevPdf = document.getElementById('btnConfirmRevisionPdf');
+      const btnIntDocx = document.getElementById('btnInternalDocx');
+      const btnIntPdf = document.getElementById('btnInternalPdf');
       const btnDraft = document.getElementById('btnConfirmDraft');
       const docxStatus = document.getElementById('docxStatus');
       const meta = (revisionResult && revisionResult.meta) ? revisionResult.meta : (reviewResult && reviewResult.clause_meta ? reviewResult.clause_meta : null);
@@ -1597,6 +1621,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       if (!analyzeState.deepDone) {
         btnRev.disabled = true;
         btnRevPdf.disabled = true;
+        if (btnIntDocx) btnIntDocx.disabled = true;
+        if (btnIntPdf) btnIntPdf.disabled = true;
         if (meta && meta.docx_allowed === false) docxStatus.innerText = _docxBlockedReason(meta);
         else docxStatus.innerText = '수정본: 정밀 검토 진행 중';
       } else {
@@ -1613,6 +1639,8 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         } else {
           btnRev.disabled = false;
           btnRevPdf.disabled = false;
+          if (btnIntDocx) btnIntDocx.disabled = false;
+          if (btnIntPdf) btnIntPdf.disabled = false;
           docxStatus.innerText = '수정본: 다운로드 가능';
         }
       }
@@ -1628,7 +1656,72 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       }
 
       renderClauseList(itemsAll);
+      renderDealPanel(meta0);
+      renderBriefPanel(meta0);
       renderDealerRentalReflectedSection(itemsAll, ctx.contract_type);
+    }
+
+    // [사업팀 전달본, 2026-10-30] 다운로드와 같은 줄(clause_meta.business_brief_sections)을 그대로 그린다.
+    function renderBriefPanel(meta0) {
+      const wrap = document.getElementById('briefPanelWrap');
+      const el = document.getElementById('briefPanel');
+      const det = document.getElementById('internalDetail');
+      if (!wrap || !el) return;
+      const secs = (meta0 && Array.isArray(meta0.business_brief_sections)) ? meta0.business_brief_sections : null;
+      if (!secs || secs.length === 0) { wrap.hidden = true; el.innerHTML = ''; if (det) det.open = true; return; }
+      const out = [];
+      for (const sec of secs) {
+        out.push('<div style="font-weight:700;margin:12px 0 4px 0;">' + escapeHtml(String(sec[0] || '')) + '</div>');
+        for (const row of (sec[1] || [])) {
+          const st = String(row[0] || 'p');
+          const tx = escapeHtml(String(row[1] || ''));
+          const alert = (tx.indexOf('법무 추가 확인 중') >= 0 || tx.indexOf('미확정') === 0);
+          if (st === 'h') out.push('<div style="font-weight:600;margin-top:6px;">' + tx + '</div>');
+          else if (st === 'k') out.push('<div style="font-weight:600;color:' + (alert ? 'var(--danger)' : 'inherit') + ';">' + tx + '</div>');
+          else if (st === 'm') out.push('<div style="color:#5b7086;font-size:12px;margin-left:12px;">' + tx + '</div>');
+          else if (st === 't') out.push('<div style="white-space:pre-wrap;color:#b45309;margin-left:24px;">' + tx + '</div>');
+          else out.push('<div style="margin-left:' + (tx.indexOf('□') === 0 ? '12' : '0') + 'px;">' + tx + '</div>');
+        }
+      }
+      el.innerHTML = out.join('');
+      wrap.hidden = false;
+      if (det) det.open = false;
+    }
+
+    // [거래 전체 판단 · 요청 답변, 2026-10-30] DOCX/PDF 의 0-1·0-3절과 같은 데이터(clause_meta)를 그린다.
+    function renderDealPanel(meta0) {
+      const wrap = document.getElementById('dealPanelWrap');
+      const el = document.getElementById('dealPanel');
+      if (!wrap || !el) return;
+      const deal = (meta0 && meta0.deal_assessment) ? meta0.deal_assessment : null;
+      const rows = (meta0 && Array.isArray(meta0.user_review_coverage)) ? meta0.user_review_coverage.filter(r => r && r.source === 'deal_request') : [];
+      if (!deal || !deal.active) { wrap.hidden = true; el.innerText = ''; return; }
+      const out = [];
+      out.push('거래 성격: ' + String(deal.nature_label || '') + ' / 우리 측 지위: ' + String(deal.our_role || ''));
+      const order = ['필수수정', '체결 전 확인', '권장수정', '수용 가능한 위험'];
+      const risks = Array.isArray(deal.core_risks) ? deal.core_risks : [];
+      for (const cat of order) {
+        for (const c of risks.filter(x => x && x.category === cat)) {
+          out.push('[' + cat + ' · ' + String(c.tier || '') + '] ' + String(c.title || ''));
+          out.push('   손실 경로: ' + String(c.loss_path_text || ''));
+        }
+      }
+      if (risks.length === 0) out.push('원문에서 손실 경로가 확인된 핵심 위험 없음(미확인 사실 확인 전제)');
+      const comp = (meta0 && meta0.review_completion) ? meta0.review_completion : null;
+      if (comp && comp.complete === false) out.push('※ 실질 답이 없는 요청이 있어 검토 미완료: ' + (comp.unanswered || []).join(' / '));
+      for (const r of rows) {
+        out.push('');
+        out.push('요청 ' + String(r.request_index || '') + '. ' + String(r.normalized_issue || ''));
+        out.push('   판단: ' + String(r.judgment || ''));
+        out.push('   근거: ' + String(r.basis || '').slice(0, 300));
+        out.push('   기존 보호: ' + String(r.existing_protection || '').split(String.fromCharCode(10)).join(' / ').slice(0, 500));
+        out.push('   남은 위험: ' + String(r.residual_risk || '').split(String.fromCharCode(10)).join(' / ').slice(0, 500));
+        out.push('   필요 조치: ' + String(r.required_action || '').split(String.fromCharCode(10)).join(' / ').slice(0, 400));
+      }
+      out.push('');
+      out.push('※ 필수수정(HIGH) 건수는 문구를 고쳐야 할 조항의 수다. 계약이 안전하다는 판단이 아니다.');
+      el.innerText = out.join(String.fromCharCode(10));
+      wrap.hidden = false;
     }
 
     function renderDealerRentalReflectedSection(items, contractType) {
@@ -1676,14 +1769,15 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       }
     }
 
-    async function confirmRevision(format) {
+    async function confirmRevision(format, view) {
       const fmt = (format === 'pdf') ? 'pdf' : 'docx';
+      const vw = (view === 'internal') ? 'internal' : 'brief';
       const endpoint = (fmt === 'pdf') ? '/api/revision/download_pdf' : '/api/revision/download_docx';
       document.getElementById('confirmNote').innerText = '수정본 파일(.' + fmt + ')을 생성하는 중입니다...';
       try {
         let payload = null;
         if (ctx.session_id) {
-          payload = { session_id: ctx.session_id };
+          payload = { session_id: ctx.session_id, view: vw };
         } else if (revisionResult && revisionResult.clause_results) {
           payload = { input: { entity: ctx.entity || 'all', contract_type: ctx.contract_type || 'all', filename: ctx.filename || 'demo.txt' }, clause_results: (_filteredClauseResults.length > 0 ? _filteredClauseResults : revisionResult.clause_results) };
         } else {
@@ -1701,7 +1795,7 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'aouribot_revision.' + fmt;
+        a.download = (vw === 'brief' ? 'aouribot_brief.' : 'aouribot_revision.') + fmt;
         a.click();
         setTimeout(() => URL.revokeObjectURL(url), 2000);
         document.getElementById('confirmNote').innerText = '수정본 파일(.' + fmt + ') 다운로드를 시작했어요.';

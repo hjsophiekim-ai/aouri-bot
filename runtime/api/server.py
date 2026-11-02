@@ -1593,6 +1593,7 @@ def create_handler(service: RuleQueryService):
                 return
 
             session_id = body.get("session_id")
+            _view = str(body.get("view") or "internal").strip().lower()
             if isinstance(session_id, str) and session_id:
                 try:
                     doc = load_session(session_id)
@@ -2753,6 +2754,12 @@ def create_handler(service: RuleQueryService):
                         )
                     except Exception:  # noqa: BLE001 - 덮기 실패 시 이 경로의 재계산 결과를 그대로 쓴다
                         pass
+                    # [거래 전체 판단의 요청 답변, 2026-10-30] 검토 파이프라인과 같은 함수로 같은 행을 싣는다.
+                    _deal_docx = clause_meta.get("deal_assessment") if isinstance(clause_meta, dict) else None
+                    if isinstance(_deal_docx, dict) and _deal_docx.get("active"):
+                        from runtime.review.deal_assessment import overlay_deal_rows as _overlay_deal_rows_docx
+
+                        _user_coverage_docx = _overlay_deal_rows_docx(_user_coverage_docx, _deal_docx)
                     _user_parse_notice_docx = str(
                         (_user_parse_meta_docx or {}).get("degraded_notice") or ""
                     )
@@ -2924,6 +2931,38 @@ def create_handler(service: RuleQueryService):
                             _all_results, contract_type_code=_ct_code, include_low=False,
                         )
 
+                    # [사업팀 전달본, 2026-10-30] 같은 최종 데이터(_all_results·_docx_final·요청 답변·거래 판단·전체반영 검사)로
+                    # 결론·실행사항만 싣는다. 내부 분석본은 view=internal(기본값 — 기존 API 호환)로 그대로 받는다.
+                    if _view == "brief":
+                        from runtime.review.business_brief import (
+                            build_business_brief as _build_brief,
+                            build_business_brief_docx as _brief_docx,
+                            build_business_brief_pdf as _brief_pdf,
+                        )
+
+                        _brief = _build_brief(
+                            clause_results=_all_results,
+                            high_issues=_docx_final.get("high_issues"),
+                            medium_issues=_docx_final.get("medium_issues"),
+                            # 요청 답변은 검토 결과(화면)의 행이 정본 — 이 경로가 다시 만든 행은 사전질문 답변 의도 행을 빠뜨린다
+                            # (11-02 실측: 화면에 있던 "제3자 수행 통제" 답이 다운로드에서 사라졌다). 이 경로에만 있는 행은 덧붙인다.
+                            user_review_coverage=(lambda _m, _d: list(_m) + [
+                                r for r in (_d or []) if isinstance(r, dict)
+                                and str(r.get("issue_id") or "") not in {str(x.get("issue_id") or "") for x in _m if isinstance(x, dict)}
+                            ])(((clause_meta or {}).get("user_review_coverage") or []) if isinstance(clause_meta, dict) else [],
+                               _user_coverage_docx),
+                            deal_assessment=(clause_meta.get("deal_assessment") if isinstance(clause_meta, dict) else None),
+                            revision_set_check=(clause_meta.get("revision_set_check") if isinstance(clause_meta, dict) else None),
+                            delivery_remediations=_delivery_disclosure_rows(_delivery),
+                            clauses=original_clauses,
+                            contract_text=text,
+                            answers=answers,
+                            filename=str(filename) if isinstance(filename, str) else None,
+                        )
+                        doc_bytes = (_brief_pdf if _is_pdf else _brief_docx)(_brief)
+                        _binary_response(self, HTTPStatus.OK, doc_bytes, filename=f"aouribot_brief.{_out_ext}",
+                                         content_type=_out_content_type)
+                        return
                     doc_bytes = _builder(
                         entity=entity,
                         contract_type=contract_type,
@@ -2948,6 +2987,7 @@ def create_handler(service: RuleQueryService):
                             (clause_meta.get("statute_applicability_gate") or {}).get("decisions")
                             if isinstance(clause_meta, dict) else None
                         ),
+                        deal_assessment=(clause_meta.get("deal_assessment") if isinstance(clause_meta, dict) else None),
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})

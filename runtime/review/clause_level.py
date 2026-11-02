@@ -573,16 +573,10 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
         중복 판정된 경우 suggested_rewrite를 원문에 직접 녹여내는 인라인 수정으로 변환한다.
         원문에 없는 핵심 추가 문구만 괄호로 삽입한다.
         """
-        orig_norm = _norm_for_sim(original_text)
-        sug_norm = _norm_for_sim(suggested)
-        # 추가된 핵심 단어 추출
-        orig_words = set(re.findall(r"[가-힣A-Za-z0-9]+", orig_norm))
-        sug_words = set(re.findall(r"[가-힣A-Za-z0-9]+", sug_norm))
-        new_words = [w for w in sug_words - orig_words if len(w) >= 2][:6]
-        if not new_words:
-            return original_text
-        inline_note = " (단, " + " · ".join(new_words[:4]) + " 조건 포함)"
-        return (original_text.rstrip() + inline_note).strip()
+        # 낱말 조각을 "(단, 제3호 조건 포함)" 처럼 원문 뒤에 붙이면 완성 문장이 아니다 — 상호참조 정정(제5호→제3호)처럼
+        # 원문과 비슷한 수정안은 원래 비슷한 것이 정상이고, 붙인 괄호는 그대로 계약서에 들어갔다(2026-10-30 실측).
+        # 수정안을 그대로 둔다. 같은 쟁점의 중복 노출은 dedup·전달본이 쟁점 단위로 막는다.
+        return suggested
 
     # ── 지침 1·2·4: 조 단위 그룹화 ─────────────────────────────────────────
     # article_number 기준으로 그룹화 (이미 suppressed된 항목은 제외)
@@ -695,7 +689,7 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
                     ot = str(cr.get("original_text") or "")
                     cr["suggested_rewrite"] = _to_inline_rewrite(ot, sr)
                     cr["rewrite_reason"] = (
-                        (str(cr.get("rewrite_reason") or "") + " [중복 수정안 → 인라인 수정으로 전환]").strip()
+                        (str(cr.get("rewrite_reason") or "")).strip()
                     )
                     cr["dedup_inline"] = True
                 else:
@@ -734,7 +728,7 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
                 ot = str(anchor.get("original_text") or "")
                 anchor["suggested_rewrite"] = _to_inline_rewrite(ot, anchor_sr)
                 anchor["rewrite_reason"] = (
-                    (str(anchor.get("rewrite_reason") or "") + " [중복 수정안 → 인라인 수정으로 전환]").strip()
+                    (str(anchor.get("rewrite_reason") or "")).strip()
                 )
                 anchor["dedup_inline"] = True
             else:
@@ -775,7 +769,7 @@ def _apply_article_dedup_and_consolidation(clause_results: list[dict[str, Any]])
                     ot = str(cr.get("original_text") or "")
                     cr["suggested_rewrite"] = _to_inline_rewrite(ot, cr_sr)
                     cr["rewrite_reason"] = (
-                        (str(cr.get("rewrite_reason") or "") + " [중복 수정안 → 인라인 수정으로 전환]").strip()
+                        (str(cr.get("rewrite_reason") or "")).strip()
                     )
                     cr["dedup_inline"] = True
                 else:
@@ -1089,7 +1083,9 @@ def _apply_rental_filter(clause_results: list[dict[str, Any]], is_rental: bool) 
         # 하나만으로 발동하는데, 소유권은 렌탈의 표지가 아니라 매매·바터·
         # 물품공급 어디에나 있는 보편 개념이다. 그대로 두면 "소유권 이전시점을
         # 늦추라" 는 선이행 리스크 제안이 통째로 지워진다(2026-09-11 실측).
-        if bool(cr.get("is_risk_package")) or bool(cr.get("is_effect_baseline")):
+        if bool(cr.get("is_risk_package")) or bool(cr.get("is_effect_baseline"))                 or bool(cr.get("is_transaction_package")):
+            # 거래 재구성 package 도 이 계약 문언으로 만든 판단이다 — 협찬금 "반환" 문구를 렌탈 반환으로 읽어
+            # 성과 보장 지적을 지웠다(2026-10-21).
             continue
         # 사용자 지정 조항 판단·법무 핵심 finding 은 이 계약 원문에서 만든 것이다 — "반품·반환" 낱말로
         # 렌탈 템플릿 취급하지 않는다(2026-10-13: 제16조 원화 반품·대금 반환 수정안이 지워졌다).
@@ -3646,12 +3642,62 @@ def build_clause_level_result(
             "basis": _research_model.basis,
         }
         _canonical_profile.contract_type = _RESEARCH_TYPE
+    # ── [프로그램 협찬·PPL 거래 재구성] (2026-10-21) ──────────────────────────────
+    # 협찬금을 내고 노출·이용권을 받는 거래가 확인되면, 대가 목록의 "마케팅 라이선스" 한 줄로 라이선스 계약이
+    # 되거나 "제작" 어휘로 콘텐츠 제작 도급이 되지 않게 유형을 먼저 잠근다(research_model 과 같은 구조).
+    from runtime.review.sponsorship_model import (
+        CANONICAL_TYPE as _SPONSOR_TYPE,
+        SponsorshipModel as _SponsorshipModel,
+        resolve_sponsorship_model as _resolve_sponsorship_model,
+    )
+    _sponsor_model = _resolve_sponsorship_model(contract_text=str(text or ""), entity=str(entity or ""))
+    if _sales_model.confident or _research_model.confident:
+        _sponsor_model = _SponsorshipModel()
+    if _sponsor_model.confident and str(_canonical_profile.contract_type or "") != _SPONSOR_TYPE:
+        _sales_type_override = {
+            "was": str(_canonical_profile.contract_type or ""), "now": _SPONSOR_TYPE,
+            "basis": _sponsor_model.basis,
+        }
+        _canonical_profile.contract_type = _SPONSOR_TYPE
+    # ── [부동산 임대차 — 실제 거래로 분류] (2026-10-30 천안 상가 임대차) ──────────────────
+    # 이름이 비슷해도 부동산 임대차(목적물·명도·등기·보증금 담보)와 제품 렌탈(렌탈료·반납·A/S)은 다른 거래다.
+    # "렌탈" 로 묶이면 대리점 필드(세금계산서 발행 주체·고객 계약 당사자), 가구렌탈 법령 검색, 공급자/구매자 역할이
+    # 따라 들어온다(실측). 거래 내용으로 확인되면 유형을 먼저 잠근다 — 다른 거래모델이 확정됐으면 건드리지 않는다.
+    from runtime.review.deal_assessment import (
+        NATURE_REAL_ESTATE_LEASE as _RE_LEASE,
+        _parties as _deal_parties,
+        classify_nature as _classify_deal_nature,
+    )
+    _deal_nature, _deal_nature_basis = _classify_deal_nature(
+        str(text or ""), [p.label for p in _deal_parties(str(text or ""), str(entity or ""), [])],
+    )
+    _real_estate_lease = (
+        _deal_nature == _RE_LEASE
+        and not (_sales_model.confident or _research_model.confident or _sponsor_model.confident)
+    )
+    if _real_estate_lease and str(_canonical_profile.contract_type or "") != "real_estate_lease":
+        _sales_type_override = {
+            "was": str(_canonical_profile.contract_type or ""), "now": "real_estate_lease",
+            "basis": "부동산 임대차 신호: " + ", ".join(_deal_nature_basis),
+        }
+        _canonical_profile.contract_type = "real_estate_lease"
+        _canonical_profile.our_role_bucket, _canonical_profile.counterparty_role_bucket = "lessee", "lessor"
+        _canonical_profile.our_party, _canonical_profile.counterparty = "임차인", "임대인"
     _ad_model = _resolve_ad_model(
         contract_text=str(text or ""),
         user_description=str(review_focus or "") if isinstance(review_focus, str) else "",
         contract_type_code=str(_canonical_profile.contract_type or ""),
         answers=answers,
     )
+    if _real_estate_lease:
+        # 철거대상 "광고물"·간판은 임차인의 시설물이다 — 광고 거래가 아니다.
+        from runtime.review.ad_transaction_model import AdTransactionModel as _AdModelL
+        _ad_model = _AdModelL(basis="부동산 임대차로 확정 — 광고 거래모델 아님")
+    if _sponsor_model.confident:
+        # 협찬 거래는 매체 집행형(송출 체크리스트)도 제작 도급형(산출물 귀속)도 아니다 — 광고 거래모델의
+        # 체크리스트·비활성화는 끄고, 협찬 모델이 이 계약의 핵심 축을 직접 본다.
+        from runtime.review.ad_transaction_model import AdTransactionModel as _AdModelS
+        _ad_model = _AdModelS(basis="프로그램 협찬·PPL 거래로 확정 — 매체 집행·제작 도급 거래모델 아님")
     if _research_model.confident:
         from runtime.review.ad_transaction_model import AdTransactionModel as _AdModelR
         _ad_model = _AdModelR(basis="산학협력 연구용역으로 확정 — 광고 거래모델 아님")
@@ -3693,6 +3739,10 @@ def build_clause_level_result(
         answers=answers,
         contract_type_code=str(_canonical_profile.contract_type or ""),
     )
+    if _real_estate_lease:
+        # 임차인의 인테리어·철거 공사는 임대차의 부수 행위다 — 공사도급 거래모델(지위 질문·하도급 판단)을 켜지 않는다.
+        from runtime.review.construction_transaction_model import ConstructionTransactionModel as _CTMLease
+        _construction_model = _CTMLease()
     _construction_type_override: dict[str, Any] = {}
     if _construction_model.canonical_contract_type and (
         str(_canonical_profile.contract_type or "") != _construction_model.canonical_contract_type
@@ -3763,6 +3813,10 @@ def build_clause_level_result(
         _contract_type_locked_reason = "온라인 판매·공급 거래구조 확정"
     elif _research_model.confident:
         _contract_type_locked_reason = "산학협력 연구용역 거래구조 확정"
+    elif _sponsor_model.confident:
+        _contract_type_locked_reason = "프로그램 협찬·PPL 거래구조 확정"
+    elif _real_estate_lease:
+        _contract_type_locked_reason = "부동산 임대차 거래구조 확정"
 
     if _canonical_profile.contract_type == "testing_inspection_service":
         _contract_class = "testing_service"
@@ -3792,7 +3846,12 @@ def build_clause_level_result(
             _contract_class, _canonical_profile.contract_type,
         )
         _contract_class = "general"
+    if _real_estate_lease and _contract_class != "general":
+        # "rental" 은 제품 렌탈 분류다(가구렌탈 법령·렌탈 체크리스트) — 부동산 임대차에는 쓰지 않는다.
+        _contract_class = "general"
     _contract_nature = _classify_contract_nature(str(contract_type), str(text or ""))
+    if _real_estate_lease:
+        _contract_nature = "임대차"
     _is_advisory_class = (_contract_class == "advisory")
     _is_rental_class = (_contract_class == "rental")
     _is_construction_class = (_contract_class == "construction")
@@ -4195,6 +4254,45 @@ def build_clause_level_result(
         )
         _canonical_type_code = _RESEARCH_TYPE
         _canonical_type_family = _RESEARCH_TYPE
+    if _sponsor_model.confident:
+        from dataclasses import replace as _dc_replace_sponsor
+        from runtime.review.sponsorship_model import (
+            LABEL as _SPONSOR_LABEL,
+            RECIPIENT_ROLE_LABEL as _RECIPIENT_ROLE,
+            SPONSOR_ROLE_LABEL as _SPONSOR_ROLE,
+        )
+        _we_sponsor = _sponsor_model.our_side != "recipient"
+        _canonical_state = _dc_replace_sponsor(
+            _canonical_state,
+            contract_type=_SPONSOR_TYPE,
+            contract_type_family=_SPONSOR_TYPE,
+            contract_type_label=_SPONSOR_LABEL,
+            party_role="sponsor" if _we_sponsor else "sponsorship_recipient",
+            counterparty_role="sponsorship_recipient" if _we_sponsor else "sponsor",
+            party_role_direction="recipient" if _we_sponsor else "provider",
+            party_label=("광고주(협찬사)" if _we_sponsor else "제작·채널 운영사(협찬 수령)"),
+            counterparty_label=("제작·채널 운영사(협찬 수령)" if _we_sponsor else "광고주(협찬사)"),
+            governing_transaction={
+                **_canonical_state.governing_transaction,
+                "sponsorship_model": _sponsor_model.to_dict(),
+                "our_role_label": _SPONSOR_ROLE if _we_sponsor else _RECIPIENT_ROLE,
+                "counterparty_role_label": _RECIPIENT_ROLE if _we_sponsor else _SPONSOR_ROLE,
+            },
+            audit={**_canonical_state.audit, "sponsorship_model": _sponsor_model.basis},
+        )
+        _legal_state = _dc_replace_sponsor(
+            _legal_state,
+            contract_type=_SPONSOR_TYPE,
+            contract_type_family=_SPONSOR_TYPE,
+            contract_type_label=_SPONSOR_LABEL,
+            our_role=_canonical_state.party_role,
+            our_role_direction=_canonical_state.party_role_direction,
+            our_label=_canonical_state.party_label,
+            counterparty_role=_canonical_state.counterparty_role,
+            counterparty_label=_canonical_state.counterparty_label,
+        )
+        _canonical_type_code = _SPONSOR_TYPE
+        _canonical_type_family = _SPONSOR_TYPE
 
     # ── [Employee NDA 거래모델] (2026-09-28 지시 1항) ─────────────────────────
     # 'NDA' 라는 큰 분류 안에서 사업자 간 NDA 와 임직원 비밀유지 서약을 가른다.
@@ -5851,6 +5949,39 @@ def build_clause_level_result(
     if _research_model.confident:
         from runtime.review.research_model import research_findings as _research_findings
         clause_results.extend(_research_findings(_research_model, clauses, str(text or "")))
+    if _sponsor_model.confident:
+        from runtime.review.sponsorship_model import sponsorship_findings as _sponsorship_findings
+        clause_results.extend(_sponsorship_findings(_sponsor_model, clauses, str(text or "")))
+    # [거래 전체 판단 — 개별 조항보다 먼저] (2026-10-30 천안 상가 임대차)
+    # 무엇을 내고 무엇을 돌려받는지, 그 회수를 무엇이 지키는지, 그 보호가 실제로 작동하는지를 원문에서 세운다.
+    # 핵심 위험은 "사건 → 작동하지 않는 보호 → 손실" 로만 만들고, 이후 단계(Triage·KEEP·중복·필터)가 지우지 못하게
+    # is_transaction_package 로 표시한다. 마지막에 core_risk_trace 가 최종 출력과 대조한다.
+    _deal = None
+    _deal_core_findings: list[dict[str, Any]] = []
+    try:
+        from runtime.review.deal_assessment import (
+            build_deal_assessment as _build_deal,
+            core_risk_findings as _deal_findings,
+            qa_pairs as _deal_qa,
+        )
+        from runtime.review.senior_counsel_audit import _our_labels as _deal_our_labels
+
+        _deal = _build_deal(
+            clauses=clauses, contract_text=str(text or ""), entity=str(entity or ""),
+            our_labels=_deal_our_labels(_entity_resolution), review_focus=_user_review_focus_raw,
+            qa=_deal_qa(_user_review_focus_raw, answers, asked_questions),
+        )
+        if _deal.active:
+            from runtime.review.deal_assessment import build_request_answers as _deal_answers
+            from runtime.review.user_request_answers import parse_numbered_requests_detailed as _numbered_requests
+
+            _deal.request_answers = _deal_answers(_deal, _numbered_requests(_user_review_focus_raw))
+            from runtime.review.core_risk_trace import traced as _traced_core
+
+            _deal_core_findings = _traced_core(_deal_findings(_deal, clauses))
+            clause_results.extend(_deal_core_findings)
+    except Exception as exc:  # noqa: BLE001 - 거래 판단 실패를 숨기지 않고 기록한다
+        logger.warning("deal assessment failed: %s", exc, exc_info=True)
     # [일방적 방어·면책] (2026-10-06) 우리가 상대방을 귀책과 무관하게 모든 책임·소송에서 보호하는 조항.
     try:
         from runtime.review.client_indemnity_check import find_client_indemnity as _find_client_indemnity
@@ -5963,6 +6094,12 @@ def build_clause_level_result(
         last_article_number=_last_article_no_for_chain,
         existing_results=clause_results,
     )
+    if _sponsor_model.confident:
+        # 협찬 거래에서 우리가 받는 것은 이용권이다 — "기보유 IP → 독자 개발 → 결과물 IP 귀속" 사슬은 우리가
+        # 성과물 권리를 취득·공동개발하는 거래의 논점이라 이 계약에 붙지 않는다(2026-10-21: 라이선스 지적에 흡수돼
+        # 무관한 조항 경로가 근거로 실렸다).
+        _chain_new = [c for c in _chain_new
+                      if not str(c.get("clause_id") or "").startswith("pkg_confidential_ip_boundary")]
     if _chain_new:
         logger.info("risk chain review produced %d findings", len(_chain_new))
         clause_results.extend(_chain_new)
@@ -6489,7 +6626,7 @@ def build_clause_level_result(
     # 2순위: Advisory IP & Copyright (자문/용역 → IP 귀속·보증 CRITICAL 점검)
     # 2026-10-06 지시 7항 — 연구용역은 위탁자/수탁자 용역 템플릿(IP 전부 위탁자 귀속·제3자 침해 보증)을
     # 그대로 붙일 계약이 아니다. 연구성과 귀속은 research_model 의 package 가 이 계약 문언으로 다룬다.
-    if not _research_model.confident:
+    if not _research_model.confident and not _sponsor_model.confident:
         _apply_advisory_ip_review(clause_results, str(contract_type), str(text or ""), str(entity), contract_class=_contract_class)
     # 3순위: 기존 필터 체인
     _apply_rental_filter(clause_results, _is_rental)
@@ -7534,6 +7671,10 @@ def build_clause_level_result(
     # finding 은 근거가 없다. 룰이 만들었든 AI 가 만들었든 여기서 전부 제거하고,
     # 무엇이 왜 빠졌는지는 meta 에 남겨 문서·UI 가 설명할 수 있게 한다.
     _statute_removed = _deactivate_statute_findings(clause_results, _statute_decisions)
+    from runtime.review.statute_applicability_gate import (
+        conditionalize_unconfirmed_statute_findings as _conditionalize_statute_findings,
+    )
+    _statute_conditional = _conditionalize_statute_findings(clause_results, _statute_decisions)
 
     # ── [사내변호사 에이전트 등급 복원] (2026-09-10 지시 항목 3) ─────────────
     # 이 파일의 후단에는 "suggested_rewrite 가 없으면 실질 리스크가 아니다"를
@@ -7601,6 +7742,8 @@ def build_clause_level_result(
             # 그렇게 없어졌다. 이 항목들은 아래 복원 패스가 다시 세운다.
             if bool(cr.get("is_counsel_agent")):
                 continue
+            if bool(cr.get("business_check")):
+                continue  # 수정 카드가 아니라 사업부 확인사항이다 — 뒤의 triage 가 그 칸으로 보낸다
             _ui_tier = str(cr.get("risk_tier") or "").upper()
             if _ui_tier in ("HIGH", "MEDIUM") and str(cr.get("clause_id") or "") not in _docx_visible_ids:
                 cr["dedup_suppressed"] = True
@@ -7746,10 +7889,25 @@ def build_clause_level_result(
     # ── [Clause-Level Conflict Check] 조항 간 모순 감지 ─────────────────────
     clause_conflicts = detect_clause_conflicts(clause_results)
 
+    # ── [손실 경로 게이트] (2026-10-30) 생성형 AI 의 HIGH 는 손실 경로가 있어야 한다 — 핵심 위험과 같은 쟁점은 합치고,
+    # 모호성·가능성만 말하는 HIGH 는 MEDIUM 으로 내린다(사유 기록). 규칙으로 확인한 판단은 건드리지 않는다.
+    from runtime.review.loss_path_gate import apply_loss_path_gate as _loss_path_gate
+
+    _loss_path_report = _loss_path_gate(clause_results, _deal.to_dict() if _deal is not None and _deal.active else None)
+
+    # ── [핵심 위험 대조 1차] 요약을 만들기 전에 거래 판단의 핵심 위험이 살아 있는지 대조한다 ─────────
+    if _deal_core_findings:
+        from runtime.review.core_risk_trace import reconcile as _reconcile_core
+
+        _reconcile_core(clause_results, _deal_core_findings, _deal.to_dict() if _deal is not None else None)
+
     # ── [Executive Summary] 변호사식 핵심 요약 생성 ─────────────────────────
     executive_summary = generate_executive_summary(clause_results, clause_conflicts)
 
     meta["contract_legal_map"] = _legal_map.to_dict()
+    meta["loss_path_gate"] = _loss_path_report
+    if _deal is not None:
+        meta["deal_assessment"] = _deal.to_dict()
     meta["legal_map_role_override"] = _role_override_audit
     meta["semantic_mismatches"] = [
         cr.get("semantic_mismatch")
@@ -7965,6 +8123,7 @@ def build_clause_level_result(
     meta["statute_applicability_gate"] = {
         "decisions": [d.to_dict() for d in _statute_decisions],
         "removed_findings": _statute_removed,
+        "conditional_findings": _statute_conditional,
     }
     # 적용법률 후보와 사용자 검토범위는 검토 도중에 확정되므로 여기서 채운다 —
     # legal_state 는 그 둘까지 담은 뒤에야 완성된다(지시 항목 1의 10·11번 축).
@@ -8150,6 +8309,16 @@ def build_clause_level_result(
             "canonical_label": _base_label,
             "not_contract_types": ["광고계약", "콘텐츠 제작계약", "매체 집행계약", "산학협력계약", "건설계약"],
         }
+    if _sponsor_model.confident:
+        from runtime.review.sponsorship_model import LABEL as _SPONSOR_PRIMARY
+        meta["contract_composition"] = {
+            "primary_contract_type": _SPONSOR_PRIMARY,
+            "secondary_contract_elements": ["협찬금 지급", "노출(PPL·쇼츠) 제공", "마케팅 이용권"],
+            "is_composite": True,
+            "canonical_label": _SPONSOR_PRIMARY,
+            "not_contract_types": ["라이선스 계약", "콘텐츠 제작 도급", "물품 구매"],
+        }
+    meta["sponsorship_model"] = _sponsor_model.to_dict()
     meta["research_model"] = _research_model.to_dict()
     meta["online_sales_model"] = _sales_model.to_dict()
     if isinstance(meta.get("canonical_state"), dict) and meta["contract_composition"]["is_composite"]:
@@ -9065,6 +9234,25 @@ def build_clause_level_result(
 
     try:
         from runtime.review.final_counsel_gate import run_final_counsel_gate as _run_final_gate
+        # [손실 경로 게이트 — 최종] 앞 단계 이후 다시 올라간 등급이 있을 수 있다 — 최종 자가점검 **전에** 한 번 더 건다(멱등).
+        # 자가점검 뒤에 걸면 자가점검이 본 최종 결과와 실제 결과가 달라진다(2026-10-30 실측: REVIEW_NEEDS_ATTENTION 오탐).
+        _lp2 = _loss_path_gate(clause_results, _deal.to_dict() if _deal is not None and _deal.active else None)
+        for _k in ("merged", "downgraded", "derived"):
+            _loss_path_report.setdefault(_k, []).extend(_lp2.get(_k) or [])
+        meta["loss_path_gate"] = _loss_path_report
+        if _lp2.get("merged") or _lp2.get("downgraded"):
+            from runtime.review.output_filter import build_final_findings as _bff_lp
+
+            meta["final_findings"] = _bff_lp(
+                clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+            )
+            executive_summary = generate_executive_summary(clause_results, clause_conflicts)
+        if _deal is not None and _deal.active:
+            # 요청 답변은 거래 판단이 낸 행이 정본이다 — 같은 주제를 낱말로만 답한 행을 걷어낸다.
+            from runtime.review.deal_assessment import overlay_deal_rows as _overlay_deal_rows
+
+            _user_request_coverage = _overlay_deal_rows(_user_request_coverage, _deal.to_dict())
+            meta["user_review_coverage"] = _user_request_coverage
         _final_gate = _run_final_gate(
             legal_state=_legal_state.to_dict(),
             clause_results=clause_results,
@@ -9530,8 +9718,45 @@ def build_clause_level_result(
     # ── [수정안 전부 반영 검증] (2026-10-21 지시 3항) ─────────────────────────────
     # 모든 수정안을 함께 넣었을 때의 조 번호·항 위치·참조·기존 보호를 본다. 마지막 단계에 두는
     # 이유: 앞 게이트들이 위치를 정정·재앵커한 뒤라야 실제로 넣을 위치가 확정된다.
+    from runtime.review.amount_claim_guard import scrub_unfounded_practice_claims as _scrub_practice
+
+    _practice_scrubbed = _scrub_practice(clause_results)
+    if _practice_scrubbed:
+        meta["practice_claims_scrubbed"] = _practice_scrubbed
     try:
         from runtime.review.revision_set_check import check_revision_set as _check_revision_set
+
+        # [핵심 위험 대조 — 최종] 모든 게이트가 끝난 뒤 거래 판단과 최종 finding 을 대조한다. 빠지거나 숨겨지거나
+        # 강등된 핵심 위험은 되살리고, 어느 단계가 무슨 이유로 그랬는지 남긴다. 되살렸으면 요약도 다시 만든다.
+        if _deal is not None and _deal.active:
+            from runtime.review.core_risk_trace import reconcile as _reconcile_core_final
+            from runtime.review.deal_assessment import (
+                STATUS_INCOMPLETE as _DEAL_INCOMPLETE,
+                completion as _deal_completion,
+                overlay_deal_rows as _overlay_deal_rows_final,
+            )
+
+            _deal_dict = _deal.to_dict()
+            meta["deal_assessment"] = _deal_dict
+            from runtime.review.loss_path_gate import enforce_gate_decisions as _enforce_lp
+
+            _lp_reraised = _enforce_lp(clause_results)
+            if _lp_reraised:
+                _loss_path_report["reraised_then_restored"] = _lp_reraised
+                meta["loss_path_gate"] = _loss_path_report
+            meta["core_risk_trace"] = _reconcile_core_final(clause_results, _deal_core_findings, _deal_dict)
+            if meta["core_risk_trace"].get("restored_count") or _lp_reraised:
+                executive_summary = generate_executive_summary(clause_results, clause_conflicts)
+                from runtime.review.output_filter import build_final_findings as _bff_deal
+
+                meta["final_findings"] = _bff_deal(
+                    clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+                )
+            meta["user_review_coverage"] = _overlay_deal_rows_final(meta.get("user_review_coverage"), _deal_dict)
+            meta["review_completion"] = _deal_completion(_deal_dict)
+            if not meta["review_completion"]["complete"] and not meta.get("review_status"):
+                meta["review_status"] = _DEAL_INCOMPLETE
+                meta["review_status_detail"] = "실질 답이 없는 요청: " + "; ".join(meta["review_completion"]["unanswered"][:5])
 
         meta["revision_set_check"] = _check_revision_set(
             clause_results, clause_index=_clause_index, contract_text=str(text or ""),
@@ -9547,6 +9772,29 @@ def build_clause_level_result(
         meta["review_status_detail"] = " / ".join(
             f"[{m.location}] {m.detail}" for m in _entity_resolution.mismatches[:5]
         )
+
+    # [사업팀 전달본, 2026-10-30] 화면 기본 패널용 — 다운로드와 같은 함수·같은 최종 데이터로 만든다.
+    try:
+        from runtime.review.business_brief import brief_sections as _brief_sections, build_business_brief as _build_brief
+
+        _ff_brief = meta.get("final_findings") if isinstance(meta.get("final_findings"), dict) else {}
+        _brief_obj = _build_brief(
+            clause_results=clause_results,
+            high_issues=_ff_brief.get("high_issues"),
+            medium_issues=_ff_brief.get("medium_issues"),
+            user_review_coverage=meta.get("user_review_coverage"),
+            deal_assessment=meta.get("deal_assessment"),
+            revision_set_check=meta.get("revision_set_check") if isinstance(meta.get("revision_set_check"), dict) else None,
+            clauses=clauses,
+            contract_text=str(text or ""),
+            answers=answers if isinstance(answers, dict) else None,
+        )
+        meta["business_brief"] = _brief_obj.to_dict()
+        # 화면은 다운로드와 같은 줄을 그린다 — 화면용 문장을 따로 만들지 않는다.
+        meta["business_brief_sections"] = [[h, [list(r) for r in rows]] for h, rows in _brief_sections(_brief_obj)]
+    except Exception as exc:  # noqa: BLE001 - 전달본 실패가 검토 결과를 막지 않는다(내부 분석본은 그대로)
+        logger.warning("business brief build failed: %s", exc)
+        meta["business_brief"] = {"error": str(exc)}
 
     return ClauseLevelResult(
         review={

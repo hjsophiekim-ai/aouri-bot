@@ -74,6 +74,9 @@ FAMILY_OF: dict[str, str] = {
     # 단위로 이용하는 구조이므로 계열을 따로 둔다 — development_service
     # 로 묶으면 검수·납품·산출물 축이 계열 단위로 따라 들어온다.
     "advertising_media_placement": "advertising_media_placement",
+    # 협찬·PPL — 노출을 사는 매체 이용에 가깝지만 상대방이 콘텐츠도 만든다. 제작 납품 계열로 묶으면 검수·산출물
+    # 귀속 축이, 매체 집행으로 묶으면 송출 체크리스트가 따라 들어온다. 계열을 따로 둔다(2026-10-21).
+    "advertising_sponsorship": "advertising_sponsorship",
     "creative_agency_service": "development_service",
     "ai_search_marketing": "development_service",
     "testing_inspection_service": "development_service",
@@ -83,6 +86,8 @@ FAMILY_OF: dict[str, str] = {
     # 렌탈·임대차
     "rental": "rental_lease",
     "dealer_rental_service_contract": "rental_lease",
+    # 부동산(상가) 임대차 — 제품 렌탈과 같은 계열이지만 렌탈·대리점 필드·체크리스트를 쓰지 않는다(2026-10-30).
+    "real_estate_lease": "rental_lease",
     # 판매대리·위탁판매
     "dealer_agency": "sales_agency",
     "consignment_sales_agency": "sales_agency",
@@ -104,6 +109,7 @@ FAMILY_REPRESENTATIVE: dict[str, str] = {
     "sales_agency": "dealer_agency",
     "license": "license",
     "research_collaboration": "research_collaboration",
+    "advertising_sponsorship": "advertising_sponsorship",
 }
 
 

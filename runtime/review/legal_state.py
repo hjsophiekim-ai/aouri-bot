@@ -64,6 +64,7 @@ ARCHETYPE_OF_TYPE_CODE: dict[str, str] = {
     "construction": ARCHETYPE_WORKS,
     "project_installation": ARCHETYPE_WORKS,
     "rental": ARCHETYPE_LEASE,
+    "real_estate_lease": ARCHETYPE_LEASE,
     "dealer_rental_service_contract": ARCHETYPE_LEASE,
     "dealer_agency": ARCHETYPE_DISTRIBUTION,
     "distribution_resale": ARCHETYPE_DISTRIBUTION,
@@ -75,6 +76,7 @@ ARCHETYPE_OF_TYPE_CODE: dict[str, str] = {
     "testing_inspection_service": ARCHETYPE_SERVICE,
     "advertising_content_production": ARCHETYPE_SERVICE,
     "advertising_media_placement": ARCHETYPE_SERVICE,
+    "advertising_sponsorship": ARCHETYPE_SERVICE,
     "content_production_service": ARCHETYPE_SERVICE,
     "creative_agency_service": ARCHETYPE_SERVICE,
     "ai_search_marketing": ARCHETYPE_SERVICE,
@@ -103,6 +105,7 @@ EXTRA_TYPE_LABELS: dict[str, str] = {
     "license_ip": "지식재산권 실시허락(라이선스) 계약",
     "barter_exchange": "대물교환(바터) 계약",
     "research_collaboration": "산학협력 연구용역 계약(지식재산권 조항 포함)",
+    "advertising_sponsorship": "프로그램 협찬·PPL(간접광고) 계약",
 }
 
 

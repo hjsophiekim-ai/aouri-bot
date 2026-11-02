@@ -10,7 +10,8 @@ Usage:
 
 --answers 가 없으면 각 질문의 첫 번째 선택지(없으면 "확인 필요")로 답한다.
 AI 질문 ID 는 실행마다 바뀌므로 --answers 의 키는 정확한 ID 외에 "*접미어"
-(예: "*ip-scope") 로도 쓸 수 있고, "__default__" 는 나머지 질문의 답이 된다.
+(예: "*ip-scope") 로도, "~정규식"(질문 제목 검색) 으로도 쓸 수 있고, "__default__" 는
+나머지 질문의 답이 된다.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import argparse
 import hashlib
 import json
 import mimetypes
+import re
 import time
 import uuid
 from pathlib import Path
@@ -114,6 +116,10 @@ def main() -> None:
             hit = spec.get(qid)
             if hit is None:
                 hit = next((v for k, v in spec.items() if k.startswith("*") and qid.endswith(k[1:])), None)
+            if hit is None:
+                title = next((str(q.get("title") or q.get("question") or "") for q in questions if isinstance(q, dict)
+                              and str(q.get("question_id") or q.get("id") or "") == qid), "")
+                hit = next((v for k, v in spec.items() if k.startswith("~") and re.search(k[1:], title)), None)
             if hit is None and qid not in with_options:
                 hit = spec.get("__default__")
             if hit is None:
@@ -136,6 +142,9 @@ def main() -> None:
         "06_report.pdf": ("/api/revision/download_pdf", {"session_id": sid}),
         "07_redline.docx": ("/api/revision/download_redline", {"session_id": sid}),
         "08_clean.docx": ("/api/revision/download_clean", {"session_id": sid}),
+        # 사업팀 전달본(화면 기본 다운로드) — 같은 세션의 같은 최종 데이터
+        "09_brief.docx": ("/api/revision/download_docx", {"session_id": sid, "view": "brief"}),
+        "10_brief.pdf": ("/api/revision/download_pdf", {"session_id": sid, "view": "brief"}),
     }
     log["downloads"] = {}
     for name, (ep, payload) in downloads.items():
