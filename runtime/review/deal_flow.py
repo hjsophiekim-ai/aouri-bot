@@ -1683,12 +1683,27 @@ def strip_guidance(cr: dict[str, Any], labels: list[str]) -> list[str]:
 
 
 def run_deal_flow_stage(*, text: str, clauses: list[Any] | None, clause_results: list[dict[str, Any]],
-                        request_text: str = "", answers_text: str = "", entity: str = "") -> dict[str, Any]:
-    """역할 → 흐름 → 상황 → 숫자 → 사실관계 대조·지침 분리 → 핵심 수정 → 요청별 답 → 재검사."""
+                        request_text: str = "", answers_text: str = "", entity: str = "",
+                        known_role: dict[str, Any] | None = None) -> dict[str, Any]:
+    """역할 → 흐름 → 상황 → 숫자 → 사실관계 대조·지침 분리 → 핵심 수정 → 요청별 답 → 재검사.
+
+    `known_role`: 국제계약 레이어가 당사자 표의 지위 + 요청문(또는 사전질문 답)으로 확정한 관점. 있으면 그대로 쓴다 —
+    관점 판단을 두 곳에서 따로 하면 국·영 좌우 병기 표의 당사자 칸을 읽지 못한 쪽이 "미확정"을 내 결과가 갈렸다(2026-11-27).
+    """
     parties = parse_parties(text)
     labels = [p.label for p in parties] or list(_PARTY_LABELS)
     flow0 = extract_flow(clauses, labels, text)
     role = resolve_role(text, request_text, entity, flow_hint={"price_payer": flow0.price_payer})
+    if known_role and known_role.get("confirmed") and known_role.get("our_label"):
+        kind = str(known_role.get("our_role") or "")
+        role.status = ROLE_CONFIRMED
+        role.our_label = str(known_role["our_label"])
+        role.our_role_kind = kind if kind in ("buyer", "seller") else ""
+        role.our_role = {"buyer": "매수인(구매자)", "seller": "매도인(공급자)"}.get(kind, kind)
+        role.counterparty_label = str(known_role.get("their_label") or role.counterparty_label or "")
+        role.counterparty_role = {"buyer": "매도인(공급자)", "seller": "매수인(구매자)"}.get(kind, role.counterparty_role)
+        role.conflicts = []
+        role.evidence.insert(0, f"국제계약 관점: {known_role.get('basis', '당사자 표 지위 + 요청문')}")
     flow = flow0
     scen = scenarios(flow, role, answers_text)
     figs = figure_checks(text, flow, clauses, parties, answers_text)

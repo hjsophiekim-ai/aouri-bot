@@ -2962,6 +2962,12 @@ def create_handler(service: RuleQueryService):
                                 filename=str(((doc.get("input") or {}).get("filename")) or "") or (
                                     str(filename) if isinstance(filename, str) else None),
                             )
+                            if getattr(_brief, "delivery_blocked", False):
+                                # 변경추적본 반영 실패·검증 미해결 상태로 사업팀에 내보내지 않는다 — 법무에게만 사유를 알린다(2026-11-27)
+                                from runtime.review.delivery_docs import brief_delivery as _bd
+
+                                _json_response(self, HTTPStatus.CONFLICT, {"error": _bd(_brief)["message"], **_bd(_brief)})
+                                return
                             doc_bytes = (_brief_pdf if _is_pdf else _brief_docx)(_brief)
                             _binary_response(self, HTTPStatus.OK, doc_bytes, filename=f"aouribot_brief.{_out_ext}",
                                              content_type=_out_content_type)
@@ -2997,6 +3003,11 @@ def create_handler(service: RuleQueryService):
                             verification=((clause_meta or {}).get("verification_gate")
                                           if isinstance(clause_meta, dict) and isinstance(clause_meta.get("verification_gate"), dict) else None),
                         )
+                        if getattr(_brief, "delivery_blocked", False):
+                            from runtime.review.delivery_docs import brief_delivery as _bd
+
+                            _json_response(self, HTTPStatus.CONFLICT, {"error": _bd(_brief)["message"], **_bd(_brief)})
+                            return
                         doc_bytes = (_brief_pdf if _is_pdf else _brief_docx)(_brief)
                         _binary_response(self, HTTPStatus.OK, doc_bytes, filename=f"aouribot_brief.{_out_ext}",
                                          content_type=_out_content_type)

@@ -54,12 +54,14 @@ def test_failed_verification_restricts_every_output():
     assert meta["verification_gate"]["status"] == vg.STATUS_FAIL
     finalize_review_meta(session, rr)
     brief = meta["business_brief"]
-    assert brief["verdict"].startswith(UNVERIFIED_MARK)
-    assert not any("진행할 수 있습니다" in c for c in brief["conclusion"])
+    # 2026-11-27 지시: 검증 미통과는 결론(계약 리스크 판단)을 바꾸지 않는다 — 전달본을 사업팀에 내보내지 않고(전달 보류)
+    # 법무에게만 미해결 사항을 알린다. 전달본 본문에는 도구 상태 문구를 싣지 않는다.
+    assert not brief["verdict"].startswith(UNVERIFIED_MARK)
     assert brief["verification"]["failed"] and brief["verification"]["unresolved"]
-    # 화면(사업팀 전달본 섹션)에도 같은 판정·미해결 사항
+    assert brief["delivery_blocked"] and any("필수 검증 미해결" in r for r in brief["delivery_block_reasons"])
+    assert meta["business_brief_delivery"]["blocked"]
     flat = " ".join(r[1] for _h, rows in meta["business_brief_sections"] for r in rows)
-    assert UNVERIFIED_MARK in flat and "⚠ 미해결" in flat
+    assert UNVERIFIED_MARK not in flat and "⚠ 미해결" not in flat
     assert not vg.RX_INTERNAL.search(flat), vg.RX_INTERNAL.findall(flat)
     docs = build_tracked_docs(session, rr)
     assert UNVERIFIED_MARK in _docx_text(docs["clean"]) and UNVERIFIED_MARK in _docx_text(docs["redline"])
@@ -77,7 +79,10 @@ def test_removed_edit_never_reaches_tracked_or_clean_and_brief_shows_it():
     assert "Customer shall indemnify and hold NDG harmless" not in clean and C_99[:40] in clean
     assert UNVERIFIED_MARK not in clean
     flat = " ".join(r[1] for _h, rows in meta["business_brief_sections"] for r in rows)
-    assert "수정안을 빼고 원문을 유지함" in flat
+    # 2026-11-27 지시: 검증 단계가 수정안을 뺀 기록은 도구 상태 — 법무 내부 기록(verification)에만, 전달본 본문에는 싣지 않는다
+    assert "수정안을 빼고 원문을 유지함" not in flat
+    assert meta["business_brief"]["verification"].get("removed")
+    assert "Customer shall indemnify and hold NDG harmless" not in flat
     assert meta["output_consistency"]["ok"], meta["output_consistency"]
 
 

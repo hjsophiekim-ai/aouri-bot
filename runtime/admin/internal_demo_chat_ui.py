@@ -1929,6 +1929,16 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         return;
       }
       const out = [];
+      // 사업팀 전달 보류(변경추적본 반영 실패·검증 미해결) — 법무 화면에만 보이는 안내. 전달본 본문·다운로드 파일에는 넣지 않는다.
+      const dlv = (meta0 && meta0.business_brief_delivery) || null;
+      if (dlv && dlv.blocked) {
+        out.push('<div style="border:1px solid var(--danger);border-radius:6px;padding:8px 10px;margin:4px 0 10px 0;color:var(--danger);">'
+          + '<b>법무 전용 — ' + escapeHtml(String(dlv.message || '사업팀 전달본 보류')) + '</b>'
+          + (Array.isArray(dlv.reasons) && dlv.reasons.length
+             ? '<ul style="margin:6px 0 0 16px;">' + dlv.reasons.slice(0, 12).map(function (r) { return '<li>' + escapeHtml(String(r)) + '</li>'; }).join('') + '</ul>'
+             : '')
+          + '</div>');
+      }
       for (const sec of secs) {
         out.push('<div style="font-weight:700;margin:14px 0 4px 0;font-size:15px;">' + escapeHtml(String(sec[0] || '')) + '</div>');
         for (const row of (sec[1] || [])) {

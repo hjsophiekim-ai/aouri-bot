@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -229,9 +230,11 @@ def finalize_review_meta(session: dict[str, Any], review_result: dict[str, Any],
         meta["business_brief"] = brief.to_dict()
         meta["business_brief_sections"] = [[h, [list(r) for r in rows]] for h, rows in brief_sections(brief)]
         # 검토의견서(DOCX·PDF)의 '우리 역할·거래 흐름 / 해지·위약금 연결 / 개인정보 처리 흐름' 절과 같은 줄을 앱 화면에도 싣는다(2026-11-12)
-        _flow_sec = flow_sections(meta.get("deal_flow"))
+        # 국제계약은 거래 흐름 분석을 cross_border 레이어가 대신한다 — 전달본(2~3쪽)에 흐름 절을 끼우지 않는다(2026-11-27)
+        _flow_sec = [] if (meta.get("cross_border") or {}).get("active") else flow_sections(meta.get("deal_flow"))
         if _flow_sec:
             meta["business_brief_sections"][1:1] = _flow_sec
+        meta["business_brief_delivery"] = brief_delivery(brief)
         if isinstance(meta.get("change_set"), dict):
             meta["change_set"]["verdict"] = brief.verdict
     except Exception as exc:  # noqa: BLE001
@@ -242,6 +245,21 @@ def finalize_review_meta(session: dict[str, Any], review_result: dict[str, Any],
                                                         brief=brief, docs=docs)
     except Exception as exc:  # noqa: BLE001
         meta["output_consistency"] = {"ok": False, "error": str(exc)}
+
+
+#: 사업팀 전달본에 나오면 안 되는 도구 상태 문구(2026-11-27) — 법무 내부 분석본·법무 화면에만.
+RX_TOOL_STATUS = re.compile(
+    r"⚠\s*미해결|제안만 있음·파일 미반영|변경추적본 자동 적용 보류|자동 적용 보류|Word 재생성|변경추적본에 자동으로 넣지 못한"
+    r"|체결 전 확인 \d+건 — \d절 참고|법무 추가 확인 중|Traceback|\b[A-Z]\w*Error:|\bException\b|object has no attribute|검증 미통과 초안"
+)
+
+
+def brief_delivery(brief: Any) -> dict[str, Any]:
+    """사업팀 전달 가능 여부 — 법무 화면·다운로드 거부 응답에만 쓴다(전달본 본문에는 싣지 않는다)."""
+    reasons = list(getattr(brief, "delivery_block_reasons", []) or [])
+    return {"blocked": bool(getattr(brief, "delivery_blocked", False)), "reasons": reasons,
+            "message": ("사업팀 전달본 보류 — 수정안 일부가 변경추적본에 반영되지 않았거나 필수 검증이 남았습니다. "
+                        "법무가 확인·재생성한 뒤 전달하십시오.") if reasons else ""}
 
 
 def flow_sections(deal_flow: dict[str, Any] | None) -> list[list[Any]]:
@@ -279,13 +297,15 @@ def output_consistency(*, meta: dict[str, Any], clause_results: list[dict[str, A
     if brief is not None:
         bv = brief.verification or {}
         add("검토의견서 검증 상태 = 앱", bv.get("status") == vgm.get("status") and bv.get("version") == vgm.get("version"))
-        add("미통과면 최종·서명 판정 없음", (not failed) or (brief.verdict.startswith(UNVERIFIED_MARK)
-                                                     and not any("진행할 수 있습니다" in c for c in brief.conclusion)), brief.verdict)
+        # 2026-11-27: 검증 미통과는 결론(계약 리스크 판단)을 바꾸지 않고 전달본을 보류한다 — 사업팀에 나가지 않으면 된다
+        add("미통과면 전달본 보류", (not failed) or bool(getattr(brief, "delivery_blocked", False)), brief.verdict)
         from runtime.review.business_brief import brief_text
 
         txt = brief_text(brief)
         leak = sorted(set(m.group(0) for m in RX_INTERNAL.finditer(txt)))
         add("전달본에 내부 표지 없음", not leak, ", ".join(leak[:8]))
+        tool = sorted(set(m.group(0) for m in RX_TOOL_STATUS.finditer(txt)))
+        add("전달본에 도구 상태 문구 없음", not tool, ", ".join(tool[:8]))
         live_ids = {str(cr.get("clause_id")) for cr in live_edits(clause_results)}
         stale = [it.no for it in brief.cards for src in it.sources if src in {str(cr.get("clause_id")) for cr in clause_results
                                                                                 if isinstance(cr, dict) and cr.get("verification_removed")}

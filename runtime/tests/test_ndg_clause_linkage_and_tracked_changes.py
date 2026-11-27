@@ -255,8 +255,10 @@ class BriefCardsTest(unittest.TestCase):
         self.assertEqual(b.verdict, "조건부 진행 가능")
         rows = [r for _h, rs in brief_sections(b) for r in rs]
         styles = [s for s, _t in rows]
-        self.assertIn("b", styles)
-        self.assertIn("a", styles)
+        # 2026-11-27 지시: 수정 전/후 블록("b"/"a") 대신 변경 표시("d") 한 블록만
+        self.assertNotIn("b", styles)
+        self.assertNotIn("a", styles)
+        self.assertIn("d", styles)
         d = json.loads(next(t for s, t in rows if s == "d"))
         self.assertIn(["+", ", capped at EUR [●] in aggregate"], [list(x) for x in d])
         self.assertTrue(any(t.startswith("쟁점 1 [MEDIUM · 권장수정] 위약금 재량 과도") for s, t in rows if s == "h"))

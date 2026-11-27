@@ -29,6 +29,21 @@ _ROLE_LABEL = {"buyer": "구매자", "seller": "공급자", "licensor": "라이�
                "principal": "본사(공급자)", "client": "위탁자", "service_provider": "용역 제공자"}
 
 
+def user_words(request_text: str) -> str:
+    """사용자가 직접 쓴 말만 — 요청 본문 + 사전질문 답변 값. 질문 문구("…공급자의 …은 무엇입니까?")는 뺀다.
+
+    2026-11-27 실측: 질문 문구에 든 거래 동사가 섞여 '구입하는 계약'이라는 요청이 충돌로 판정됐다.
+    """
+    t = str(request_text or "")
+    head, sep, tail = t.partition("[사용자 확인 답변]")
+    answers = []
+    for ln in tail.splitlines():
+        m = re.match(r"^\s*[-•·]?\s*.+?[?？]\s*[:：]\s*(.+)$", ln) or re.match(r"^\s*[-•·]?\s*[^:：]{0,80}[:：]\s*(.+)$", ln)
+        if m:
+            answers.append(m.group(1))
+    return (head + "\n" + "\n".join(answers)).strip()
+
+
 def resolve_perspective(*, text: str, request_text: str = "", answers: dict[str, Any] | None = None) -> dict[str, Any]:
     a = assess_cross_border(text)
     if not a.is_cross_border:
@@ -40,7 +55,7 @@ def resolve_perspective(*, text: str, request_text: str = "", answers: dict[str,
         return {"confirmed": True, "our_role": ans, "our_label": facts.label_of_role(ans), "basis": "사전질문 답변"}
     if len(facts.parties) < 2:
         return {"confirmed": False, "reason": "당사자 표에 지위가 명시되지 않음"}
-    req = str(request_text or "")
+    req = user_words(request_text)
     # 요청문이 지위 자체를 말하면(“대리점 계약”, “사용권을 받는”) 거래 동사보다 앞선다
     for role, rx in _ROLE_WORDS_IN_REQUEST:
         if role in roles and rx.search(req):

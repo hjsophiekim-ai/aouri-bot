@@ -9854,6 +9854,7 @@ def build_clause_level_result(
             our_role=str(getattr(party, "our_role", "") or ""), our_label=str(getattr(party, "our_label", "") or ""),
             their_label=str(getattr(party, "counterparty_label", "") or ""), answers_text=_xb_answers,
             answers=answers if isinstance(answers, dict) else None,
+            request_text=str(review_focus or "") if isinstance(review_focus, str) else "",
         )
         if meta["cross_border"].get("active"):
             from runtime.review.output_filter import build_final_findings as _bff_xb
@@ -9880,6 +9881,7 @@ def build_clause_level_result(
             answers_text=_df_answers_text(answers if isinstance(answers, dict) else None,
                                           [q if isinstance(q, dict) else getattr(q, "__dict__", {}) for q in (asked_questions or [])]),
             entity=str(entity or ""),
+            known_role=((meta.get("cross_border") or {}).get("perspective") if (meta.get("cross_border") or {}).get("active") else None),
         )
         meta["deal_flow"] = _deal_flow
         if _deal_flow.get("request_rows"):
@@ -10146,6 +10148,9 @@ def build_clause_level_result(
             answers=answers if isinstance(answers, dict) else None,
         )
         meta["business_brief"] = _brief_obj.to_dict()
+        from runtime.review.delivery_docs import brief_delivery as _brief_delivery
+
+        meta["business_brief_delivery"] = _brief_delivery(_brief_obj)
         # 화면은 다운로드와 같은 줄을 그린다 — 화면용 문장을 따로 만들지 않는다.
         meta["business_brief_sections"] = [[h, [list(r) for r in rows]] for h, rows in _brief_sections(_brief_obj)]
     except Exception as exc:  # noqa: BLE001 - 전달본 실패가 검토 결과를 막지 않는다(내부 분석본은 그대로)

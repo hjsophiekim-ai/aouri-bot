@@ -64,6 +64,20 @@ def _expand_to_paragraph(row: dict[str, Any], text: str) -> None:
     row["suggested_rewrite"] = line.replace(target, str(ri.get("replacement_text") or ""), 1)
 
 
+def _set_anchor(row: dict[str, Any], ctx: Ctx) -> None:
+    """신설 문안의 기준 단락 첫머리 — 변경추적본이 그 단락 바로 뒤(표 셀이면 같은 셀)에 넣는다."""
+    ri = row.get("redline_instruction") or {}
+    path = str(ri.get("anchor_path") or "")
+    if not path or ri.get("edit_type") == "replace":
+        return
+    pair = next((p for p in ctx.pairs if p.path == path), None)
+    if pair is None:
+        return
+    line = (pair.en_last or pair.en) if ri.get("lang") == "en" else (pair.ko_last or pair.ko)
+    if line:
+        ri["anchor_text"] = line[:60]
+
+
 def gate_rule_families(clause_results: list[dict[str, Any]], international_type: str) -> list[dict[str, str]]:
     """국제계약 유형과 맞지 않는 국내 전용 룰 finding 을 전달본에서 뺀다(내부본에는 사유와 함께)."""
     from runtime.review.redline_integrity import exclude_from_brief
@@ -82,7 +96,8 @@ def gate_rule_families(clause_results: list[dict[str, Any]], international_type:
 
 def run_cross_border_review(*, text: str, clause_results: list[dict[str, Any]], base_type_code: str = "", our_role: str = "",
                             our_label: str = "", their_label: str = "", answers_text: str = "",
-                            international_type: str = "", answers: dict[str, Any] | None = None) -> dict[str, Any]:
+                            international_type: str = "", answers: dict[str, Any] | None = None,
+                            request_text: str = "") -> dict[str, Any]:
     """`international_type` 은 canonical_state 가 정한 값(단일 진실 원천). 없을 때만 여기서 판정한다(단독 호출·시험)."""
     a = assess_cross_border(text)
     if not a.is_cross_border:
@@ -93,7 +108,7 @@ def run_cross_border_review(*, text: str, clause_results: list[dict[str, Any]], 
         return {"active": False, "assessment": a.to_dict(), "reason": "국제 상거래 계약 유형 아님(근로관계 등)"}
     from runtime.review.cross_border.perspective import resolve_perspective
 
-    persp = resolve_perspective(text=text, request_text=answers_text, answers=answers)
+    persp = resolve_perspective(text=text, request_text=request_text or answers_text, answers=answers)
     if persp.get("confirmed"):
         # 당사자 표 + 요청문(또는 사전질문 답)으로 확정한 관점이 앞선 단계의 추정보다 우선한다
         our_role, our_label, their_label = persp["our_role"], persp["our_label"], ""
@@ -103,8 +118,14 @@ def run_cross_border_review(*, text: str, clause_results: list[dict[str, Any]], 
     if itype == INTERNATIONAL_SALE_OF_GOODS:
         findings += run_sale(ctx)
     rows = [r for f in findings for r in to_clause_results(f)]
+    from runtime.review.cross_border.checklist_sale import UNDECIDED_LABELS
+
     for r in rows:
         _expand_to_paragraph(r, str(text or ""))
+        _set_anchor(r, ctx)
+        code = str(r.get("translation_of") or r["clause_id"]).removeprefix("xb_")
+        if code in UNDECIDED_LABELS:
+            r["undecided_labels"] = list(UNDECIDED_LABELS[code])
     kept, dropped = filter_verified(rows, text)
     existing = {str(c.get("clause_id") or "") for c in clause_results if isinstance(c, dict)}
     added = [r for r in kept if r["clause_id"] not in existing]

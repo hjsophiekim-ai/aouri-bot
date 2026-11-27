@@ -46,15 +46,15 @@ class BriefRulesTest(unittest.TestCase):
                                     "edit_location": "제3조 제2항 교체"},
                                 problem="AI 자체 판단으로 보면 보장 수량이 예정으로 바뀐다. REVIEW_FAILED_X 상태.")])
         t = brief_text(b)
-        pos = [t.find(h) for h in ("1. 검토 결론", "2. 쟁점별 검토", "3. 계약 전 확인사항", "4. 사업부 결정사항", "5. 파일 안내")]
+        pos = [t.find(h) for h in ("1. 검토 결론", "2. 체결 전 필수 확정 사항", "3. 쟁점별 요약", "4. 계약 전 확인사항", "5. 파일 안내")]
         self.assertTrue(all(p >= 0 for p in pos) and pos == sorted(pos), pos)
         # 위험도(HIGH/MEDIUM/LOW)는 쟁점 카드 머리에 싣는다(2026-11-02 지시 3·4항) — 내부 코드·처리 과정 표현은 여전히 금지.
         self.assertNotRegex(t, r"REVIEW_|KR-\d|AI 자체")
         self.assertIn("[HIGH · 필수수정]", t)
-        self.assertIn("수정 전: 협의하여 변경한다.", t)
-        self.assertIn("수정 후: 협의하여 변경한다. 다만, 보장 수량은 변경할 수 없다.", t)
+        # 2026-11-27 지시: 전달본은 국문 수정안을 '변경 표시' 한 블록으로만 — 수정 전/수정 후 블록은 싣지 않는다
+        self.assertNotIn("수정 전:", t)
+        self.assertNotIn("수정 후:", t)
         self.assertIn("[+ 다만, 보장 수량은 변경할 수 없다.+]", t)
-        self.assertIn("문장 추가", t)  # 원문 뒤에 덧붙는 문장만 보인다
         self.assertEqual(b.verdict, "조건부 진행 가능")
 
     def test_held_rewrite_is_disclosed_with_impact_not_hidden(self) -> None:
@@ -63,7 +63,12 @@ class BriefRulesTest(unittest.TestCase):
         self.assertEqual(b.revisions[0].status, STATUS_PENDING)
         self.assertIn("체결", b.revisions[0].impact)
         self.assertEqual(b.appendix, [])  # 검증되지 않은 문안을 붙여 넣을 수 있게 내보내지 않는다
-        self.assertTrue(b.verdict.startswith("진행 보류"))
+        # 2026-11-27 지시: 도구 상태(자동 적용 보류)는 결론을 바꾸지 않는다 — 결론은 계약 리스크로만 정하고,
+        # 보류된 수정안이 있으면 전달본을 사업팀에 내보내지 않고 법무에게만 사유를 알린다.
+        self.assertEqual(b.verdict, "조건부 진행 가능")
+        self.assertTrue(b.delivery_blocked)
+        self.assertTrue(any("기존 보호 문구" in r for r in b.delivery_block_reasons))
+        self.assertNotIn("기존 보호 문구", brief_text(b))
 
     def test_undecided_amount_is_marked_not_invented(self) -> None:
         self.assertEqual(undecided_terms("최고액은 금 [    ]원으로 한다", contract_text="", answers_text=""),

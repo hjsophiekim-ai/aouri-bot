@@ -16,6 +16,8 @@ class Pair:
     path: str
     ko: str
     en: str
+    ko_last: str = ""   # 그 항의 국문 마지막 줄(호·목 포함) — 신설 항을 그 뒤에 넣는다
+    en_last: str = ""
 
 
 def _lang(line: str) -> str:
@@ -51,6 +53,7 @@ def paragraph_pairs(text: str) -> list[Pair]:
                 lang = _lang(s)
                 if lang:
                     acc[current][lang] = (acc[current][lang] + " " + s).strip()
+                    acc[current][lang + "_last"] = s
             elif re.match(r"^\s*(?:제\s*\d+\s*조|Article\s+\d+)", s):
                 current = ""
             continue
@@ -59,7 +62,8 @@ def paragraph_pairs(text: str) -> list[Pair]:
         lang = _lang(s)
         if not lang:
             continue
-        slot = acc.setdefault(path, {"ko": "", "en": ""})
+        slot = acc.setdefault(path, {"ko": "", "en": "", "ko_last": "", "en_last": ""})
+        slot[lang + "_last"] = s if lang else slot.get(lang + "_last", "")
         if path not in order:
             order.append(path)
         if lang == "ko":
@@ -70,7 +74,8 @@ def paragraph_pairs(text: str) -> list[Pair]:
             slot["ko"] = (slot["ko"] + " " + s).strip()
         else:
             slot["en"] = (slot["en"] + " " + s).strip()
-    return [Pair(path=p, ko=acc[p]["ko"], en=acc[p]["en"]) for p in order]
+    return [Pair(path=p, ko=acc[p]["ko"], en=acc[p]["en"], ko_last=acc[p].get("ko_last", ""), en_last=acc[p].get("en_last", ""))
+            for p in order]
 
 
 def pair_for(text: str, rx: re.Pattern[str]) -> Pair | None:

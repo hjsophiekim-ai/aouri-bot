@@ -262,10 +262,12 @@ class PipelineBriefTest(unittest.TestCase):
         self.assertFalse([q for q in reqs if q.endswith("물품구매계약서")])
 
     def test_pre_signing_checks_present(self) -> None:
-        s3 = self._section("3.")
-        self.assertNotIn("계약 전에 따로 확인할 사항이 없습니다.", s3)
-        self.assertTrue(any("선적 기한" in x for x in s3))
-        self.assertTrue(any("적하보험" in x for x in s3))
+        s2 = self._section("2.")   # 체결 전 필수 확정 사항
+        for word in ("Incoterms", "선적 기한", "대표자 성명", "체결일"):
+            self.assertTrue(any(word in x for x in s2), word)
+        s4 = self._section("4.")   # 계약 전 확인사항
+        self.assertNotIn("위 필수 확정 사항 외에 계약 전에 따로 확인할 사항이 없습니다.", s4)
+        self.assertTrue(any("적하보험" in x for x in s4))
 
     def test_must_not(self) -> None:
         for bad in ("소비자 대면", "배송·하자·환불", "진위", "렌탈", "딜러", "위탁판매", "개인정보", "하도급법",

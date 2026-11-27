@@ -542,3 +542,15 @@ def run_sale(ctx: Ctx) -> list[Finding]:
                remedies, origin_duty, conformity_evidence, good_clauses):
         out.extend(fn(ctx))
     return out
+
+
+#: 수정 문안의 [  ] 가 무엇의 빈칸인지 — 전달본이 문장 조각 대신 항목 이름으로 적는다(2026-11-27).
+UNDECIDED_LABELS: dict[str, list[str]] = {
+    "incoterms_unselected": ["지정 선적항(또는 인도 장소)"],
+    "advance_and_delay_remedies": ["해제 유예 기간(일)", "선급금 반환 기한(영업일)"],
+    "balance_claim_timing": ["잔금 지급 기한(검수 완료 후 일)"],
+    "latent_defects_excluded": ["숨은 하자 통지 기간(일)", "숨은 하자 클레임 기간(개월)"],
+    "quality_subjective": ["그레이스케일 등급", "ΔE 허용치", "치수 허용 오차(cm)"],
+    "remedies_deduction_only": ["교체품 재선적 기한(일)"],
+    "shipment_deadline_blank": ["선적 기한(주)"],
+}

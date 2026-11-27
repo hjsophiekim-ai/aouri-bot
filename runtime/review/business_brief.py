@@ -118,6 +118,9 @@ class BusinessBrief:
     scenarios: list[dict[str, Any]] = field(default_factory=list)    # 수정안 적용 후 상황별 결과
     #: 필수 검증(verification_gate) — 상태·검증한 버전·미해결 사항·제거한 수정안. 코드명 없이 사업팀용 문장만.
     verification: dict[str, Any] = field(default_factory=dict)
+    #: 사업팀에 내보내면 안 되는 상태(변경추적본 반영 실패·검증 미해결) — 사유는 법무에게만(전달본 본문에 싣지 않는다)
+    delivery_blocked: bool = False
+    delivery_block_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -569,6 +572,11 @@ def build_business_brief(
                 segs = [["+", new.strip()]] if mode == "항 신설" else [list(x) for x in diff_segments(cur.strip(), new.strip())]
                 edit = AppendixEdit(no="", item_no="", location=loc_clean, mode=mode, current_text=cur.strip(),
                                     new_text=new.strip(), added_text=added, undecided=undecided, segments=segs)
+        if full.get("undecided_labels"):
+            # 문안의 [  ] 가 무엇인지 항목 이름으로("선적 기한(주)") — 문장 조각을 나열하지 않는다(2026-11-27)
+            undecided = [_s(x) for x in full["undecided_labels"]]
+            if edit is not None:
+                edit.undecided = list(undecided)
         kind = KIND_REVISION if (rw or (status == STATUS_PENDING)) else KIND_CHECK
         if cat == _CAT_ACCEPT:
             kind = KIND_DECISION
@@ -666,6 +674,8 @@ def build_business_brief(
                     undecided=list(dict.fromkeys(undecided_terms(s_new, contract_text=contract_text, answers_text=answers_text)
                                                  + [_s(x) for x in sib.get("undecided_terms") or []])),
                     segments=[["+", s_new]] if not s_target else [list(x) for x in _ds(s_target, s_new)])
+                if full.get("undecided_labels"):
+                    s_edit.undecided = [_s(x) for x in full["undecided_labels"]]   # 짝 항목도 같은 항목 이름으로
                 for u in s_edit.undecided:
                     if u not in item.undecided:
                         item.undecided.append(u)
@@ -867,6 +877,9 @@ def build_business_brief(
                               "결정": "사업부 결정", "결정됨": "사업부 결정"}.get(it.level, "권장수정")
         if not it.risk:
             it.risk = "HIGH" if it.level in ("필수", "중요") else "MEDIUM"
+        if it.action_type == "필수수정" and it.risk not in ("HIGH", "MEDIUM"):
+            # 등급과 조치 분류를 맞춘다 — "필수수정인데 LOW" 는 내보내지 않는다(2026-11-27)
+            it.risk = "MEDIUM"
     # 잔존 위험 점수: 등급 + 금액(상한 유무·규모) + 발생 가능성 + 사업 중단 + 회수 가능성 — 같은 등급·조치 안에서 큰 위험이 먼저.
     for it in cards:
         it.score, it.score_basis = _residual_score(it)
@@ -937,18 +950,16 @@ def build_business_brief(
         ra.index = str(n)
 
 
-    # 검토 결론 3~5문장
+    # ── 검토 결론 — 계약 리스크로만 정한다(2026-11-27) ─────────────────────────────
+    # 도구 상태(변경추적본 반영 실패·자동 적용 보류·필수 검증 미통과)는 결론을 바꾸지 않는다. 그런 상태가 있으면 전달본을
+    # 사업팀에 내보내지 않고(delivery_blocked) 법무에게만 사유를 알린다 — 실패한 채로 사업팀에 나가면 안 된다.
     pending = [f"{it.no} {it.title}: {it.status_reason}" for it in revisions + checks if it.status == STATUS_PENDING]
-    # 핵심 위험(HIGH)은 조치 유형과 무관하게 체결 판단을 좌우한다 — 권장 수정으로 분류됐어도 "진행 가능" 으로 넘기지 않는다.
     must = [it for it in revisions if it.level == "필수" or it.risk == "HIGH"]
     key_checks = [it for it in checks if it.level == "중요" or it.risk == "HIGH"]
-    open_dec_n = len([d for d in decisions if d.level != "결정됨"])
-    # 요청에 실질 답을 못 한 행(사실관계 확인·법무 확인 중)은 미해결이다 — 자료 부족을 안전으로 읽지 않는다.
+    open_dec = [d for d in decisions if d.level != "결정됨"]
     open_req = [r for r in user_review_coverage or [] if isinstance(r, dict)
                 and re.search(r"사실관계|법무 추가 확인|확인 불가|NEEDS_FACTS", _s(r.get("review_status")))]
-    if any((it.level == "필수" or it.risk == "HIGH") and it.status == STATUS_PENDING for it in revisions + checks):
-        verdict = "진행 보류 — 법무 추가 확인 후 판단"
-    elif must or key_checks or open_req or open_dec_n:
+    if must or key_checks or open_req or open_dec:
         verdict = "조건부 진행 가능"
     elif revisions or checks:
         verdict = "진행 가능(권장 수정 협의)"
@@ -957,52 +968,37 @@ def build_business_brief(
     if verdict.startswith("진행 가능") and _s(overall_recommendation).upper() in ("NEGOTIATE_BEFORE_SIGNING", "DO_NOT_SIGN"):
         # 내부 분석의 종합 권고가 "서명 전 협상" 이면 전달본도 무조건 진행으로 쓰지 않는다 — 두 문서가 한 판단이어야 한다.
         verdict = "조건부 진행 가능"
-    concl: list[str] = []
-    if verdict.startswith("조건부"):
-        conds = []
-        if must:
-            conds.append(f"핵심 수정 {len(must)}건 반영")
-        if key_checks:
-            conds.append(f"중요 확인 {len(key_checks)}건")
-        if open_dec_n:
-            conds.append(f"사업부 결정 {open_dec_n}건")
-        if open_req:
-            conds.append(f"답이 확정되지 않은 요청 {len(open_req)}건 확인")
-        concl.append("조건부로 진행할 수 있습니다 — 다음을 마친 뒤 체결하십시오: "
-                     + (", ".join(conds) if conds else "아래 쟁점 정리") + ".")
-    elif verdict.startswith("진행 보류"):
-        concl.append("필수 수정 가운데 법무가 추가로 확인 중인 항목이 있어, 그 결과가 나오기 전에는 체결을 미루는 것이 좋습니다.")
-    elif verdict.startswith("진행 가능("):
-        concl.append(f"진행할 수 있습니다 — 다만 권장 수정 {len(revisions)}건은 협상에서 요청하는 것이 좋습니다.")
-    else:
-        concl.append("현재 문안으로 진행할 수 있습니다.")
-    # 선행조건·최대 잔존 위험은 카드와 같은 등급 기준으로 — 결론이 MEDIUM 쟁점을 HIGH 쟁점보다 앞세우지 않는다(2026-11-03).
+    must_confirm = [it for it in cards if _is_must_confirm(it)]
+    n_pre = len(must_confirm) + len([d for d in open_dec if getattr(d, "_owner", None) is None and d not in cards])
     risk_rank_c = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-    ranked = sorted([it for it in cards if it.action_type != "현행 유지"],
-                    key=lambda it: (risk_rank_c.get(it.risk, 3), -it.score))
-    top = [it for it in ranked if it.risk == "HIGH"][:2] or [it for it in ranked if it in must + key_checks][:2]
+    ranked = sorted([it for it in cards if it.action_type != "현행 유지"], key=lambda it: (risk_rank_c.get(it.risk, 3), -it.score))
+    top = [it for it in ranked if it.risk == "HIGH"][:3]
+    if verdict.startswith("조건부"):
+        head = "조건부로 진행할 수 있습니다"
+    elif verdict.startswith("진행 가능("):
+        head = f"진행할 수 있습니다 — 다만 권장 수정 {len(revisions)}건은 협상에서 요청하는 것이 좋습니다"
+    else:
+        head = "현재 문안으로 진행할 수 있습니다"
+    parts = [head + (f" — 체결 전 필수 확정 사항 {n_pre}건과 핵심 수정 {len(must)}건을 마친 뒤 서명하십시오" if verdict.startswith("조건부") else "") + "."]
     if top:
-        concl.append("선행조건: " + "; ".join(f"{it.title}({it.no})" for it in top) + ".")
-    biggest = ranked[0] if ranked and (must or key_checks or ranked[0].risk == "HIGH") else None
-    if biggest is not None:
-        basis = ", ".join(biggest.score_basis[:3]) or "위험 등급"
-        concl.append(f"가장 큰 잔존 위험: {biggest.no}({biggest.title}) — 근거: {basis}.")
-    if decisions:
-        open_dec = [d for d in decisions if d.level != "결정됨"]
-        if open_dec:
-            concl.append(f"사업부가 정해야 할 사항이 {len(open_dec)}건 있습니다({', '.join(d.no for d in open_dec[:3])}).")
+        parts.append("가장 큰 위험은 " + ", ".join(it.title for it in top) + "입니다.")
+    others = len([it for it in cards if it.risk in ("MEDIUM", "LOW") and it.action_type not in ("현행 유지", "사업부 결정")])
+    if others:
+        parts.append(f"그 밖에 협상에서 요청할 수정·보완이 {others}건 있습니다.")
     if open_req:
-        concl.append(f"요청 가운데 {len(open_req)}건은 계약 문언만으로 답을 확정하지 못했습니다(요청 답변 참고).")
-    if pending:
-        concl.append(f"법무 추가 확인 중인 항목이 {len(pending)}건 있으며, 각 항목에 체결 판단에 미치는 영향을 적었습니다.")
-    concl = concl[:5]
-    # [필수 검증] 마지막 수정까지 넣은 같은 버전이 검증을 통과하지 못했으면 최종본·서명 가능 판정을 하지 않는다(2026-11-03).
+        parts.append(f"요청 가운데 {len(open_req)}건은 계약 문언만으로 답을 확정하지 못했습니다.")
+    concl = [" ".join(parts)]
     vsum = verification_summary(verification)
+    # 전달 보류 사유 — 법무에게만(전달본 본문에는 싣지 않는다)
+    block: list[str] = []
+    for it in revisions + checks:
+        if it.status == STATUS_PENDING:
+            block.append(f"{it.title}({', '.join(c for c in it.clauses if c)}): {it.status_reason}")
+    for e in appendix:
+        if e.applied and e.applied != "applied":
+            block.append(f"{e.location}: 변경추적본 미반영 — {e.applied}")
     if vsum.get("failed"):
-        verdict = VERDICT_UNVERIFIED
-        concl = [f"이 수정안은 필수 검증(우리 회사 관점·문구 의미·계약 전체 정합성)을 통과하지 못한 초안입니다. "
-                 f"미해결 {len(vsum['unresolved'])}건을 해결하기 전에는 최종본으로 쓰거나 서명하지 마십시오."] + \
-            [c for c in concl if not re.search(r"진행할 수 있습니다|체결하십시오|진행 가능", c)][:3]
+        block += [f"필수 검증 미해결 [{u.get('category')}] {u.get('paths')}: {u.get('detail')}" for u in vsum.get("unresolved") or []]
 
     _gloss_apply([], cards, decisions)
     keep_count = sum(1 for cr in clause_results or [] if isinstance(cr, dict) and cr.get("keep_as_is")
@@ -1011,13 +1007,42 @@ def build_business_brief(
     if filename:
         title += f" — {re.sub(r'^input_', '', _s(filename))}"
     return BusinessBrief(
-        title=title, verdict=verdict, conclusion=concl, requests=reqs, revisions=revisions, checks=checks,
+        title=title, verdict=verdict, conclusion=concl, requests=_merge_same_requests(reqs), revisions=revisions, checks=checks,
         general_checks=general, decisions=decisions, appendix=appendix, pending=pending, keep_count=keep_count, trace=trace,
         cards=cards, source_note=source_note,
         agreements=list((deal_scenarios or {}).get("agreements") or []),
         scenarios=scenario_lines(deal_scenarios),
         verification=vsum,
+        delivery_blocked=bool(block),
+        delivery_block_reasons=list(dict.fromkeys(block)),
     )
+
+
+_RX_MUST_CONFIRM = re.compile(r"공란|미선택|미확정|미지정|미기재|선택형")
+
+
+def _is_must_confirm(it: "BriefItem") -> bool:
+    """체결 전 필수 확정 사항 — 상대방과 값을 정해야 끝나는 것(Incoterms·선적 기한·공란·선택형 조항)."""
+    if it.action_type == "현행 유지":
+        return False
+    if it.action_type in ("체결 전 확인", "사업부 결정"):
+        return True
+    return it.risk == "HIGH" and bool(_RX_MUST_CONFIRM.search(it.title))
+
+
+def _merge_same_requests(reqs: list["RequestAnswer"]) -> list["RequestAnswer"]:
+    """같은 답을 받은 요청은 한 줄로 — 같은 주제에 '반영'·'부분 반영'이 따로 나오지 않게."""
+    out: list[RequestAnswer] = []
+    for r in reqs:
+        same = next((x for x in out if _flat(x.answer) == _flat(r.answer) and x.items == r.items), None)
+        if same is not None:
+            if r.request not in same.request:
+                same.request = f"{same.request} / {r.request}"
+            continue
+        out.append(r)
+    for n, r in enumerate(out, 1):
+        r.index = str(n)
+    return out
 
 
 VERDICT_UNVERIFIED = "검증 미통과 초안 — 최종본·서명 가능 판정 불가"
@@ -1197,127 +1222,128 @@ def _gloss_apply(concl: list[str], *groups: list[BriefItem]) -> None:
 def brief_sections(b: BusinessBrief) -> list[tuple[str, list[tuple[str, str]]]]:
     """(절 제목, [(스타일, 문장)]) — 화면·DOCX·PDF 가 같은 줄을 쓴다.
 
-    스타일: h(쟁점 제목)·p(본문)·k(강조)·m(보조)·b(수정 전 원문)·a(수정 후 완성 문구)·d(변경 표시 — JSON [[op, text]]).
-    2026-11-02 지시 4항: 맨 위 짧은 결론, 아래는 위험도순 쟁점 카드 — 관련 조항 / 검토의견 / 수정 위치·방식 /
-    수정 전 / 수정 후 / 변경 표시. 신설이면 수정 전 "해당 조항 없음". 수정 문구는 자르지 않는다.
+    2026-11-27 지시: 사업팀 전달본은 2~3쪽으로
+      1) 결론 한 문단(진행 가능 여부·체결 전 필수 사항 개수) + 요청 답
+      2) 체결 전 필수 확정 사항(Incoterms·선적 기한·공란·선택형 조항)
+      3) 쟁점별 요약 — 현재 조건·위험·조치 각 1~2문장 + 국문 변경 표시 한 블록
+      4) 계약 전 확인사항 체크리스트
+      5) 파일 안내 한 줄
+    도구 상태(미해결·예외·파일 미반영·자동 적용 보류)는 싣지 않는다 — 법무 내부 분석본에만 남긴다.
+    스타일: h(쟁점 제목)·p(본문)·k(강조)·m(보조)·d(변경 표시 — JSON [[op, text]]).
     """
     import json
 
     out: list[tuple[str, list[tuple[str, str]]]] = []
     s1: list[tuple[str, str]] = [("k", f"판단: {b.verdict}")]
     s1 += [("p", c) for c in b.conclusion]
-    v = b.verification or {}
-    if v.get("status"):
-        s1.append(("h", "필수 검증(우리 회사 관점·문구 의미·계약 전체 정합성)"))
-        s1.append(("k" if v.get("failed") else "p", f"결과: {v['status']}"))
-        for u in v.get("unresolved") or []:
-            s1.append(("k", f"⚠ 미해결 [{u['category']}] {u['paths']}: {u['detail']}"))
-        for r in v.get("removed") or []:
-            s1.append(("p", f"· 수정안을 빼고 원문을 유지함 — {r['path']}: {r['reason']}"))
-        for x in v.get("needs_confirmation") or []:
-            s1.append(("m", f"· 확인 필요(추측하지 않음): {x}"))
-        bad = [x for x in v.get("situations") or [] if x.get("result") == "불일치"]
-        for x in bad[:6]:
-            tag = " (수정안이 다루지 않은 원문 위험)" if x.get("original_only") else ""
-            s1.append(("k", f"· 상황 '{x['situation']}'{tag}: 기대 — {x['expected']} / 최종 문구 — {x['actual']}"))
-    if b.requests:
-        s1.append(("h", "요청하신 사항"))
-        for r in b.requests:
-            link = f" → {', '.join(r.items)}" if r.items else ""
-            st = f"[{r.status}] " if r.status else ""
-            why = f" ({r.status_reason})" if r.status_reason and r.status in ("부분 반영", "미반영", "확인 필요") else ""
-            s1.append(("p", f"요청 {r.index}. {r.request}: {st}{r.answer}{why}{link}"))
-    if b.agreements:
-        s1.append(("h", "기존 합의(이메일·구두)와 계약 문구"))
-        for a in b.agreements:
-            s1.append(("p", f"· ({a.get('source')}) {a.get('content')} — 계약 원문: {a.get('in_original')} / 수정안: {a.get('in_revision')}"))
-    if b.scenarios:
-        s1.append(("h", "수정안을 모두 넣었을 때 상황별 결과"))
-        for x in b.scenarios:
-            if x.get("kind") == "남은 문제":
-                s1.append(("k", f"⚠ 법무 추가 검토: {x.get('after')}"))
-            else:
-                s1.append(("p", f"· {x.get('situation')}: 현재 {x.get('before')} → 수정 후 {x.get('after')}"))
+    for r in b.requests:
+        # 요청 답은 쟁점 번호로 잇는다 — 내용은 아래 쟁점이 한 번만 설명한다(2~3쪽 목표)
+        ans = f"→ {', '.join(r.items)}" if r.items else _two(r.answer)
+        s1.append(("m", f"요청 {r.index}. {r.request[:60]} {ans}"))
     out.append(("1. 검토 결론", s1))
 
+    must = [it for it in b.cards if _is_must_confirm(it)]
+    must_ids = {id(it) for it in must}
     s2: list[tuple[str, str]] = []
-    for it in b.cards:
-        tags = " · ".join(x for x in (it.risk, it.action_type) if x)
-        s2.append(("h", f"{it.no} [{tags}] {it.title}" + (f" [{it.status}]" if it.status else "")))
+    for it in must:
         where = ", ".join(c for c in it.clauses if c)
-        if where:
-            s2.append(("p", f"관련 조항: {where}" + (f" — {it.clause_title}" if it.clause_title else "")))
-        if it.current:
-            s2.append(("p", f"현재 조건: {it.current}"))
-        if it.existing:
-            s2.append(("p", f"이미 있는 보호: {it.existing}"))
-        if it.problem:
-            s2.append(("p", f"우리에게 생길 위험: {it.problem}"))
-        s2.append(("k", f"필요한 조치: {it.action}"))
-        if it.recommendation:
-            s2.append(("p", f"법무 권고안: {it.recommendation}"))
-        if it.fallback:
-            s2.append(("p", f"상대방이 거절할 때: {it.fallback}"))
-        if it.limits:
-            s2.append(("m", f"판단의 한계: {it.limits}"))
-        if it.status:
-            s2.append(("k", f"{it.status}: {it.status_reason}. 체결 영향: {it.impact}"))
-        for e in it.edits:
-            s2.append(("p", f"수정 위치·방식: {e.location} — {e.mode}"))
-            if e.same_clause:
-                s2.append(("m", f"수정 전·후와 변경 표시는 같은 조항({e.same_clause})의 앞 항목에 함께 표시했습니다."))
-            else:
-                s2.append(("b", e.current_text if e.current_text and e.mode != "항 신설" else "해당 조항 없음"))
-                s2.append(("a", e.new_text))
-                s2.append(("d", json.dumps(e.segments, ensure_ascii=False)))
-            if e.undecided:
-                s2.append(("k", f"미확정 조건(제안값 — 합의된 조건 아님): {', '.join(e.undecided)} — 문구의 [●] 는 상대방과 합의한 뒤 채웁니다."))
-            if e.applied and e.applied != "applied":
-                s2.append(("k", f"변경추적본 자동 적용 보류: {e.applied}"))
-        if it.checks:
-            # 확인할 일은 3절에 한 번만 싣는다(누가·언제와 함께) — 카드에는 가리키는 표시만.
-            s2.append(("m", f"체결 전 확인 {len(it.checks)}건 — 3절 참고"))
+        s2.append(("h", f"□ {it.title}" + (f" ({where})" if where else "") + (f" [{it.risk}]" if it.risk else "")))
+        if it.action_type != "사업부 결정" and it.problem:
+            s2.append(("p", f"위험: {_two(it.problem, 1)}"))
+        s2.append(("k", f"정할 것: {_two(it.action, 1)}"))
+        _change_block(s2, it)
+    for d in b.decisions:
+        if d.level == "결정됨" or getattr(d, "_owner", None) is not None or d in b.cards:
+            continue
+        s2.append(("p", f"□ {_two(d.action)}"))
     if not s2:
-        s2.append(("p", "고칠 조항이나 따로 확인할 쟁점이 없습니다."))
-    out.append(("2. 쟁점별 검토 (위험도순)", s2))
+        s2.append(("p", "체결 전에 따로 확정할 공란·선택 조건이 없습니다."))
+    out.append(("2. 체결 전 필수 확정 사항", s2))
 
     s3: list[tuple[str, str]] = []
     for it in b.cards:
-        for c in it.checks:
-            s3.append(("p", f"□ {c.what} — 누가: {c.who} / 언제까지: {c.when} ({it.no})"))
-    for c in b.general_checks:
-        s3.append(("p", f"□ {c.what} — 누가: {c.who} / 언제까지: {c.when}"))
+        if id(it) in must_ids or it.action_type in ("사업부 결정", "현행 유지"):
+            continue
+        tags = " · ".join(x for x in (it.risk, it.action_type) if x)
+        where = ", ".join(c for c in it.clauses if c)
+        s3.append(("h", f"{it.no} [{tags}] {it.title}" + (f" ({where})" if where else "")))
+        n = 2 if it.risk == "HIGH" else 1
+        if it.risk != "LOW":
+            cur = f"현재: {_two(it.current, n)}" if it.current else ""
+            rsk = f"위험: {_two(it.problem, n)}" if it.problem else ""
+            if cur or rsk:
+                s3.append(("p", " ".join(x for x in (cur, rsk) if x)))
+        s3.append(("k", f"조치: {_two(it.action, n)}"))
+        _change_block(s3, it)
     if not s3:
-        s3.append(("p", "계약 전에 따로 확인할 사항이 없습니다."))
-    out.append(("3. 계약 전 확인사항", s3))
+        s3.append(("p", "그 밖에 고칠 조항은 없습니다."))
+    out.append(("3. 쟁점별 요약 (위험도순)", s3))
 
     s4: list[tuple[str, str]] = []
-    for it in b.decisions:
-        ref = it.see or (it.no if it.no.startswith("쟁점") else "")
-        head = f"{it.no if not it.no.startswith('쟁점') else '결정'} [{it.level}]"
-        what = f"{'결정 내용' if it.level == '결정됨' else '정할 것'}: {it.action}"
-        s4.append(("k", f"{head} {what}" + (f" ({ref})" if ref else "")))
-        if it.problem and not it.see:
-            s4.append(("m", f"선택에 따라 남는 위험: {it.problem}"))
+    seen: set[str] = set()
+    shown = {_check_key(it.action) for it in must}
+    for it in b.cards:
+        for c in it.checks:
+            k = _check_key(c.what)
+            if k in seen or k in shown:
+                continue
+            seen.add(k)
+            s4.append(("p", f"□ {c.what} — {c.who} / {c.when}"))
+    for c in b.general_checks:
+        k = _check_key(c.what)
+        if k not in seen:
+            seen.add(k)
+            s4.append(("p", f"□ {c.what} — {c.who} / {c.when}"))
     if not s4:
-        s4.append(("p", "사업부가 따로 정할 상업조건이 없습니다."))
-    out.append(("4. 사업부 결정사항", s4))
+        s4.append(("p", "위 필수 확정 사항 외에 계약 전에 따로 확인할 사항이 없습니다."))
+    out.append(("4. 계약 전 확인사항", s4))
 
-    s5: list[tuple[str, str]] = []
-    s5.append(("p", "함께 받는 파일: 계약서 변경추적본(Word 변경내용 추적 — 삭제·삽입 이력이 남아 수락·거절할 수 있음), "
-                    "계약서 클린본(같은 수정안을 모두 반영한 본). 변경추적본의 표시 색은 Word 사용자 설정을 따르며, "
-                    "이 검토의견서의 빨간 취소선(삭제)·빨간 밑줄(추가)은 같은 수정안을 고정 색으로 보여 줍니다."))
-    if b.source_note:
-        s5.append(("k", b.source_note))
-    held = [f"{e.item_no}({e.location}): {e.applied}" for e in b.appendix if e.applied and e.applied != "applied"]
-    if held:
-        s5.append(("k", "변경추적본에 자동으로 넣지 못한 수정안 — " + "; ".join(held)))
-    tail = "상세 근거·법률 검토 기록은 법무 내부 분석본에 보관합니다."
-    if b.keep_count:
-        tail = f"현재 문구로 충분하다고 본 조항 {b.keep_count}건과 " + tail
-    s5.append(("m", tail))
-    out.append(("5. 파일 안내", s5))
+    out.append(("5. 파일 안내", [("m", "함께 받는 파일: 계약서 변경추적본·클린본(국·영 수정 문구 반영). 상세 근거는 법무 내부 분석본에 있습니다.")]))
     return out
+
+
+def _two(text: str, n: int = 2) -> str:
+    """1~2문장으로 — 문장 중간에서 자르지 않는다."""
+    sents = _sentences(_clean(text, keep_law=True))
+    out = []
+    for x in sents[:n]:
+        # 긴 문장은 "—" 앞의 핵심 절까지만(뒤는 부연) — 전달본 2~3쪽 목표
+        if len(x) > 90 and " — " in x:
+            x = x.split(" — ", 1)[0]
+        out.append(_end(x))
+    return " ".join(out)
+
+
+def _compact_segments(segs: list[list[str]], keep: int = 30) -> list[list[str]]:
+    """바뀌지 않은 부분("=")은 앞뒤 글자만 남기고 줄인다 — 삭제·추가 부분은 그대로(전달본 표시용, 파일에는 영향 없음)."""
+    out: list[list[str]] = []
+    n = len(segs)
+    for i, (op, tx) in enumerate(segs):
+        if op != "=" or len(tx) <= keep * 2 + 5:
+            out.append([op, tx])
+        elif i == 0:
+            out.append([op, "…" + tx[-keep:]])
+        elif i == n - 1:
+            out.append([op, tx[:keep] + "…"])
+        else:
+            out.append([op, tx[:keep] + " … " + tx[-keep:]])
+    return out
+
+
+def _change_block(rows: list[tuple[str, str]], it: "BriefItem") -> None:
+    """국문 수정안의 변경 표시 한 블록(영문 수정은 변경추적본에만). 국문이 없는 계약이면 첫 수정."""
+    import json
+
+    edits = [e for e in it.edits if e.new_text]
+    if not edits:
+        return
+    e = next((x for x in edits if re.search(r"[가-힣]", x.new_text)), edits[0])
+    # 항 신설은 추가 문장만 — 변경추적본에서 읽은 조각에는 앞 문단 전체가 '유지'로 붙어 와 한 블록이 길어진다
+    segs = [["+", e.new_text]] if e.mode == "항 신설" else (e.segments or [["+", e.new_text]])
+    rows.append(("d", json.dumps(_compact_segments(segs), ensure_ascii=False)))
+    und = it.undecided or e.undecided
+    if und:
+        rows.append(("m", f"미확정 조건(합의 전): {', '.join(und)}"))
 
 
 def brief_text(b: BusinessBrief) -> str:
@@ -1374,12 +1400,12 @@ def build_business_brief_docx(brief: BusinessBrief) -> bytes:
     doc = ET.Element(L._w("document"))
     body = ET.SubElement(doc, L._w("body"))
     L._heading1(body, brief.title)
+    legend_done = False
     for head, rows in brief_sections(brief):
         L._blank(body)
         L._heading1(body, head)
         for style, text in rows:
             if style == "h":
-                L._blank(body)
                 _docx_run(L._p(body), text, bold=True)
             elif style == "k":
                 _docx_run(L._p(body), text, bold=True,
@@ -1392,7 +1418,9 @@ def build_business_brief_docx(brief: BusinessBrief) -> bytes:
                     if line.strip():
                         _docx_run(L._p(body), "    " + line.strip())
             elif style == "d":
-                _docx_run(L._p(body), "변경 표시 (빨간 취소선 = 삭제, 빨간 밑줄 = 추가)", bold=True)
+                if not legend_done:   # 범례는 문서에서 한 번만(2~3쪽 목표)
+                    _docx_run(L._p(body), "변경 표시: 빨간 취소선 = 삭제, 빨간 밑줄 = 추가", italic=True)
+                    legend_done = True
                 p = L._p(body)
                 _docx_run(p, "    ")
                 for op, seg in json.loads(text or "[]"):
@@ -1421,6 +1449,7 @@ def build_business_brief_pdf(brief: BusinessBrief) -> bytes:
     P._ensure_font(pdf)
     pdf.add_page()
     P._heading(pdf, brief.title, size=14)
+    legend_done = False
     for head, rows in brief_sections(brief):
         P._heading(pdf, head, size=12)
         for style, text in rows:
@@ -1446,9 +1475,12 @@ def build_business_brief_pdf(brief: BusinessBrief) -> bytes:
                 pdf.set_text_color(0, 0, 0)
                 P._mc(pdf, 0, 5, text)
             elif style == "d":
-                pdf.set_font(P._FONT_FAMILY, "B", 9)
-                pdf.set_text_color(*P.COLOR_LABEL)
-                P._mc(pdf, 0, 5, "변경 표시 (빨간 취소선 = 삭제, 빨간 밑줄 = 추가)")
+                if not legend_done:
+                    # 범례는 문서에서 한 번만(2~3쪽 목표)
+                    pdf.set_font(P._FONT_FAMILY, "", 8)
+                    pdf.set_text_color(*P.COLOR_MUTED)
+                    P._mc(pdf, 0, 4, "변경 표시: 빨간 취소선 = 삭제, 빨간 밑줄 = 추가")
+                    legend_done = True
                 for op, seg in json.loads(text or "[]"):
                     if op == "=":
                         pdf.set_font(P._FONT_FAMILY, "", 9)

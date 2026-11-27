@@ -29,6 +29,8 @@ class Edit:
     replacement: str                 # 완성 문구
     edit_type: str = "replace"       # replace / insert_after / new_clause
     lang: str = "ko"
+    anchor_path: str = ""            # 신설 문안을 넣을 기준 항(국문 경로) — 비면 같은 finding 의 국문 신설 위치
+    undecided: list[str] = field(default_factory=list)   # 문안 속 [  ] 의 항목 이름("선적 기한(주)")
 
 
 @dataclass
@@ -63,8 +65,22 @@ class Finding:
 _TIER = {"HIGH": "MUST", "MEDIUM": "SUGGEST", "LOW": "NOTE"}
 
 
+def _loss_path_dict(text: str) -> dict[str, str]:
+    """"사건 → 작동하지 않는 보호 → … → 손실" 문장을 표준 구조로."""
+    parts = [p.strip() for p in str(text or "").split("→") if p.strip()]
+    if not parts:
+        return {}
+    return {"event": parts[0], "failed_protection": " → ".join(parts[1:-1]) if len(parts) > 2 else "",
+            "loss": parts[-1] if len(parts) > 1 else ""}
+
+
 def _redline(f: Finding, e: Edit) -> dict[str, Any]:
+    ko_insert = next((x for x in f.edits if x.lang == "ko" and x.edit_type != "replace"), None)
+    anchor_path = e.anchor_path or (ko_insert.location if ko_insert else e.location)
     return {
+        "lang": e.lang,
+        "anchor_path": anchor_path if e.edit_type != "replace" else "",
+        "undecided_labels": list(e.undecided),
         "finding_id": f"xb_{f.code}" + ("__en" if e.lang == "en" else ""),
         "clause_id": f"xb_{f.code}" + ("__en" if e.lang == "en" else ""),
         "severity": f.risk,
@@ -115,7 +131,8 @@ def to_clause_results(f: Finding) -> list[dict[str, Any]]:
         "brief_risk": f.risk_to_us,
         "brief_action": f.action_text,
         "legal_business_reason": f.risk_to_us,
-        "loss_path": f.loss_path,
+        # 표준 구조(loss_path_gate·deal_assessment 와 같은 모양) — 요약 단계가 dict 로 읽는다(문자열이면 'str'.get 오류)
+        "loss_path": _loss_path_dict(f.loss_path),
         "loss_path_text": f.loss_path,
         # 수정 문구 없이 확정·확인으로 끝나는 항목(공란 확정 등) — 최종 결과에 '체결 전 확인'으로 남게
         "action_only": not f.edits and f.action != ACTION_KEEP,

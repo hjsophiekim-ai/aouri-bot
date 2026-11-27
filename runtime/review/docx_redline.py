@@ -261,8 +261,23 @@ def _extract_article_num(text: str) -> str | None:
     return None
 
 
+_RX_ART_HEADING = re.compile(r"^\s*(?:제\s*(\d+)\s*조|第\s*(\d+)\s*條|Article\s+(\d+)\b|ARTICLE\s+(\d+)\b)")
+
+
 def _build_article_index(paras: list[ET.Element]) -> dict[str, list[int]]:
-    """article_number → [para_idx, ...] 인덱스 구축."""
+    """article_number → [para_idx, ...] 인덱스 구축.
+
+    단락 첫머리에 조 머리("제4조 (…)", "Article 4")가 있는 문서는 그 머리만 쓴다. 본문 속 인용("제4조의 입고 검수",
+    "under Article 4")이나 항 번호("1. 선적 기한")를 조 머리로 세면 조 범위가 엉뚱하게 잡혀(제4조가 제2조 단락에서
+    시작) 고칠 단락을 찾지 못했다(2026-11-27, 국·영 좌우 병기 표 계약 실측). 머리가 없는 문서는 종전 방식 그대로.
+    """
+    strong: dict[str, list[int]] = {}
+    for i, p in enumerate(paras):
+        m = _RX_ART_HEADING.match(_para_text(p))
+        if m:
+            strong.setdefault(str(int(next(g for g in m.groups() if g))), []).append(i)
+    if len(strong) >= 2:
+        return strong
     idx: dict[str, list[int]] = {}
     for i, p in enumerate(paras):
         t = _para_text(p)
@@ -327,6 +342,38 @@ def _find_best_para(
             best_idx = i
 
     return best_idx if best_score >= 0.25 else None
+
+
+# ── 표 셀까지 포함한 단락 목록·삽입(2026-11-27) ────────────────────────────────
+# 국·영 좌우 병기 계약은 본문이 표 셀 안에 있다. 본문 직계 단락만 보면 셀 안의 문구를 찾지 못해 치환이 전부 실패하고,
+# body.insert 는 셀 밖에 새 단락을 넣는다. 단락은 문서 전체에서 모으고, 삽입은 기준 단락의 부모(셀) 안에 한다.
+
+def _doc_paras(body: ET.Element) -> list[ET.Element]:
+    return list(body.iter(f"{W}p"))
+
+
+def _parent_of(body: ET.Element, el: ET.Element) -> ET.Element:
+    for p in body.iter():
+        for c in p:
+            if c is el:
+                return p
+    return body
+
+
+def _insert_after_el(body: ET.Element, after: ET.Element, new_els: list[ET.Element]) -> None:
+    parent = _parent_of(body, after)
+    at = list(parent).index(after) + 1
+    for el in new_els:
+        parent.insert(at, el)
+        at += 1
+
+
+def _find_anchor_para(paras: list[ET.Element], anchor: str) -> ET.Element | None:
+    """기준 문구(그 항의 첫머리)를 품은 단락 — 신설 항을 그 바로 뒤에 넣는다."""
+    a = re.sub(r"\s+", " ", str(anchor or "")).strip()[:60]
+    if len(a) < 8:
+        return None
+    return next((p for p in paras if a in re.sub(r"\s+", " ", _para_text(p))), None)
 
 
 # ── 수정 지시(redline_instruction) 해석 ─────────────────────────────────────────
@@ -435,9 +482,62 @@ def _substitute_in_para(
         for k, el in enumerate(new_els):
             para.insert(idx + k, el)
         return True
+    # 문장이 여러 run(서식 조각)에 걸쳐 있으면, 삭제·삽입 표시가 끼지 않은 연속 run 구간 안에서만 잘라 바꾼다(2026-11-27) —
+    # 단락 전체를 다시 쓰는 것보다 원본 서식과 같은 단락의 다른 수정을 보존한다.
+    if _substitute_across_runs(para, target, replacement, ids, author, date):
+        return True
     if run_only:
         # 이미 다른 수정이 들어간 단락 — 삭제 표시된 글자까지 합친 문안으로 단락을 다시 쓰면 앞 수정이 사라진다.
         return False
+    return _substitute_full(para, target, replacement, ids, author, date)
+
+
+def _substitute_across_runs(para: ET.Element, target: str, replacement: str, ids: _IDGen, author: str, date: str) -> bool:
+    kids = list(para)
+    i = 0
+    while i < len(kids):
+        if kids[i].tag != f"{W}r":
+            i += 1
+            continue
+        j = i
+        while j < len(kids) and kids[j].tag == f"{W}r":
+            j += 1
+        group = kids[i:j]
+        texts = ["".join(t.text or "" for t in r.findall(f"{W}t")) for r in group]
+        joined = "".join(texts)
+        pos = joined.find(target)
+        if pos >= 0:
+            end = pos + len(target)
+            starts, acc = [], 0
+            for tx in texts:
+                starts.append(acc)
+                acc += len(tx)
+            s = max(k for k in range(len(group)) if starts[k] <= pos)
+            e = max(k for k in range(len(group)) if starts[k] < end)
+            span = group[s:e + 1]
+            # 구간 안 run 에 글자 외 요소(줄바꿈·탭·그림)가 있으면 손대지 않는다 — 문단 모양을 바꿀 수 있다
+            if any(c.tag not in (f"{W}rPr", f"{W}t") for r in span for c in r):
+                return False
+            rpr = group[s].find(f"{W}rPr")
+            before = texts[s][: pos - starts[s]]
+            after = texts[e][end - starts[e]:]
+            at = list(para).index(group[s])
+            for r in span:
+                para.remove(r)
+            new_els: list[ET.Element] = []
+            if before:
+                new_els.append(_make_run(before, group[s].find(f"{W}rPr")))
+            new_els.extend(_make_del_ins(target, replacement, ids, author, date, rpr))
+            if after:
+                new_els.append(_make_run(after, group[e].find(f"{W}rPr")))
+            for k, el in enumerate(new_els):
+                para.insert(at + k, el)
+            return True
+        i = j
+    return False
+
+
+def _substitute_full(para: ET.Element, target: str, replacement: str, ids: _IDGen, author: str, date: str) -> bool:
     full = _para_text(para)
     if target not in full:
         return False
@@ -764,7 +864,7 @@ def build_redline_docx(
         raise ValueError("<w:body> 요소 없음")
 
     # ── 단락 목록 + 조항 인덱스 ────────────────────────────────────────────────
-    all_paras: list[ET.Element] = [el for el in body if el.tag == f"{W}p"]
+    all_paras: list[ET.Element] = _doc_paras(body)   # 표 셀 안 단락 포함
     art_index = _build_article_index(all_paras)
 
     # original_clauses를 clause_id 기준으로 인덱싱
@@ -790,7 +890,9 @@ def build_redline_docx(
         # 보고서·화면이 수정안으로 보여 주는 것(HIGH/MEDIUM)만 반영한다. LOW(참고·기본 숨김) 문안까지 넣으면 보고서에 없는
         # 수정이 수정본에 들어가고, 검증되지 않은 문안이 엉뚱한 단락을 덮는다(2026-10-30 실측: 제4조 제3항용 문안이 담보
         # 조건이 든 제4조 제2항을, 참고 문안이 제1조 소재지 줄을 덮었다).
-        and str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+        and (str(cr.get("risk_tier") or "").upper() in ("HIGH", "MEDIUM")
+             # 국제계약 체크리스트의 LOW 수정은 전달본에 싣는 실무 항목이다 — 원문 정확 일치로 위치가 정해져 있다
+             or bool(cr.get("is_cross_border_check")))
     ]
 
     # 항 신설은 교체를 마친 뒤 항 번호 순으로 넣는다 — 같은 조 끝에 차례로 붙이므로 처리 순서가 곧 항 순서다
@@ -840,7 +942,7 @@ def build_redline_docx(
             # 한 문장이 여러 단락에 걸친 경우(PDF 변환본 제9.9조 "…demand:" / "(a) …") — 단락마다 그 단락 몫만 변경추적한다.
             from runtime.review.docx_splice import find_across_paragraphs, split_replacement
 
-            spans_ = find_across_paragraphs([el for el in body if el.tag == f"{W}p"], target)
+            spans_ = find_across_paragraphs(_doc_paras(body), target)
             if len(spans_) > 1:
                 clause_flat = flat(str(cr_.get("original_text") or ""))
                 inside_ = [sp for sp in spans_ if flat(_para_text(sp[0][0]))[:60] in clause_flat]
@@ -927,11 +1029,14 @@ def build_redline_docx(
         _final = _strip_display_markers(str(_ri.get("final_clause_text") or _ri.get("replacement_text") or ""))
         if str(_ri.get("edit_type") or "") in ("insert_after", "new_clause") and _final:
             _loc = str(_ri.get("edit_location") or "")
-            _all = [el for el in body if el.tag == f"{W}p"]
+            _all = _doc_paras(body)
             _idx = _build_article_index(_all)
+            _anchor_p = _find_anchor_para(_all, str(_ri.get("anchor_text") or ""))
             _m_art = re.search(r"제\s*(\d+)\s*조", _loc) or re.search(r"(?:Article|Section|Clause)\s+(\d+)", _loc, re.I)
             _host = _m_art.group(1) if _m_art else article_number
             _end = _article_end(_all, _idx, _host) if _host else None
+            if _anchor_p is not None:
+                _end = _all.index(_anchor_p)   # 기준 항 바로 뒤(표 셀이면 같은 셀 안)
             if _end is None and _idx:
                 _last = max(_idx, key=lambda k: _idx[k][0])
                 _end = _article_end(_all, _idx, _last)
@@ -940,7 +1045,6 @@ def build_redline_docx(
                 continue
             _after = _all[_end]
             _base = _after.find(f"{W}pPr")
-            _at = list(body).index(_after) + 1
             _lines = [ln.strip() for ln in _final.split("\n") if ln.strip()]
             _m_new = re.search(r"제\s*(\d+)\s*조(?:\s*의\s*\d+)?\s*신설", _loc)
             # 영문 항 신설("Article 13.4 신설") — 새 단락이 번호로 시작해야 계약서 안에서 항으로 읽힌다.
@@ -951,10 +1055,8 @@ def build_redline_docx(
                 _lines.insert(0, _m_new.group(0).replace("신설", "").strip())
             _new_ps: list[ET.Element] = []
             for _ln in _lines:
-                _np = _make_ins_paragraph(_ln, ids, author, date, _base)
-                body.insert(_at, _np)
-                _at += 1
-                _new_ps.append(_np)
+                _new_ps.append(_make_ins_paragraph(_ln, ids, author, date, _base))
+            _insert_after_el(body, _after, _new_ps)
             if not _new_ps:
                 _note(cr, "no_text", "반영할 문구가 없음")
                 continue
@@ -980,7 +1082,7 @@ def build_redline_docx(
 
         # 단락 탐색
         # 갱신된 파라 목록 (DOM이 변경될 수 있으므로 재수집)
-        all_paras = [el for el in body if el.tag == f"{W}p"]
+        all_paras = _doc_paras(body)
         art_index = _build_article_index(all_paras)
 
         para_idx = _find_best_para(
@@ -1021,17 +1123,13 @@ def build_redline_docx(
         # ── 수정 적용 ──────────────────────────────────────────────────────────
         # [추가] 패턴: 원본 단락은 그대로 유지하고 새 단락만 삽입
         if has_addition and addition_text and not bool(cr.get("has_rewrite_change")):
-            body_children = list(body)
-            insert_at = body_children.index(target_para) + 1
             _added: list[ET.Element] = []
             for line in addition_text.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
-                new_p = _make_ins_paragraph(line, ids, author, date, base_ppr)
-                body.insert(insert_at, new_p)
-                insert_at += 1
-                _added.append(new_p)
+                _added.append(_make_ins_paragraph(line, ids, author, date, base_ppr))
+            _insert_after_el(body, target_para, _added)   # 표 셀 안이면 같은 셀 안에
             # 메모는 추가한 단락(변경 범위)에 건다.
             c_id, c_txt = _comment(cr)
             if _added:
@@ -1082,16 +1180,12 @@ def build_redline_docx(
         _extra: list[ET.Element] = []
         if not _substituted and has_addition and addition_text:
             # [추가] 블록이 별도로 있으면 교체 후 추가 삽입
-            body_children = list(body)
-            insert_at = body_children.index(target_para) + 1
             for line in addition_text.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
-                new_p = _make_ins_paragraph(line, ids, author, date, base_ppr)
-                body.insert(insert_at, new_p)
-                insert_at += 1
-                _extra.append(new_p)
+                _extra.append(_make_ins_paragraph(line, ids, author, date, base_ppr))
+            _insert_after_el(body, target_para, _extra)
 
         # ── 메모: 수정 이유 / 위험 / 미확정 조건 ────────────────────────────────
         c_id, c_txt = _comment(cr)
