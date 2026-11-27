@@ -832,7 +832,7 @@ def _format_paths(refs: list[ClauseRef], extra: list[str]) -> list[str]:
     return out
 
 
-def _ground_statutes(cr: dict[str, Any], index: list[ClauseRef], *, archetype: str, audit: _Audit) -> None:
+def _ground_statutes(cr: dict[str, Any], index: list[ClauseRef], *, archetype: str, audit: _Audit, cisg: bool = False) -> None:
     """지시 1·2·4·8·9항 — 관련 계약조항·조문·법률상 이유·실무상 이유를 분리해 싣는다."""
     from runtime.review.statute_grounding import (
         RELATION_REASON,
@@ -857,7 +857,7 @@ def _ground_statutes(cr: dict[str, Any], index: list[ClauseRef], *, archetype: s
             cr["legal_business_reason"] = cleaned
         return
 
-    rels = detect_relations(cr, archetype=archetype)
+    rels = detect_relations(cr, archetype=archetype, cisg=cisg)
     if cr.get("is_entity_name_correction"):
         rels = ["legal_entity"]
     cited_src = " ".join(str(cr.get(k) or "") for k in ("legal_business_reason", "legal_basis", "rewrite_reason", "problem"))
@@ -930,7 +930,7 @@ def _is_generated(cr: dict[str, Any]) -> bool:
 
 def _apply_triage(
     clause_results: list[dict[str, Any]], *, index: list[ClauseRef], text: str, archetype: str, audit: _Audit,
-    clauses: list[Any] | None = None,
+    clauses: list[Any] | None = None, cisg: bool = False,
 ) -> dict[str, Any]:
     """2026-10-01 지시 — MUST/SHOULD/KEEP/FINANCE_CHECK/DROP. 결과는 제자리에서 고친다."""
     from runtime.review.issue_triage import (
@@ -966,7 +966,7 @@ def _apply_triage(
             continue
         if not _visible(cr):
             continue
-        relations = detect_relations(cr, archetype=archetype)
+        relations = detect_relations(cr, archetype=archetype, cisg=cisg)
         topic = topic_of(cr)
         axis = axis_of(cr, topic.key if topic else None, relations)
         if axis == "legal_entity" and not cr.get("is_entity_name_correction") and has_name_fix:
@@ -1367,6 +1367,9 @@ def run_senior_counsel_audit(
     body = str(text or "")
     index = _index(clauses)
     audit = _Audit()
+    from runtime.review.cross_border.signals import cisg_applies
+
+    cisg = cisg_applies(body)   # CISG 가 적용되는 국제 물품매매면 하자·검사 근거를 협약 조문으로
     we_pay = our_company_pays(body, entity_resolution)
     our = _our_labels(entity_resolution)
     dispute_review = dispute_needs_review(body)
@@ -1399,9 +1402,9 @@ def run_senior_counsel_audit(
     # 법조문은 통합이 끝난 뒤에 붙인다 — 대표 finding 이 하위 쟁점의 법률관계까지 덮는다.
     for cr in clause_results:
         if _visible(cr) or (isinstance(cr, dict) and cr.get("keep_as_is") and cr.get("triage") == "KEEP"):
-            _ground_statutes(cr, index, archetype=archetype, audit=audit)
+            _ground_statutes(cr, index, archetype=archetype, audit=audit, cisg=cisg)
     triage = _apply_triage(clause_results, index=index, text=body, archetype=archetype, audit=audit,
-                           clauses=clauses)
+                           clauses=clauses, cisg=cisg)
     _add_protection_keep_rows(clause_results, clauses=clauses, triage=triage)
     # 건수 상한은 triage(KEEP·재경·DROP) 뒤에 본다 — 앞에서 보면 곧 빠질 항목들 때문에
     # 정작 남겨야 할 SHOULD FIX(지원사업 상위기준)가 개수에 밀려 내려갔다(실측).

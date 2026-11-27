@@ -287,8 +287,17 @@ def undecided_terms(new_text: str, *, contract_text: str, answers_text: str) -> 
     t = _s(new_text)
     for m in _RX_PLACEHOLDER.finditer(t):
         # 빈칸이 무엇의 빈칸인지 앞말과 함께 적는다 — "최고액은 금 [ ]원".
-        ctx = re.split(r"[,.]\s*", t[max(0, m.start() - 16):m.start()])[-1].strip()
-        unit = t[m.end():m.end() + 1] if re.match(r"[원일월년%회건]", t[m.end():m.end() + 1]) else ""
+        # 낱말 중간에서 자르지 않는다("s Seller within [ ]" 같은 조각이 나오던 문제, 2026-11-27).
+        start = max(0, m.start() - 16)
+        window = t[start:m.start()]
+        if start > 0 and not t[start - 1].isspace() and " " in window:
+            window = window.split(" ", 1)[1]
+        ctx = re.split(r"[,.]\s*", window)[-1].strip().lstrip("\"“”'")
+        nxt = t[m.end():m.end() + 16]
+        unit = nxt[:1] if re.match(r"[원일월년%회건주]", nxt[:1]) else ""
+        if not unit:
+            mu = re.match(r"\s*(?:개월|영업일|business\s+days|days|months|weeks|years|%)", nxt, re.I)
+            unit = mu.group(0) if mu else ""
         label = f"{ctx} {m.group(0)}{unit}".strip()
         if label not in out:
             out.append(label)
@@ -356,6 +365,8 @@ def _rewrite_of(full: dict[str, Any], issue: dict[str, Any]) -> tuple[str, dict[
 def _title(issue: dict[str, Any], full: dict[str, Any], art_titles: dict[str, str] | None = None) -> str:
     if full.get("is_requested_clause_review") and _s(full.get("issue_title")).strip():
         return _s(full.get("issue_title")).strip().rstrip(".")   # 원문 대조 검토가 붙인 쟁점 제목 그대로
+    if full.get("is_cross_border_check") and _s(full.get("clause_title")).strip():
+        return _s(full.get("clause_title")).strip().rstrip(".")   # 국제계약 체크리스트 제목은 이미 쟁점 문장이다
     t = _s(issue.get("issue_title") or full.get("issue_title")).strip()
     t = re.sub(r"^\s*\[[^\]]{1,20}\]\s*", "", t)
     if not t or len(t) > 60:
@@ -477,6 +488,9 @@ def build_business_brief(
     for issue in issues:
         fid = _fid(issue)
         full = by_id.get(_s(issue.get("clause_id"))) or by_id.get(fid) or {}
+        if full.get("brief_merge_into") or issue.get("brief_merge_into"):
+            # 영문·추가 문단 수정 짝 항목 — 본 항목 아래 수정 문구로만 싣는다(아래 translation_ids)
+            continue
         if full.get("excluded_from_brief") or issue.get("excluded_from_brief"):
             # 시스템이 다른 계약 유형의 문안·계약 유형과 맞지 않는 룰로 판정한 항목 — 전달본에 싣지 않는다(내부본에만 사유와 함께).
             continue
@@ -492,7 +506,7 @@ def build_business_brief(
         path = _s(issue.get("display_path") or full.get("display_path"))
         current, problem = _plain_triplet(issue, full, core)
         rq = bool(full.get("is_requested_clause_review"))
-        if rq:
+        if rq or full.get("is_cross_border_check"):
             # 조항 지목 요청 검토는 현재 조건·위험·조치를 따로 적어 온다 — 다른 칸의 문장을 고르지 않고 그대로 쓴다.
             current = _end(_first(_s(full.get("brief_current")), limit=700, keep_law=True)) or current
             problem = _end(_first(_s(full.get("brief_risk")), limit=700, keep_law=True)) or problem
@@ -573,7 +587,7 @@ def build_business_brief(
             recommendation=_end(_first(_s(full.get("recommendation")), limit=400, keep_law=True)),
             fallback=_end(_first(_s(full.get("fallback")), limit=400, keep_law=True)),
         )
-        if rq and _s(full.get("brief_action")).strip():
+        if (rq or full.get("is_cross_border_check")) and _s(full.get("brief_action")).strip():
             item.action = _end(_first(_s(full.get("brief_action")), limit=500, keep_law=True))
         # 조치 가운데 확인·결정은 해당 절로 보낸다(설명은 이 항목에서 한 번).
         used_action = next((a for a in acts if not re.match(r"^\s*(?:체결\s*전|사업부)", a)), "") if kind == KIND_REVISION else ""
@@ -626,10 +640,14 @@ def build_business_brief(
             setattr(edit, "_src", cid)
         # 같은 요청의 다른 수정(조항 지목 검토 13.3 신설 + 4.1 로열티 존속 등) — 한 쟁점 아래 모든 수정 문구를 싣는다.
         # 화면 카드·변경추적본에는 있는데 검토의견서 별첨에 대표 수정 하나만 실리던 문제(2026-11-03).
-        if rq:
-            for sid in issue.get("related_clause_ids") or []:
+        _tids = [_s(x) for x in full.get("translation_ids") or []]
+        if rq or _tids:
+            for sid in (list(issue.get("related_clause_ids") or []) if rq else []) + _tids:
                 sib = by_id.get(_s(sid)) or {}
-                if not sib.get("is_requested_clause_review") or sib.get("request_index") != full.get("request_index"):
+                if _s(sid) in _tids:
+                    if _s(sib.get("brief_merge_into")) != cid:
+                        continue
+                elif not sib.get("is_requested_clause_review") or sib.get("request_index") != full.get("request_index"):
                     continue
                 srw, sri = _rewrite_of(sib, {})
                 if not srw:

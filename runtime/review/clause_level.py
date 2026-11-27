@@ -1068,11 +1068,11 @@ def _is_domestic_only(text: str, answers: dict[str, Any] | None) -> bool:
     jur_ans = str(ans.get("jurisdiction") or ans.get("governing_law") or "")
     if any(k in jur_ans for k in ("해외", "foreign", "international", "cross", "overseas")):
         return False
-    foreign_markers = ("United States", "U.S.", "China", "Japan", "Singapore",
-                       " LLC", " Inc.", " Ltd.", "Deutschland", "UK ", "法人")
-    if any(m in (text or "") for m in foreign_markers):
-        return False
-    return True
+    # 국내/국제 판정은 cross_border.signals 한 곳에서 — 하드코딩 표지 목록("Singapore" 등)에 기대면 중재기관 이름 속
+    # 국가명 하나로 국제계약이 되고(2026-11-27 실측), s.r.l.·Italy·EUR·IBAN 같은 실제 신호는 놓쳤다.
+    from runtime.review.cross_border.signals import assess_cross_border
+
+    return not assess_cross_border(str(text or "")).is_cross_border
 
 
 def _apply_rental_filter(clause_results: list[dict[str, Any]], is_rental: bool) -> None:
@@ -4140,6 +4140,7 @@ def build_clause_level_result(
             "party_role_override": _role_override_audit,
             "legal_map_source": _legal_map.source,
         },
+        contract_text=str(text or ""),
     )
     # ── [Canonical Legal State] (2026-09-10 아키텍처 지시 항목 1·2) ──────────
     # 거래 실질(조항별 법률효과 프로파일) → 거래 원형 → 계약유형 라벨 순으로
@@ -9834,6 +9835,36 @@ def build_clause_level_result(
             logger.warning("requested clause review failed: %s", exc, exc_info=True)
             meta["requested_clause_review"] = {"error": str(exc)}
 
+    # ── [국제계약(Cross-border) 검토 레이어] (2026-11-27) ──────────────────────────────
+    # 국제계약이면(신호군 2개 이상·점수 임계) 크로스보더 공통 + 유형별 체크리스트 finding 을 더하고, 국제 유형과 맞지 않는
+    # 국내 전용 룰 finding 은 전달본에서 뺀다. 수정 문안은 아래 거래 흐름·수정안 무결성·필수 검증을 그대로 거친다.
+    try:
+        from runtime.review.cross_border.engine import run_cross_border_review as _xb_run
+        from runtime.review.requested_clause_review import _answers_text as _xb_answers_text
+
+        _xb_answers = "\n".join(x for x in (
+            str(review_focus or "") if isinstance(review_focus, str) else "",
+            _xb_answers_text(answers if isinstance(answers, dict) else None,
+                             [q if isinstance(q, dict) else getattr(q, "__dict__", {}) for q in (asked_questions or [])]),
+        ) if x)
+        meta["cross_border"] = _xb_run(
+            text=str(text or ""), clause_results=clause_results,
+            base_type_code=str(_canonical_profile.contract_type or ""),
+            international_type=str(getattr(_canonical_state, "international_type", "") or ""),
+            our_role=str(getattr(party, "our_role", "") or ""), our_label=str(getattr(party, "our_label", "") or ""),
+            their_label=str(getattr(party, "counterparty_label", "") or ""), answers_text=_xb_answers,
+            answers=answers if isinstance(answers, dict) else None,
+        )
+        if meta["cross_border"].get("active"):
+            from runtime.review.output_filter import build_final_findings as _bff_xb
+
+            meta["final_findings"] = _bff_xb(
+                clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+            )
+    except Exception as exc:  # noqa: BLE001 - 실패를 통과로 처리하지 않는다
+        logger.warning("cross-border review failed: %s", exc, exc_info=True)
+        meta["cross_border"] = {"active": False, "error": str(exc)}
+
     # ── [거래 흐름 선검증] (2026-11-09) ─────────────────────────────────────────────
     # 우리 역할(신청서·서두·서명란 대조) → 실제 지급·인도·검수·소유권 흐름 → 상황별 손실 → 숫자 재계산 → 사실관계 대조
     # (반대 전제의 수정안 삭제·재작성) → 검토 지침을 본문에서 메모로 분리 → 핵심 위험 조항+연결 조항 수정 문구 → 요청별 답.
@@ -9927,6 +9958,14 @@ def build_clause_level_result(
             meta["final_findings"] = _bff_rli(
                 clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
             )
+        # 국제계약: 요청(하자·세금·대금 …)을 주제가 맞는 cross_border finding 에 잇고, 그 finding 이 다루는 공란은
+        # 사업부 결정 목록에서 뺀다(같은 공란이 '필수 확정' 카드와 '결정사항'에 두 번 실리지 않게).
+        if (meta.get("cross_border") or {}).get("active"):
+            from runtime.review.cross_border.engine import drop_covered_blanks as _xb_drop, overlay_requests as _xb_overlay
+
+            meta["user_review_coverage"] = _xb_overlay(meta.get("user_review_coverage"), clause_results)
+            meta["redline_integrity"]["commercial_terms"] = _xb_drop(meta["redline_integrity"].get("commercial_terms"),
+                                                                      clause_results)
     except _RliDisabled:
         meta["redline_integrity"] = {"disabled": True}
     except Exception as exc:  # noqa: BLE001 - 실패는 미해결로 남긴다(통과로 처리하지 않는다)
@@ -9959,6 +9998,16 @@ def build_clause_level_result(
             _vg_confirmed = True
         elif _df_r.get("status") == "자료 충돌 — 역할 판단 보류":
             _vg_confirmed = False   # 실제 자료가 충돌하면 방향 검증을 통과로 내지 않는다(자료 부족만으로는 기존 판단 유지)
+        _xb_persp = ((meta.get("cross_border") or {}).get("perspective") or {})
+        if not _vg_confirmed and _xb_persp.get("confirmed") and _xb_persp.get("our_label"):
+            # 국제계약: 당사자 표의 지위 + 요청문(또는 사전질문 답)으로 확정한 우리 쪽(2026-11-27)
+            from runtime.review.direction_gate import expand_labels as _xb_expand
+
+            _xb_o = _xb_expand([_xb_persp["our_label"]], str(text or ""))
+            _xb_t = [x for x in _xb_expand([_xb_persp.get("their_label") or ""], str(text or "")) if x not in _xb_o]
+            _vg_ours = list(dict.fromkeys([*_xb_o, *[x for x in _vg_ours if x not in _xb_t]]))
+            _vg_theirs = list(dict.fromkeys([*_xb_t, *[x for x in _vg_theirs if x not in _xb_o]]))
+            _vg_confirmed = True
         _vg_parties = _vg.Parties(ours=_vg_ours, theirs=_vg_theirs, confirmed=_vg_confirmed)
         # meta["contract_legal_map"] 는 ContractLegalMap.to_dict() — 필드가 평탄하게 들어 있다("fields" 키 없음).
         # 종전에는 .get("fields") 로 읽어 목적·지급 구조가 늘 빈 값이었고, 모든 계약에서 "거래 목적 확인 필요"가 나왔다(2026-11-27).

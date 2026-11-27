@@ -135,10 +135,20 @@ def brief_from_meta(
     ensure_current(meta, clause_results, clauses)
     ff = meta.get("final_findings") if isinstance(meta.get("final_findings"), dict) else {}
     tracked = meta.get("tracked_source") if isinstance(meta.get("tracked_source"), dict) else {}
+    medium = list(medium_issues if medium_issues is not None else (ff.get("medium_issues") or []))
+    # 국제계약 체크리스트의 LOW 항목(색상 기준·시험성적서·계좌 변경 검증 등)은 사업팀이 협상에서 함께 요청할 실무 항목이라
+    # 전달본에 싣는다 — 화면·다운로드가 같은 목록을 쓰도록 여기서 한 번 더한다(2026-11-27).
+    from runtime.review.output_filter import clause_results_to_review_issues
+
+    seen_ids = {str(x.get("clause_id")) for x in medium + list(high_issues or ff.get("high_issues") or []) if isinstance(x, dict)}
+    medium += [i.to_dict() for i in clause_results_to_review_issues(
+        [c for c in clause_results if isinstance(c, dict) and c.get("is_cross_border_check")
+         and str(c.get("risk_tier")) == "LOW" and not c.get("excluded_from_brief")])
+        if i.clause_id not in seen_ids]
     return build_business_brief(
         clause_results=clause_results,
         high_issues=high_issues if high_issues is not None else ff.get("high_issues"),
-        medium_issues=medium_issues if medium_issues is not None else ff.get("medium_issues"),
+        medium_issues=medium,
         user_review_coverage=user_review_coverage if user_review_coverage is not None else meta.get("user_review_coverage"),
         deal_assessment=meta.get("deal_assessment"),
         revision_set_check=meta.get("revision_set_check") if isinstance(meta.get("revision_set_check"), dict) else None,

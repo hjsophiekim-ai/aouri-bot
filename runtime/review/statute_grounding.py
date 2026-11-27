@@ -201,6 +201,17 @@ STATUTES: tuple[Statute, ...] = (
     _s(_CIV, "667", "1", "수급인의 담보책임",
        "완성된 목적물 또는 완성 전의 성취된 부분에 하자가 있는 때에는 도급인은 수급인에 대하여 상당한 기간을 정하여 그 하자의 보수를 청구할 수 있다.",
        {"defect_works"}, "제작물 하자 보수 청구"),
+    # ── CISG(국제물품매매) — CISG 가 적용되는 매매의 검사·통지·적합성·구제는 민법·상법이 아니라 협약 조문이 근거다 ──
+    _s("CISG", "35", "1", "물품의 적합성",
+       "매도인은 계약에서 정한 수량, 품질 및 종류에 적합한 물품을 인도하여야 한다.",
+       {"defect_cisg"}, "계약 적합성(품질·수량·종류)"),
+    _s("CISG", "39", "", "부적합 통지",
+       "매수인은 부적합을 발견하였거나 발견할 수 있었던 때로부터 합리적인 기간 내에 통지하지 않으면 부적합을 주장할 권리를 잃고, "
+       "어떠한 경우에도 물품이 실제로 교부된 날부터 2년 내에 통지하지 않으면 권리를 잃는다.",
+       {"defect_cisg"}, "검사·통지 기간"),
+    _s("CISG", "46", "", "매수인의 이행청구(대체물·수리)",
+       "매수인은 매도인에게 의무 이행을 청구할 수 있고, 본질적 계약위반이면 대체물 인도를, 그 밖에는 수리를 청구할 수 있다.",
+       {"defect_cisg"}, "교체·수리 청구"),
     _s(_CIV, "580", "1", "매도인의 하자담보책임",
        "매매의 목적물에 하자가 있는 때에는 매도인은 하자담보책임을 진다.",
        {"defect_sale"}, "매매 목적물 하자담보"),
@@ -244,6 +255,7 @@ RELATION_REASON: dict[str, str] = {
     "legal_entity": "계약상 권리·의무는 권리능력 있는 법인에 귀속되므로 당사자는 등기상 법인명으로 표시해야 합니다.",
     "defect_works": "제작물에 하자가 있으면 상당한 기간을 정해 보수를 청구할 수 있습니다.",
     "defect_sale": "매매 목적물에 하자가 있으면 매도인이 하자담보책임을 집니다.",
+    "defect_cisg": "CISG 가 적용되는 물품매매에서는 매도인이 계약에 적합한 물품을 인도할 의무를 지고, 매수인은 합리적 기간 내에 부적합을 통지해야 권리를 지키며, 대체물·수리를 청구할 수 있습니다.",
     "personal_data": "개인정보를 제3자에게 제공하려면 정보주체 동의 등 법정 요건이 필요합니다.",
     "standard_terms": "신의성실 원칙에 반해 공정성을 잃은 약관 조항은 무효입니다.",
     "publicity": "출연자·작가 등 본인의 성명·초상·음성을 광고·홍보에 쓰려면 그 사람에게서 사용 범위를 정한 동의를 받아야 합니다.",
@@ -386,7 +398,7 @@ _RX_NON_CONTRACT_TERMINATION = _rx(
 _RX_LEASE = _rx(r"임대인|임차인|임대차")
 
 
-def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
+def detect_relations(cr: dict[str, Any], *, archetype: str = "", cisg: bool = False) -> list[str]:
     """finding 의 법률관계.
 
     관계는 finding 이 **무엇에 관한 것인가**(제목·하위 쟁점 제목)로 정한다. 문제 서술은
@@ -441,6 +453,10 @@ def detect_relations(cr: dict[str, Any], *, archetype: str = "") -> list[str]:
             rel.append("ip_ownership_absent")
             continue
         if key == "defect":
+            if cisg:
+                # CISG 가 적용되는 국제 물품매매 — 민법 제580조·제667조가 아니라 협약 조문(2026-11-27 지시)
+                rel.append("defect_cisg")
+                continue
             if archetype in ("real_estate_lease", "lease_rental") or (archetype not in ("goods_supply", "distribution_resale")
                                                        and _RX_LEASE.search(original) and not re.search(r"도급|수급인|납품", original)):
                 # 임대차의 하자·수선은 임대인의 유지 의무 문제다 — 도급의 수급인 담보책임(제667조)이 아니다.

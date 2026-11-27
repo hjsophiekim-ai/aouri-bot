@@ -144,6 +144,11 @@ class CanonicalState:
     governing_transaction: dict[str, Any] = field(default_factory=dict)
     #: 어떻게 확정했는지 — 교정이 있었으면 그 사실이 남는다
     audit: dict[str, Any] = field(default_factory=dict)
+    #: 국제계약 계열 유형(international_*). 국내 계약이면 "". 세부 코드(contract_type)는 기존 엔진이 쓰도록 그대로 두고,
+    #: 국제 체크리스트·국내 전용 룰 게이트가 이 값을 읽는다(2026-11-27). 판정은 cross_border.signals 한 곳.
+    international_type: str = ""
+    #: 국제계약 판정 요약(점수·신호군) — 근거 기록용
+    cross_border: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -158,6 +163,8 @@ class CanonicalState:
             "document_hierarchy": self.document_hierarchy,
             "governing_transaction": self.governing_transaction,
             "audit": self.audit,
+            "international_type": self.international_type,
+            "cross_border": self.cross_border,
         }
 
 
@@ -266,9 +273,25 @@ def build_canonical_state(
     document_hierarchy: dict[str, Any] | None = None,
     governing_transaction: dict[str, Any] | None = None,
     audit: dict[str, Any] | None = None,
+    contract_text: str = "",
 ) -> CanonicalState:
-    """확정값을 얼린다. 이후 단계는 이 객체를 전달받아 쓴다."""
+    """확정값을 얼린다. 이후 단계는 이 객체를 전달받아 쓴다.
+
+    `contract_text` 를 주면 국제계약 여부와 국제 계열 유형을 함께 정한다(국내/국제 판정의 단일 진실 원천).
+    """
     from runtime.review.canonical_identity import normalize_role
+
+    international_type = ""
+    xb_summary: dict[str, Any] = {}
+    if contract_text:
+        from runtime.review.cross_border.signals import assess_cross_border
+        from runtime.review.cross_border.types import international_type_for
+
+        _xb = assess_cross_border(contract_text)
+        xb_summary = {"is_cross_border": _xb.is_cross_border, "score": _xb.score, "groups": _xb.groups,
+                      "countries": _xb.countries, "bilingual": _xb.bilingual, "prevailing_language": _xb.prevailing_language}
+        if _xb.is_cross_border:
+            international_type = international_type_for(contract_type, contract_text)
 
     return CanonicalState(
         contract_type=str(contract_type or ""),
@@ -282,6 +305,8 @@ def build_canonical_state(
         document_hierarchy=dict(document_hierarchy or {}),
         governing_transaction=dict(governing_transaction or {}),
         audit=dict(audit or {}),
+        international_type=international_type,
+        cross_border=xb_summary,
     )
 
 

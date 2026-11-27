@@ -298,6 +298,10 @@ def _clause_identity_key(issue: ReviewIssue) -> tuple[str, str, str] | None:
     # 사고가 실제 NDA 리뷰에서 발생했다. paragraph_number가 비어 있을 때는
     # 인용된 원문 스니펫으로 대신 구분해, 진짜 같은 문장을 가리키는 경우만
     # 병합되도록 한다.
+    if str(issue.clause_id or "").startswith("xb_"):
+        # 국제계약 체크리스트는 같은 항 안의 서로 다른 쟁점(준거법·중재기관)을 쟁점 코드로 이미 구분해 만든다 —
+        # 같은 문단을 인용했다고 하나로 합치면 한 쟁점이 사라진다(2026-11-27).
+        return ("xb", str(issue.clause_id), "")
     if issue.display_path:
         para = issue.paragraph_number or _identity_snippet(issue.original_text)
         return (issue.display_path, para, issue.item_number)
@@ -615,6 +619,9 @@ def clause_results_to_review_issues(clause_results: list[dict[str, Any]]) -> lis
         if not isinstance(cr, dict):
             continue
         if bool(cr.get("dedup_suppressed")) or bool(cr.get("keep_as_is")):
+            continue
+        if cr.get("brief_merge_into"):
+            # 국·영 병기 계약의 영문·추가 문단 수정 짝 — 쟁점이 아니라 본 항목의 수정 문구 운반체(변경추적본에만 따로 들어간다)
             continue
         sev = str(cr.get("risk_tier") or "LOW").upper()
         if sev not in ("HIGH", "MEDIUM", "LOW"):

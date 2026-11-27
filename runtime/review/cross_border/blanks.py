@@ -106,12 +106,21 @@ _RX_SIGNATURE = re.compile(
     r"(?m)^.*(?:계약\s*체결일|Date\s+of\s+Execution|IN\s+WITNESS\s+WHEREOF|서명\s*날인|기명\s*날인|Authorized\s+Signature|Signed\s+by)", re.I)
 
 
+_RX_EN_HEADING = re.compile(r"(?m)^\s*(\d{1,2})\.\s+[A-Z][A-Za-z ,&/'()-]{2,60}\s*$")
+_RX_EN_SUB = re.compile(r"(?m)^\s*(\d{1,2})\.(\d{1,2})\s")
+
+
 class Layout:
-    """본문의 조·항 위치와 전문·서명란 영역."""
+    """본문의 조·항 위치와 전문·서명란 영역.
+
+    국문 "제N조 … N." 체계와 영문 "N. Title / N.M …" 체계를 모두 읽는다. 영문 체계의 경로는 조항 추출기와 같은
+    "Article N.M" 으로 적는다.
+    """
 
     def __init__(self, text: str) -> None:
         self.text = text
         self.articles: list[tuple[int, str]] = []
+        self.english_numbering = False
         seen: set[str] = set()
         for m in _RX_ARTICLE.finditer(text):
             num = next(g for g in m.groups() if g)
@@ -119,6 +128,12 @@ class Layout:
                 continue
             seen.add(num)
             self.articles.append((m.start(), num))
+        if not self.articles:
+            for m in _RX_EN_HEADING.finditer(text):
+                if m.group(1) not in seen:
+                    seen.add(m.group(1))
+                    self.articles.append((m.start(), m.group(1)))
+            self.english_numbering = bool(self.articles)
         last_art = self.articles[-1][0] if self.articles else 0
         sig = next((m for m in _RX_SIGNATURE.finditer(text) if m.start() >= last_art), None)
         self.signature_start = sig.start() if sig else len(text)
@@ -154,6 +169,10 @@ class Layout:
         art = self.article(pos)
         if not art:
             return ""
+        if self.english_numbering:
+            a_start = next((s for s, n in self.articles if n == art), 0)
+            subs = [m for m in _RX_EN_SUB.finditer(self.text[a_start:pos + 8]) if m.group(1) == art]
+            return f"Article {art}.{subs[-1].group(2)}" if subs else f"Article {art}"
         para = self.paragraph(pos)
         return f"제{art}조" + (f" 제{para}항" if para else "")
 

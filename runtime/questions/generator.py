@@ -291,6 +291,16 @@ def generate_questions(
     if plan is not None:
         txn_lead = filter_static_questions_by_plan(txn_lead, plan)
 
+    # [국제계약 검토 관점, 2026-11-27] — 당사자 표의 지위와 요청문으로 우리 쪽을 정하지 못하면(충돌·무언급) 추측하지 않고 묻는다.
+    try:
+        from runtime.review.cross_border.perspective import perspective_question
+
+        _xb_q = perspective_question(text=contract_text or "", request_text=review_focus or "")
+        if _xb_q is not None:
+            lead = [_xb_q] + [q for q in lead if q.question_id != _xb_q.question_id]
+    except Exception:  # noqa: BLE001 - 질문 생성 실패가 검토 전체를 막지 않게
+        pass
+
     lead_ids = {q.question_id for q in lead} | {q.question_id for q in ai_lead}
     txn_lead = [q for q in txn_lead if q.question_id not in lead_ids]
     combined_lead = ai_lead + lead + txn_lead

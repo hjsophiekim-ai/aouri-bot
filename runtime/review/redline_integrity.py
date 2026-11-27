@@ -541,6 +541,10 @@ def _reason_text(cr: dict[str, Any]) -> str:
 
 def _absence_check(cr: dict[str, Any], ctx: Ctx, report: list[dict[str, Any]]) -> bool:
     """부재 지적을 계약 전체로 재확인. 내렸으면 True."""
+    if cr.get("absence_verified"):
+        # 계약 전체 원문 정확 일치로 이미 부재·전제를 확인한 finding(cross_border) — 같은 주제 조항이 있다는 이유로 내리면
+        # "조항 안의 특정 요소가 빠졌다"는 지적(선적 기한 공란, 검수 완료 정의 없음 …)이 통째로 철회된다(2026-11-27 실측).
+        return False
     reason = _reason_text(cr)
     # (1) 지적이 전제한 거래 요소(주문제작·설치·위탁판매·렌탈)가 계약에 없다 — 부재 지적이 아니어도 이 계약의 쟁점이 아니다
     for name, in_contract, in_finding in _PREMISES:
