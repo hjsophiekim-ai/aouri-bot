@@ -594,7 +594,7 @@ def _generate_questions_inner(
     clause_rule_ids = _extract_rule_ids(clause_results)
     jur = classify_jurisdiction_profile(text=text, entity=ent, contract_type=ctype, filename=None)
     prof = infer_contract_profile(contract_type=ctype, text=text, canonical_type_code=contract_type_code)
-    focus = parse_user_focus_issues(review_focus)
+    focus = parse_user_focus_issues(review_focus, contract_text=text)
     focus_codes = {x.code for x in focus if hasattr(x, "code")}
 
     focus_text = (review_focus or "").strip()

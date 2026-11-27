@@ -245,6 +245,14 @@ def _rx_obl(parties: Parties, side: str) -> re.Pattern[str]:
                       rf"|{p}(?:은|는|이|가){_gap(parties, side, 80)}(?:하여야\s*한다|할\s*의무가\s*있다)", re.I)
 
 
+#: 주어 없는·수동형 지급 문장 — 금액 낱말 + 지급 동사.
+_RX_PASSIVE_PAY = re.compile(
+    r"(?:대금|금액|선급금|잔금|계약\s*금액|용역료|수수료)[^.。;]{0,160}?(?:지급한다|지급하여야\s*한다|지급하기로\s*한다|송금한다)"
+    r"|\b(?:amount|price|fee|payment|balance|advance)\b[^.;]{0,160}?\bshall\s+be\s+(?:paid|remitted|transferred)\b",
+    re.IGNORECASE,
+)
+
+
 def build_basis(*, parties: Parties, original: dict[str, str], our_name: str = "", our_role: str = "",
                 counterparty_name: str = "", counterparty_role: str = "", purpose: str = "", payment_flow: str = "",
                 request_text: str = "", answers_text: str = "") -> dict[str, Any]:
@@ -281,6 +289,15 @@ def build_basis(*, parties: Parties, original: dict[str, str], our_name: str = "
         need.append("우리 회사의 거래상 역할")
     if not basis["purpose"]:
         need.append("거래 목적")
+    if not pays and not basis["payment_flow"]:
+        # 주어 없는·수동형 지급 문장("총 계약 금액은 … 지급한다", "shall be paid/remitted by T/T")은 당사자 호칭으로 시작하지
+        # 않아 위 판독이 놓친다 — 계약 전체의 지급 구조 문장으로는 충분하다(2026-11-27, 국영 병기 매매계약 실측).
+        for p, t in original.items():
+            hit = next((s for s in sentences(t) if _RX_PASSIVE_PAY.search(s)), "")
+            if hit:
+                basis["payment_flow"] = _ws(hit)[:300]
+                basis["payment_flow_path"] = p
+                break
     if not pays and not basis["payment_flow"]:
         need.append("주요 지급·수취금(누가 누구에게 무엇을 지급하는지)")
     if not basis["rights_to_secure"]:

@@ -214,6 +214,8 @@ def project(original: str, new: str, *, keep_fill: Any = None) -> str:
 # ── 공란(미확정 상업조건) ─────────────────────────────────────────────────────
 
 _BLANK_LABELS: tuple[tuple[str, str], ...] = (
+    (r"Incoterms|인도\s*조건|delivery\s+terms?", "인도 조건(Incoterms)"),
+    (r"선적\s*기한|shipment\s+(?:date|schedule)", "선적 기한"),
     (r"interest|이자|연체", "연체이자율"),
     (r"days\s+from\s+the\s+(?:date\s+of\s+the\s+)?bill\s+of\s+lading|payment\s+term|지급\s*기일|지급기한", "대금 지급기일"),
     (r"warrant|보증", "보증기간"),
@@ -230,27 +232,73 @@ _BLANK_LABELS: tuple[tuple[str, str], ...] = (
 )
 
 
+_RX_SIGNATURE_BLOCK = re.compile(
+    r"(?m)^.*(?:계약\s*체결일|Date\s+of\s+Execution|IN\s+WITNESS\s+WHEREOF|서명\s*날인|기명\s*날인|Authorized\s+Signature)", re.I)
+_RX_FILLED_VALUE = re.compile(r"\[\s*[\d.,]+\s*%?\s*\]")
+_RX_LABEL_BRACKET = re.compile(r"\[\s*(?:[A-Z]{1,4}|(?:CM|MM|KG|PCS)\b[^\]]*\d[^\]]*)\s*\]", re.I)
+_RX_HEADING_LABEL = re.compile(r"^\s*(?:\d{1,2}\.\s*)?([^:(\[\n]{1,30}?)\s*(?:\([^)]*\))?\s*:")
+
+
 def blank_terms(text: str, clauses: list[Any] | None = None) -> list[dict[str, str]]:
-    """원문의 공란·선택지 표시와 그 위치·항목명. 같은 항목은 한 번만."""
+    """원문의 공란·선택지 표시와 그 위치·항목명. 같은 항목은 한 번만.
+
+    2026-11-27 보정(국제 매매계약 실측):
+    - 공란 뒤 문맥은 **같은 줄 안에서만** 본다 — 서명란이 마지막 조에 붙어 추출되면 체결일 공란 뒤 "상호 (Company)" 가
+      라벨이 되어 없는 "상대방 법인 정보 공란"을 만들었다.
+    - 라벨표에 없는 공란도 버리지 않는다 — 항 머리("1. 선적 기한 (…):")를 라벨로 쓴다(선적 기한·인도 조건 공란 누락).
+    - 서명란·전문(당사자 표)의 공란은 "대표자 성명·체결일" 같은 기재 사항으로 남긴다(사업부 결정).
+    - 값이 이미 든 대괄호([ 3 ], [ 30 ])와 단위 표기([ML], [CM 79X95 …])는 공란이 아니다.
+    """
+    from runtime.review.cross_border.blanks import Layout, _execution_item
+
     rows: list[dict[str, str]] = []
     seen: set[str] = set()
     src = [(_path(c), _s(c.get("text") if isinstance(c, dict) else getattr(c, "text", ""))) for c in clauses or []]
     if not src:
         src = [("", _s(text))]
+    else:
+        lay = Layout(_s(text))
+        if lay.articles and lay.first_article > 0:
+            src.insert(0, ("전문(당사자 표)", _s(text)[:lay.first_article]))
     for path, t in src:
+        sig = _RX_SIGNATURE_BLOCK.search(t)
+        sig_start = sig.start() if sig else len(t)
         for m in _RX_BLANK.finditer(t):
             inner = m.group(0)
             if re.fullmatch(r"\[\s*(?:페이지|page)\s*\d+\s*\]", inner, re.I):
                 continue
-            ctx = t[max(0, m.start() - 120): m.end() + 80]
-            # 공란 안 문구 → 바로 앞 문장 조각 → 뒤 순서로 본다('[exclusive / non-exclusive] … Territory' 를 지역으로 읽지 않게)
+            if _RX_FILLED_VALUE.fullmatch(inner) or _RX_LABEL_BRACKET.fullmatch(inner):
+                continue
+            if re.search(r"\d\s*%", inner) and not re.search(r"입력|기재|선택|insert|choose|select|TBD", inner, re.I):
+                continue   # "[50% Advance / 50% Balance]" 같은 설명 괄호
+            line_start = t.rfind("\n", 0, m.start()) + 1
+            line_end = t.find("\n", m.end())
+            line_end = len(t) if line_end < 0 else line_end
+            ctx = t[max(line_start, m.start() - 120): min(line_end, m.end() + 80)]
+            if path == "전문(당사자 표)" or m.start() >= sig_start:
+                # 서명란·당사자 표의 기재 사항 — 대표자 성명·체결일 등(사업부 결정)
+                head = _RX_HEADING_LABEL.match(t[line_start:line_end])
+                label = _execution_item(head.group(1).strip() if head else "", t[line_start:line_end])
+                key = f"{path if path == '전문(당사자 표)' else '서명란'}:{label}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append({"label": label, "path": "서명란" if m.start() >= sig_start else path, "blank": _ws(inner),
+                             "context": _ws(ctx)[:200], "classification": "사업부 결정"})
+                continue
+            # 공란 안 문구 → 바로 앞 문장 조각 → 뒤(같은 줄 안) 순서로 본다('[exclusive / non-exclusive] … Territory' 를 지역으로 읽지 않게)
             before = re.split(r"(?<!\d)[.;:]\s", t[max(0, m.start() - 300): m.start()])[-1]
-            after = t[m.end(): m.end() + 60]
+            after = t[m.end(): min(line_end, m.end() + 60)]
             label = ""
             for zone in (inner, before, after):
                 label = next((lab for rx, lab in _BLANK_LABELS if re.search(rx, zone, re.I)), "")
                 if label:
                     break
+            if not label:
+                head = _RX_HEADING_LABEL.match(t[line_start:line_end])
+                heading = head.group(1).strip() if head and head.end() <= m.start() - line_start + 1 else ""
+                # 항 머리도 라벨표로 한 번 더 맞춘다 — 국문 "선적 기한"과 영문 "Shipment Schedule"이 같은 항목이 되게
+                label = next((lab for rx, lab in _BLANK_LABELS if heading and re.search(rx, heading, re.I)), heading)
             if not label or label in ("서명란", "단가"):
                 continue
             key = label
@@ -392,6 +440,16 @@ def _hold(cr: dict[str, Any], reason: str, memo: str = "") -> None:
     cr["integrity_held"] = reason
     if memo:
         cr["drafting_memo"] = (_s(cr.get("drafting_memo")) + "\n" + memo).strip()
+
+
+def exclude_from_brief(cr: dict[str, Any], reason: str) -> None:
+    """사업팀 전달본에서 빼고 법무 내부 분석본에만 남긴다 — 사유를 함께 기록한다."""
+    cr["excluded_from_brief"] = True
+    cr["internal_only_reason"] = reason
+    ri = cr.get("redline_instruction")
+    if isinstance(ri, dict):
+        # 법무 내부 분석본(DOCX·PDF)은 보류 사유를 이미 싣는다 — 같은 자리에 전달본 제외 사실을 남긴다.
+        ri["hold_reason"] = (_s(ri.get("hold_reason")) + " — 사업팀 전달본에서 제외(법무 내부 기록)").strip(" —")
 
 
 def _redraft(cr: dict[str, Any]) -> None:
@@ -589,6 +647,9 @@ def check_finding(cr: dict[str, Any], ctx: Ctx, report: list[dict[str, Any]]) ->
     if miss:
         _hold(cr, f"계약에 없는 당사자 호칭 사용({', '.join(miss)}) — 다른 계약 유형의 문안")
         _note(cr, "undefined_party_label", f"계약에 정의되지 않은 호칭 {miss} 를 쓴 문안 — 보류", report)
+        # 다른 계약 유형의 문안이라고 시스템이 스스로 판정했다 — 그 finding 은 이 계약의 쟁점이라는 근거가 없다.
+        # 라벨만 붙여 사업팀 전달본에 "법무 확인 중"으로 내보내지 않고, 법무 내부 분석본에만 사유와 함께 남긴다(2026-11-27).
+        exclude_from_brief(cr, f"다른 계약 유형의 문안으로 판정 — 계약에 없는 당사자 호칭({', '.join(miss)}) 사용")
         _redraft(cr)
         return
     if d is not None:
@@ -862,6 +923,12 @@ def run(*, clause_results: list[dict[str, Any]], clauses: list[Any] | None, cont
               theirs=[x for x in theirs if x], user_lines=user_lines, contract_vals=values(contract_text), user_vals=user_vals,
               clause_by_path=cbp, our_kind=our_kind)
     report: list[dict[str, Any]] = []
+    # 방향 게이트 — 생성 단계 뒤에 들어온 수정안(AI·조항 지목 검토)까지 같은 기준으로(2026-11-27)
+    from runtime.review.direction_gate import apply_direction_gate
+
+    for row in apply_direction_gate(clause_results, contract_text=_s(contract_text), ours=list(ctx.ours), theirs=list(ctx.theirs)):
+        report.append({"finding_id": row["clause_id"], "path": "", "action": "direction_blocked",
+                       "detail": "; ".join(f"{b['kind']}: {b['sentence'][:80]}" for b in row["blocked"])})
     for cr in clause_results:
         if isinstance(cr, dict):
             try:

@@ -615,6 +615,48 @@ def _token_weight(document_frequency: int, clause_count: int) -> float:
     return 0.0
 
 
+#: 요청 주제 → 그 주제를 다루는 조항의 표지. (주제 이름, 요청문 패턴, 조항 제목·본문 표지)
+REQUEST_TOPICS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = (
+    ("defect", re.compile(r"하자|불량|품질|결함|클레임|반품|defect|quality|claim", re.I),
+     re.compile(r"품질|검수|클레임|하자|불량|부적합|공제|반송|폐기|inspection|claim|defect|quality|deduction", re.I)),
+    ("tax", re.compile(r"세금|세무|관세|부가세|부가가치세|원천징수|수출입|통관|tax|duty|duties|VAT|customs", re.I),
+     re.compile(r"Incoterms|인도\s*조건|원산지|FTA|부가세|부가가치세|영세율|관세|통관|VAT|duty|duties|origin|원천징수|withholding|세금계산서", re.I)),
+    ("payment", re.compile(r"대금|지급|결제|정산|선급|잔금|payment", re.I),
+     re.compile(r"대금|지급|결제|선급|잔금|송금|정산|payment|remit|advance|balance", re.I)),
+    ("dispute", re.compile(r"분쟁|관할|준거법|중재|소송|dispute|jurisdiction|arbitration|governing\s+law", re.I),
+     re.compile(r"분쟁|관할|준거법|중재|dispute|jurisdiction|arbitration|governing\s+law", re.I)),
+    ("delivery", re.compile(r"납기|선적|인도|배송|지연|delivery|shipment", re.I),
+     re.compile(r"납기|선적|인도|지체상금|지연|delivery|shipment|liquidated", re.I)),
+)
+
+
+def request_topics(text: str) -> list[str]:
+    return [name for name, rx, _m in REQUEST_TOPICS if rx.search(text or "")]
+
+
+def topic_clause_links(issue_text: str, chunks: list[Any], *, max_links: int = 3) -> list[tuple[str, float]]:
+    """요청 주제에 맞는 조항 — 조항 제목 표지 3점, 본문 표지 1점(최대 3). 2점 이상만."""
+    topics = [(n, mk) for n, rx, mk in REQUEST_TOPICS if rx.search(issue_text or "")]
+    if not topics:
+        return []
+    scored: list[tuple[float, str]] = []
+    for c in chunks:
+        cid = str(_clause_attr(c, "clause_id") or "")
+        title = str(_clause_attr(c, "title") or "")
+        body = str(_clause_attr(c, "text") or "")
+        if not cid:
+            continue
+        score = 0.0
+        for _n, mk in topics:
+            score += 3.0 * len(set(m.group(0).lower() for m in mk.finditer(title)))
+            score += min(3.0, float(len(mk.findall(body))) * 0.5)
+        if score >= 2.0:
+            scored.append((score, cid))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    top = scored[0][0] if scored else 0.0
+    return [(cid, s) for s, cid in scored if s >= top * 0.5][:max_links]
+
+
 def link_clauses_to_issues(
     issues: list[UserReviewIssue],
     clauses: list[Any] | None,
@@ -661,6 +703,16 @@ def link_clauses_to_issues(
                             linked.append(cid)
                             scores[cid] = 10.0  # 사용자가 직접 지목한 조항이 최우선 anchor
                     break
+
+        if not linked and chunks:
+            # 주제 기준 연결(2026-11-27) — "하자 책임 및 처리 절차"는 품질·검수·클레임·공제 조항, "세금"은 인도 조건·원산지·
+            # 부가세 조항, "대금"은 지급·선급·잔금 조항에 잇는다. 조항이 몇 개뿐인 계약에서는 "하자·불량" 같은 핵심어가 절반
+            # 넘는 조항에 나와 아래 빈도 가중치가 0이 되어, 우연한 잔여 낱말로 엉뚱한 조항이 연결됐다(원단 매매계약 실측).
+            for cid, score in topic_clause_links(issue.normalized_issue + " " + " ".join(issue.search_keywords), chunks):
+                if cid not in linked:
+                    linked.append(cid)
+                    scores[cid] = score
+            linked = linked[:max_links]
 
         if not linked and bodies:
             # 검색어는 쟁점 문장 전체가 아니라 retrieval용으로 뽑힌

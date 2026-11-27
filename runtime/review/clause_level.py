@@ -6750,6 +6750,14 @@ def build_clause_level_result(
     _apply_relevance_validation_gate(clause_results, _contract_class, _contract_nature)
     # 5. [STEP 2 + FINAL VALIDATION] Do Not Harm Our Side Gate — 당사 불이익 방지 최종 검증
     _apply_do_not_harm_our_side_gate(clause_results, party.our_role, review_posture)
+    # 5-1. 수정안 방향 게이트(범용) — 위 게이트는 우리가 공급자일 때만 돈다. 어느 쪽이든 우리 권리를 줄이거나 우리 의무를
+    #      늘리는 템플릿 문구는 여기서 뺀다(2026-11-27, 구매자의 잔금 공제권을 묶는 정산 템플릿 실측).
+    from runtime.review.direction_gate import apply_direction_gate as _apply_direction_gate
+
+    _direction_gate_report = _apply_direction_gate(
+        clause_results, contract_text=str(text or ""),
+        ours=[str(party.our_label or "")], theirs=[str(party.counterparty_label or "")],
+    )
     # 6. [STEP 5B] Redline Safety Check — 문장 훼손 감지 및 guidance-only 전환
     _apply_redline_safety_check(clause_results, party.our_role, review_posture)
     # ─────────────────────────────────────────────────────────────────────────
@@ -7901,6 +7909,7 @@ def build_clause_level_result(
         existing_answers=answers if isinstance(answers, dict) else None,
         user_focus=review_focus,
         our_role=party.our_role,
+        contract_text=str(text or ""),
     )
 
     # ── [Clause-Level Conflict Check] 조항 간 모순 감지 ─────────────────────
@@ -7922,6 +7931,7 @@ def build_clause_level_result(
     executive_summary = generate_executive_summary(clause_results, clause_conflicts)
 
     meta["contract_legal_map"] = _legal_map.to_dict()
+    meta["direction_gate"] = _direction_gate_report
     meta["loss_path_gate"] = _loss_path_report
     if _deal is not None:
         meta["deal_assessment"] = _deal.to_dict()
@@ -9950,8 +9960,10 @@ def build_clause_level_result(
         elif _df_r.get("status") == "자료 충돌 — 역할 판단 보류":
             _vg_confirmed = False   # 실제 자료가 충돌하면 방향 검증을 통과로 내지 않는다(자료 부족만으로는 기존 판단 유지)
         _vg_parties = _vg.Parties(ours=_vg_ours, theirs=_vg_theirs, confirmed=_vg_confirmed)
-        _vg_lm = (meta.get("contract_legal_map") or {}).get("fields") if isinstance(meta.get("contract_legal_map"), dict) else {}
-        _vg_lm = _vg_lm if isinstance(_vg_lm, dict) else {}
+        # meta["contract_legal_map"] 는 ContractLegalMap.to_dict() — 필드가 평탄하게 들어 있다("fields" 키 없음).
+        # 종전에는 .get("fields") 로 읽어 목적·지급 구조가 늘 빈 값이었고, 모든 계약에서 "거래 목적 확인 필요"가 나왔다(2026-11-27).
+        _vg_lm_raw = meta.get("contract_legal_map") if isinstance(meta.get("contract_legal_map"), dict) else {}
+        _vg_lm = _vg_lm_raw.get("fields") if isinstance(_vg_lm_raw.get("fields"), dict) else _vg_lm_raw
         from runtime.review.requested_clause_review import _answers_text as _vg_answers_text, deal_facts as _vg_deal_facts
 
         _vg_answers = _vg_answers_text(answers if isinstance(answers, dict) else None,

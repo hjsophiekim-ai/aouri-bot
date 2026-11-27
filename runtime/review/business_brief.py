@@ -20,6 +20,8 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from runtime.review.language_quality_gate import repair_orphan_separators
+
 STATUS_PENDING = "법무 추가 확인 중"
 
 KIND_REVISION = "revision"
@@ -176,6 +178,7 @@ def _clean(text: str, *, keep_law: bool = False) -> str:
             continue
         sent = _RX_CITE_PAREN.sub("", sent)
         sent = _RX_INTERNAL.sub("", sent)
+        sent = repair_orphan_separators(sent)   # 법률명 일부만 지워진 "·소비자보호법상" 같은 조각(2026-11-27)
         sent = re.sub(r"\s{2,}", " ", sent).strip(" ,;/")
         if sent:
             out.append(_end(sent))
@@ -474,6 +477,9 @@ def build_business_brief(
     for issue in issues:
         fid = _fid(issue)
         full = by_id.get(_s(issue.get("clause_id"))) or by_id.get(fid) or {}
+        if full.get("excluded_from_brief") or issue.get("excluded_from_brief"):
+            # 시스템이 다른 계약 유형의 문안·계약 유형과 맞지 않는 룰로 판정한 항목 — 전달본에 싣지 않는다(내부본에만 사유와 함께).
+            continue
         cid = _s(full.get("clause_id") or issue.get("clause_id"))
         core = core_by_id.get(cid)
         topic_key = f"core:{cid}" if core else f"f:{fid}"

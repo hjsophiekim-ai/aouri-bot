@@ -64,7 +64,26 @@ def _objective_by_code(code: str) -> UserFocusObjective | None:
     return None
 
 
-def parse_user_focus_issues(text: str | None) -> list[UserFocusObjective]:
+#: 특정 법률관계를 가리키는 낱말 — 요청문에 나와도 **계약 본문에 그 법률관계의 구조 신호가 있을 때만** 중점 이슈로 센다.
+#: "시디즈의 하도급사인 ○○가 원단을 구입하는 계약" 처럼 당사자 소개에 나온 낱말로 하도급 단가 쟁점을 만들던 실측(2026-11-27).
+_STATUTE_GATED_KEYWORDS: dict[str, re.Pattern[str]] = {
+    "하도급": re.compile(r"하도급|하수급|수급사업자|원사업자|제조\s*위탁|수리\s*위탁|건설\s*위탁|용역\s*위탁|subcontract", re.I),
+    "하도급법": re.compile(r"하도급|하수급|수급사업자|원사업자|제조\s*위탁|수리\s*위탁|건설\s*위탁|용역\s*위탁|subcontract", re.I),
+    "대리점법": re.compile(r"대리점|위탁판매|판매\s*대리|dealer|distributor", re.I),
+}
+
+
+def _keyword_counts(k: str, low: str, contract_text: str | None) -> bool:
+    if not k or k.lower() not in low:
+        return False
+    gate = _STATUTE_GATED_KEYWORDS.get(k)
+    if gate is not None and contract_text is not None and not gate.search(contract_text):
+        return False
+    return True
+
+
+def parse_user_focus_issues(text: str | None, contract_text: str | None = None) -> list[UserFocusObjective]:
+    """요청문에서 중점 이슈를 뽑는다. `contract_text` 를 주면 특정 법률관계 낱말은 계약 구조 신호가 있을 때만 센다."""
     s = (text or "").strip()
     if not s:
         return []
@@ -72,7 +91,7 @@ def parse_user_focus_issues(text: str | None) -> list[UserFocusObjective]:
     out: list[UserFocusObjective] = []
 
     for o in _OBJECTIVES:
-        if any(k.lower() in low for k in o.keywords if k):
+        if any(_keyword_counts(k, low, contract_text) for k in o.keywords if k):
             out.append(o)
 
     parts = re.split(r"[\n\r,;/]+", s)

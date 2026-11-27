@@ -106,4 +106,36 @@ def detect_language_quality_issues(clause_results: list[dict[str, Any]]) -> list
                 })
                 continue
 
+            # (c) 법률명·조항명을 지운 자리에 구분자만 남음("오인되어 ·소비자보호법상") — 우리가 쓴 필드만.
+            if field in _GENERATED_FIELDS and orphan_separator_spans(text):
+                violations.append({
+                    "clause_id": clause_id,
+                    "field": field,
+                    "reason": "orphan_separator_or_truncated_name",
+                })
+                continue
+
     return violations
+
+
+# ── 잘린 법률명·고아 구분자 (2026-11-27) ─────────────────────────────────────
+# 실측: "전자상거래법·소비자보호법상 책임" 에서 앞 법률명만 지워져 "·소비자보호법상 책임" 이 전달본에 나갔다.
+#: 문장·구절 머리(공백·여는 괄호 뒤)에 홀로 남은 구분자. "A·B" 처럼 낱말 사이의 가운뎃점은 해당하지 않는다.
+_RX_ORPHAN_SEPARATOR = re.compile(r"(?:^|(?<=[\s(（\[]))[·,，/](?=[^\s·,，/])")   # "지급 / 정산" 처럼 양쪽이 띄어진 구분자는 정상
+#: 구분자 바로 뒤에 붙은 법률명 조각("·소비자보호법상") — 목록의 앞 원소가 지워진 흔적.
+_RX_ORPHAN_LAW_TAIL = re.compile(r"(?:^|(?<=[\s(（]))[·,，/][가-힣A-Za-z]{1,30}법(?:률)?(?:상|의|에\s*따른|에\s*따라)?\s*")
+
+
+def orphan_separator_spans(text: str) -> list[str]:
+    """고아 구분자·잘린 법률명 조각 목록(없으면 빈 목록)."""
+    t = str(text or "")
+    return [m.group(0) for m in _RX_ORPHAN_SEPARATOR.finditer(t)]
+
+
+def repair_orphan_separators(text: str) -> str:
+    """법률명 목록의 일부만 지워져 남은 "·X법상" 조각과 고아 구분자를 걷어 낸다. 다른 글자는 건드리지 않는다."""
+    t = str(text or "")
+    t = _RX_ORPHAN_LAW_TAIL.sub("", t)
+    t = _RX_ORPHAN_SEPARATOR.sub("", t)
+    t = re.sub(r"^\s*[·,，/]\s*", "", t)   # 문장 맨 앞 구분자
+    return re.sub(r"[ \t]{2,}", " ", t).strip()

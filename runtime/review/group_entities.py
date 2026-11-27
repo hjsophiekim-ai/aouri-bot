@@ -257,9 +257,13 @@ def our_side_labels(
                 labels.append(name)
 
     named = resolve_entity(entity)
-    if named is not None:
+    found_all = find_group_entities(text)
+    # 그룹사 표기는 그 그룹사가 **계약에 실제 당사자로 등장할 때만** 우리 호칭으로 쓴다. 신청 법인명이 그룹사 이름을 품고
+    # 있을 뿐("시디즈 하도급사 ○○") 계약 당사자는 협력사인 경우, 그룹사 이름을 우리 호칭으로 채우면 방향 판단이 계약
+    # 당사자와 어긋난다(2026-11-27 실측). 본문을 주지 않은 호출은 종전대로 신청 법인명을 따른다.
+    if named is not None and (text is None or any(f.key == named.key for f in found_all)):
         _add(named)
-    for found in find_group_entities(text):
+    for found in found_all:
         if named is None or found.key != named.key:
             _add(found)
     return tuple(labels)

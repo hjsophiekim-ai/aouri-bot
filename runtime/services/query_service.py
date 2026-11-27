@@ -226,7 +226,7 @@ class RuleQueryService:
             text, contract_type_hint=contract_type_input, contract_type_code=contract_type_code,
         )
         jur = classify_jurisdiction_profile(text=text, entity=entity_input, contract_type=contract_type_input, filename=review_input.filename)
-        focus = parse_user_focus_issues(review_input.review_focus)
+        focus = parse_user_focus_issues(review_input.review_focus, contract_text=text)
 
         base_applicable = self.list_rules(
             entity=entity_input,

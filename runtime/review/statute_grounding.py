@@ -550,6 +550,10 @@ def strip_law_mentions(text: str) -> str:
     s = re.sub(r"\(\s*[,·/]\s*", "(", s)
     s = re.sub(r"\s*[,·]\s*\)", ")", s)
     s = re.sub(r"\(\s*\)", "", s)
+    # 목록 중 알려진 법률명만 지우면 "·소비자보호법상" 같은 조각이 남는다 — 남은 조각까지 함께 뗀다(2026-11-27 실측).
+    from runtime.review.language_quality_gate import repair_orphan_separators
+
+    s = repair_orphan_separators(s)
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 

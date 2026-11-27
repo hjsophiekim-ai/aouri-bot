@@ -42,7 +42,7 @@ import re
 _RX_OPERATIVE_SALES_SIGNAL = re.compile(
     r"위탁판매|수탁판매|대리판매|판매대리|판매지원|영업지원|판매위탁"
     r"|판매수수료|판매장려금|판매대금|판매가격|판매단가|판매실적|판매목표"
-    r"|재판매|매입.{0,10}판매|사입|반품|재고|진열|POS|포스\s*단말"
+    r"|재판매|매입.{0,10}판매|사입|반품|재고|진열|(?-i:\bPOS\b)|포스\s*단말"
     r"|매출\s*(?:귀속|인식|정산)|정산\s*(?:주기|방식|대금)"
     r"|고객에게\s*판매|소비자에게\s*판매|최종\s*판매",
     re.IGNORECASE,
@@ -57,7 +57,7 @@ _RX_OPERATIVE_SALES_SIGNAL = re.compile(
 # 그 구조를 가리키는 장치가 최소 하나는 있어야 묻는다.
 _RX_INTERMEDIATED_SALES_SIGNAL = re.compile(
     r"위탁판매|수탁판매|위탁매매|대리판매|판매대리|판매위탁|판매지원|영업지원"
-    r"|판매수수료|판매장려금|재판매|매입.{0,10}판매|사입|POS|포스\s*단말|진열"
+    r"|판매수수료|판매장려금|재판매|매입.{0,10}판매|사입|(?-i:\bPOS\b)|포스\s*단말|진열"
     # "중개" 단독은 안 된다 — "중개수수료를 받지 않는다"(수수료 금지 문언)가 걸렸다.
     r"|(?:판매|매매|거래)\s*중개|중개\s*(?:판매|거래)|중개(?:인|자)(?:이|가|는|로|의)"
     r"|대리점|판매점|입점|판매\s*대행|대행\s*판매",
@@ -76,8 +76,30 @@ _RX_DISPOSAL_PROHIBITION = re.compile(
 
 # 고객 신호. "소비자가"(가격 기준)는 제외한다.
 _RX_CUSTOMER_SIGNAL = re.compile(r"고객|구매자|소비자(?!가\s*(?:기준|격))", re.IGNORECASE)
+_RX_CUSTOMER_SIGNAL_NO_BUYER = re.compile(r"고객|소비자(?!가\s*(?:기준|격))", re.IGNORECASE)
+
+#: "구매자(이하 "갑")", "구매자 (Buyer / 이하 …)" — 구매자가 **계약 당사자 정의어**이면 그 낱말은 이 계약의
+#: 당사자를 가리킬 뿐 판매 상대방(고객)이 아니다(2026-11-27, B2B 수입 매매계약이 소비자 판매로 읽힌 실측).
+_RX_BUYER_AS_PARTY = re.compile(
+    r"(?:구매자|매수인|구매인)\s*[(\[（]\s*(?:Buyer|Purchaser|이하)"
+    r"|(?:구매자|매수인)\s*\(이하\s*[\"“'‘]?\s*(?:갑|을)",
+    re.IGNORECASE,
+)
+
+#: 소비자 거래를 **직접** 가리키는 신호 — "하자", "판매" 같은 일반어로는 소비자 대면 판매라고 보지 않는다.
+_RX_DIRECT_CONSUMER_SIGNAL = re.compile(
+    r"최종\s*소비자|소비자(?!가\s*(?:기준|격))|고객\s*(?:응대|상담|문의|클레임|센터|서비스)|청약\s*철회"
+    r"|전자상거래|통신\s*판매|온라인\s*(?:몰|쇼핑)|오픈\s*마켓|B2C|\bend[- ]?(?:users?|customers?|consumers?)\b"
+    r"|\bconsumers?\b|\bretail\s+customers?\b",
+    re.IGNORECASE,
+)
+
+
+def has_direct_consumer_signal(text: str) -> bool:
+    """소비자 거래를 직접 가리키는 문언이 있는가(소비자 대면 판매 룰의 발동 조건)."""
+    return bool(_RX_DIRECT_CONSUMER_SIGNAL.search(text or ""))
 _RX_PAYMENT_CHANNEL_SIGNAL = re.compile(
-    r"결제|POS|포스|판매수수료|용역수수료|대금\s*수령",
+    r"결제|(?-i:\bPOS\b)|포스|판매수수료|용역수수료|대금\s*수령",
     re.IGNORECASE,
 )
 
@@ -137,7 +159,8 @@ def detect_sales_transaction_ambiguity(text: str) -> bool:
         return False
 
     has_weak_signal = bool(_RX_WEAK_SALES_SIGNAL.search(scan))
-    has_customer_signal = bool(_RX_CUSTOMER_SIGNAL.search(scan))
+    customer_rx = _RX_CUSTOMER_SIGNAL_NO_BUYER if _RX_BUYER_AS_PARTY.search(scan) else _RX_CUSTOMER_SIGNAL
+    has_customer_signal = bool(customer_rx.search(scan))
     has_payment_channel_signal = bool(_RX_PAYMENT_CHANNEL_SIGNAL.search(scan))
     if not (has_weak_signal and (has_customer_signal or has_payment_channel_signal)):
         return False

@@ -59,7 +59,7 @@ def build_final_review_context(
     party_role: dict[str, Any] | None,
 ) -> FinalReviewContext:
     ans = dict(answers or {})
-    focus = parse_user_focus_issues(review_focus)
+    focus = parse_user_focus_issues(review_focus, contract_text=text)
     derived = derive_focus_objectives_from_answers(ans)
     merged: dict[str, UserFocusObjective] = {}
     for o in (focus + derived):

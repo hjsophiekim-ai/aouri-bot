@@ -20,7 +20,7 @@ import re
 from typing import Any
 
 from runtime.review.clause_extraction import ClauseChunk
-from runtime.review.transaction_structure_signals import detect_sales_transaction_ambiguity
+from runtime.review.transaction_structure_signals import detect_sales_transaction_ambiguity, has_direct_consumer_signal
 
 # ─── 1. 기존 계약 연계 + 자율적 참여 조항 부재 ─────────────────────────────
 
@@ -455,6 +455,10 @@ def _apply_missing_consumer_product_liability_check(
     # (svc_delay_response처럼 무관한 계약에 임의 권고를 붙이는 실수를
     # 반복하지 않기 위한 안전장치).
     if not detect_sales_transaction_ambiguity(text):
+        return
+    # 소비자 대면 판매 룰은 소비자 거래를 **직접** 가리키는 문언이 있을 때만 — "하자", "판매", "구매자" 같은 일반어로는
+    # 발동하지 않는다(2026-11-27, B2B 원단 수입 매매계약에 소비자 책임 배분을 요구한 실측).
+    if not has_direct_consumer_signal(text):
         return
     if _RX_CONSUMER_PRODUCT_LIABILITY_ALLOCATION.search(text):
         return

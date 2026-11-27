@@ -200,6 +200,7 @@ _PL_QUESTIONS: list[StrategicQuestion] = [
 _USER_ISSUE_OVERRIDES: list[dict[str, Any]] = [
     {
         "triggers": re.compile(r"제조물책임법|PL법|제조물\s*책임|PL\s*보험", re.IGNORECASE),
+        "structure": re.compile(r"제조물|제품|물품|상품|product|goods", re.IGNORECASE),
         "questions": [
             StrategicQuestion("OV-PL-001", 0, "PL 결함 책임 귀속",
                 "제조물 결함으로 인한 손해에 대한 책임 귀속이 명시되어 있는가? (공급자 vs. 사용자 과실 분담)",
@@ -214,6 +215,7 @@ _USER_ISSUE_OVERRIDES: list[dict[str, Any]] = [
     },
     {
         "triggers": re.compile(r"중대재해처벌법|중대재해|중대\s*산업사고", re.IGNORECASE),
+        "structure": re.compile(r"시공|설치|공사|현장|작업자|안전\s*관리|installation|construction", re.IGNORECASE),
         "questions": [
             StrategicQuestion("OV-MHD-001", 0, "안전 책임 주체",
                 "시공·설치 전 과정에서 안전 책임 주체(도급인/수급인)가 계약서에 명확히 지정되어 있는가?",
@@ -228,6 +230,7 @@ _USER_ISSUE_OVERRIDES: list[dict[str, Any]] = [
     },
     {
         "triggers": re.compile(r"개인정보보호법|개인정보|개인\s*정보\s*보호", re.IGNORECASE),
+        "structure": re.compile(r"개인\s*정보|고객\s*(?:명단|정보|DB)|회원\s*정보|personal\s+(?:data|information)", re.IGNORECASE),
         "questions": [
             StrategicQuestion("OV-PI-001", 0, "처리 목적·범위",
                 "개인정보 처리 목적과 범위가 계약서에 명확히 특정되어 있는가?",
@@ -242,6 +245,7 @@ _USER_ISSUE_OVERRIDES: list[dict[str, Any]] = [
     },
     {
         "triggers": re.compile(r"하도급법|하도급|하수급인", re.IGNORECASE),
+        "structure": re.compile(r"하도급|하수급|수급사업자|원사업자|제조\s*위탁|수리\s*위탁|건설\s*위탁|용역\s*위탁|subcontract", re.IGNORECASE),
         "questions": [
             StrategicQuestion("OV-SUB-001", 0, "하도급 대금 지급",
                 "하도급 대금 지급 기준 및 지급 기간이 하도급법에 부합하는가?",
@@ -425,6 +429,7 @@ def generate_strategic_inquiry(
     existing_answers: dict[str, Any] | None,
     user_focus: str | None,
     our_role: str | None = None,
+    contract_text: str | None = None,
 ) -> list[dict[str, Any]]:
     """requirement.md > Strategic Inquiry + EMERGENCY PATCH 1/3/4/5 + CRITICAL FIX.
 
@@ -447,6 +452,12 @@ def generate_strategic_inquiry(
     override_qs: list[StrategicQuestion] = []
     for override in _USER_ISSUE_OVERRIDES:
         if override["triggers"].search(focus):
+            # 요청문의 낱말("하도급사인 ○○가 …")만으로 특정 법률 질문을 넣지 않는다 — 계약 본문에 그 법률관계의
+            # 구조 신호가 있어야 한다(2026-11-27, 국제 물품매매에 하도급법 질문이 주입된 실측). 본문을 받지 못한
+            # 호출(기존 호출부)은 종전처럼 요청문만 본다.
+            structure = override.get("structure")
+            if contract_text is not None and structure is not None and not structure.search(contract_text):
+                continue
             override_qs.extend(override["questions"])
     # 우선순위 0으로 앞에 삽입 (중복 question_id 제외)
     seen_override: set[str] = set()
