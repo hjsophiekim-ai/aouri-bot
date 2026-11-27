@@ -2090,7 +2090,15 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
         const res = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/json; charset=utf-8'}, body: JSON.stringify(payload) });
         if (!res.ok) {
           let errMsg = '수정본 생성 실패 (status ' + res.status + ')';
-          try { const ej = await res.json(); if (ej && ej.error) errMsg += ': ' + ej.error; } catch(_) {}
+          try {
+            const ej = await res.json();
+            if (res.status === 409 && ej && ej.blocked) {
+              // 오류가 아니라 의도된 보류 — 법무가 확인할 사유를 보여 준다(2026-11-27)
+              errMsg = '사업팀 전달본 보류(법무 확인 필요): ' + (Array.isArray(ej.reasons) ? ej.reasons.slice(0, 5).join(' / ') : '');
+            } else if (ej && ej.error) {
+              errMsg += ': ' + ej.error;
+            }
+          } catch(_) {}
           document.getElementById('confirmNote').innerText = errMsg;
           return;
         }

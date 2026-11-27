@@ -9854,7 +9854,9 @@ def build_clause_level_result(
             our_role=str(getattr(party, "our_role", "") or ""), our_label=str(getattr(party, "our_label", "") or ""),
             their_label=str(getattr(party, "counterparty_label", "") or ""), answers_text=_xb_answers,
             answers=answers if isinstance(answers, dict) else None,
-            request_text=str(review_focus or "") if isinstance(review_focus, str) else "",
+            # 사용자가 쓴 원문만 — review_focus 에는 AI 켜짐 시 시스템 지시문("[사용자 확인 사실관계 …] 판매자 … 재판매")이
+            # 덧붙어 있어, 그 낱말이 우리 거래 방향(구입 ↔ 판매)으로 읽혀 관점이 '충돌'로 판정됐다(2026-11-27 실측).
+            request_text=_user_review_focus_raw,
         )
         if meta["cross_border"].get("active"):
             from runtime.review.output_filter import build_final_findings as _bff_xb

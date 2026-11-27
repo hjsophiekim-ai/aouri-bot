@@ -195,6 +195,24 @@ class MiscTest(unittest.TestCase):
         self.assertIn("FOB", w)
         self.assertNotIn("판매하는", w)
 
+    def test_ai_fact_directive_is_not_read_as_user_words(self) -> None:
+        """AI 켜짐 시 review_focus 뒤에 붙는 시스템 지시문의 '판매자·재판매' 가 거래 방향으로 읽혀 관점이 '충돌'로
+        판정되고, 필수 검증 미해결 → 사업팀 전달본 보류(다운로드 409)가 났다(2026-11-27 실측)."""
+        from pathlib import Path
+
+        from runtime.review.canonical_transaction_facts import build_ai_fact_directive
+        from runtime.review.cross_border.perspective import resolve_perspective, user_words
+
+        text = (Path(__file__).resolve().parent / "fixtures" / "intl_sale_goods_fabric_anon.txt").read_text(encoding="utf-8")
+        req = "가나다가 이태리 업체로부터 원단을 수입하는 계약서. 관세·하자 조항 검토요청"
+        directive = build_ai_fact_directive({"seller": "Tessitura Esempio s.r.l.", "resale_structure": True})
+        self.assertIn("재판매", directive)
+        polluted = f"{req}\n\n{directive}"
+        self.assertNotIn("재판매", user_words(polluted))
+        p = resolve_perspective(text=text, request_text=polluted)
+        self.assertTrue(p["confirmed"], p)
+        self.assertEqual(p["our_role"], "buyer")
+
     def test_cross_border_loss_path_is_structured(self) -> None:
         from runtime.review.cross_border.findings import _loss_path_dict
 

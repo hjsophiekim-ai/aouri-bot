@@ -35,6 +35,8 @@ def user_words(request_text: str) -> str:
     2026-11-27 실측: 질문 문구에 든 거래 동사가 섞여 '구입하는 계약'이라는 요청이 충돌로 판정됐다.
     """
     t = str(request_text or "")
+    # 시스템이 덧붙인 AI 지시문은 사용자의 말이 아니다(“…판매자 … 재판매하는 구조” 가 거래 방향으로 읽히던 실측)
+    t = t.split("[사용자 확인 사실관계", 1)[0]
     head, sep, tail = t.partition("[사용자 확인 답변]")
     answers = []
     for ln in tail.splitlines():
