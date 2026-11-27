@@ -1,0 +1,122 @@
+원단 수입 매매 및 품질·대금 정산 계약서
+FABRIC IMPORT PURCHASE & QUALITY PAYMENT ADJUSTMENT AGREEMENT
+구매자 (Buyer / 이하 "갑")
+공급자 (Seller / 이하 "을")
+상호 (Company): GANADA CO. LTD
+사업자등록번호 (VAT/Tax ID): 123-45-67890 (1234567890)
+주소 (Address): 1F, 100, Saemple-ro, Jung-gu, 04500 Seoul, Korea
+대표자 (Representative): [대표자 성명 입력]
+상호 (Company): Tessitura Esempio s.r.l.
+등록번호 (VAT / Cod. Fisc.): IT12345678901 / 12345678901
+주소 (Address): Via Esempio, 1, 20100 Milano (MI), Italy
+대표자 (Representative): [대표자 성명 입력]
+본 계약서는 구매자(이하 "갑")가 공급자(이하 "을")로부터 수입·구매하는 가구용 원단(롤 원단 및 사각 규격 재단물)에 대하여, 대금 지급 조건(선급금 50%, 도착 검수 연동 잔금 50%), 선적 기한, 인도 조건(Incoterms), 입고 후 품질 검수 절차, 불량 발생 시 잔금 공제·정산 기준 및 준거법·분쟁 해결 절차를 명확히 정하여 상호 신뢰를 바탕으로 원활한 거래를 도모하기 위해 체결한다.
+(This Agreement is entered into by and between Buyer ("Party A") and Seller ("Party B") to clearly stipulate the terms of payment [50% Advance / 50% Balance], shipment schedule, Incoterms, post-arrival quality inspection procedures, payment deduction rules for defective goods, and governing law/dispute resolution in relation to the furnishing textiles purchased by Party A from Party B.)
+제1조 (목적 및 대상 거래 내역) / Article 1 (Purpose & Scope of Transaction)
+1. 본 계약은 "갑"이 "을"로부터 수입·구매하는 견적송장(Proforma Invoice No. 99/2026/XX1, 발행일 2026.11.18)상의 가구용 원단(롤 원단 및 사각 규격 재단물) 공급 조건, 납기, 품질 검수 및 하자 정산 기준을 규정함을 목적으로 한다. (This Agreement governs the supply terms, delivery, quality inspection, and defect settlement for furnishing textiles specified in Proforma Invoice No. 99/2026/XX1 dated 18/11/2026.)
+품목코드
+(Article Code)
+품명 및 규격
+(Description & Spec)
+단위
+(UM)
+수량
+(Qty)
+단가 (EUR)
+(Unit Price)
+금액 (EUR)
+(Amount)
+9999FMPWP 011
+PEACH+MONOEL. PES.+WR PFC FREE (135cm, 69%PL 26%NY 5%EA)
+ML
+70.00
+65.60
+4,592.00
+9999FMPWP 333
+PEACH+MONOEL. PES.+WR PFC FREE (135cm, 69%PL 26%NY 5%EA)
+ML
+70.00
+65.60
+4,592.00
+9999FSE4WT 011
+PEACH LY SQ 20 TOBLER 2+MONO+WR PFC FREE [CM 79X95 SCHIENALE]
+NR
+70.00
+57.20
+4,004.00
+9999FSE4WT 333
+PEACH LY SQ 20 TOBLER 2+MONO+WR PFC FREE [CM 79X95 SCHIENALE]
+NR
+70.00
+57.20
+4,004.00
+9999FSE5WT 011
+PEACH LY SQ 20 TOBLER 2+MONO+WR PFC FREE [CM 79X75 SEDUTA]
+NR
+70.00
+53.50
+3,745.00
+9999FSE5WT 333
+PEACH LY SQ 20 TOBLER 2+MONO+WR PFC FREE [CM 79X75 SEDUTA]
+NR
+70.00
+53.50
+3,745.00
+총 계약 금액 / Total Contract Amount (PI No. 99/2026/XX1)
+EUR 24,682.00
+※ 수량 허용 오차 정산 (Quantity Tolerance): 생산 공정상 발주 수량 대비 ±3% 범위 내 수량 증감이 발생할 수 있으나, 최종 대금은 실제 선적 및 검수 합격된 실수량(Actual Shipped & Accepted Quantity)을 기준으로 잔금에서 정산한다. (Subject to ±3% production tolerance; final payment shall be settled based on actual shipped and accepted quantity.)
+제2조 (대금 결제 조건: 선급금 50% / 잔금 50%) / Article 2 (Payment Terms: 50% Advance / 50% Balance)
+1. 총 계약 금액(EUR 24,682.00)은 상호 합의에 따라 선급금 50% 및 잔금 50% 조건으로 "을"의 지정 계좌(Banca Esempio / BIC: XXXXITMMXXX / IBAN: IT60X0542811101000000123456)로 전신송금(T/T) 지급한다.
+1. The Total Contract Amount (EUR 24,682.00) shall be paid by T/T to Seller's designated bank account (Banca Esempio / BIC: XXXXITMMXXX / IBAN: IT60X0542811101000000123456) on a 50% Advance + 50% Balance basis.
+2. 선급금 (50% Advance): 총 계약 금액의 50%인 EUR 12,341.00을 본 계약 체결 및 서명된 최종 견적송장(PI) 수령 후 [ 3 ]영업일 이내에 지급한다.
+2. Advance Payment (50%): EUR 12,341.00 (50% of total amount) shall be remitted within [ 3 ] business days after execution of this Agreement and receipt of signed PI.
+3. 잔금 (50% Balance - 도착 검수 연동): 총 계약 금액의 50%인 EUR 12,341.00은 선하증권 발행일(B/L Date)로부터 30일 이내 또는 한국 내 지정 창고 입고일로부터 [ 14 ]일 이내 중 늦게 도래하는 날까지 지급한다. 단, 물품이 한국 창고에 도착하여 제4조의 입고 검수를 완료하기 전까지는 잔금 지급 기한이 자동 유예되며, 실제 선적 수량 증감분 및 제5조에 따른 불량 공제액을 반영하여 최종 정산 지급한다. (견적서상의 만기일 '18/12/26' 표기는 적용하지 아니한다.)
+3. Balance Payment (50% - Linked to Arrival Inspection): EUR 12,341.00 shall be paid by the later of 30 days from the B/L date or [ 14 ] days after arrival at Party A's warehouse in Korea. The due date shall automatically be deferred until completion of arrival inspection under Article 4, and the final payable amount shall reflect actual shipped quantity and any deductions under Article 5. (The '18/12/26' due date on the PI is superseded.)
+제3조 (선적 기한 및 인도 조건 - Incoterms) / Article 3 (Shipment Schedule & Delivery Terms)
+1. 선적 기한 (Shipment Date): "을"은 선급금(50%) 입금 확인일로부터 [   ]주 (또는 [   ]일) 이내에 전 품목의 생산 및 포장을 완료하고 선적(출고)을 완료하여야 한다.
+1. Shipment Schedule: Seller shall complete production, packing, and shipment of all goods within [   ] weeks (or [   ] days) after receipt of the 50% advance payment.
+2. 인도 조건 (Incoterms 2020): 본 거래의 인도 조건은 [ FCA Milano / FOB / CIF 중 선택 - FCA 권장 ] 조건으로 한다. 견적서상의 "ASSEGNATO" 및 이탈리아 부가세 영세율 조항(NI ART 8/B)에 부합하도록 수출 통관 및 적재는 "을"의 책임으로 진행하며, "갑"은 EU 역외 반출 증빙(수출면장/B/L 사본 등) 확보에 협조한다. "을"은 Commercial Invoice, Packing List, B/L 및 한-EU FTA 원산지신고서(인증수출자 문구)를 지체 없이 제공한다.
+2. Delivery Terms (Incoterms 2020): The delivery term shall be [ FCA Milano / FOB / CIF - FCA Recommended ]. Clarifying 'ASSEGNATO' and Italian VAT exemption (NI ART 8/B) on the PI, Seller shall handle export customs clearance and loading, while Party A cooperates in providing proof of export outside the EU. Seller shall promptly provide CI, PL, B/L, and Korea-EU FTA Origin Declaration.
+3. 납기 지연 배상 (Liquidated Damages): "을"의 귀책사유로 약정된 선적 기한이 지연될 경우, 지연 1주(7일)당 총 계약 금액의 [ 0.5 ]% (최대 5% 한도)에 해당하는 지체상금을 잔금(50%)에서 공제한다.
+3. Liquidated Damages for Delay: In case of shipment delay attributable to Seller, liquidated damages of [ 0.5 ]% per week (capped at 5%) of the total contract amount shall be deducted from the 50% Balance.
+제4조 (품질 기준, 도착 검수 및 클레임 기한 연장) / Article 4 (Quality Standards, Inspection & Extended Claim Period)
+1. 품질 및 규격 기준: 공급 원단(롤 원단 135cm 및 사각 재단물 79×95cm, 79×75cm)은 합의된 사양과 일치해야 하며, 다음 결함이 발견된 경우 '부적합 원단(Defective Goods)'으로 확정한다.
+ 가. 표면·조직 결함: 올 튐, 올 풀림, 흠집, 스크래치, 구김, 코팅/발수 불량
+ 나. 오염·이색: 기름때, 얼룩, 염료 뭉침, 승인 샘플 대비 심한 색상 편차
+ 다. 치수·재단 불량: 사각 재단물의 약정 치수(79×95cm, 79×75cm) 허용 오차 초과, 직각도 불량, 재단면 풀림 (사각 재단물은 결함 1곳 발견 시 해당 1장[NR] 전체 불량 처리)
+1. Quality & Specification Standards: Supplied fabrics (135cm rolls and pre-cut pieces 79×95cm, 79×75cm) must conform to approved specs. Goods with the following defects shall be deemed 'Defective Goods':
+ (a) Surface/Weave: Snags, yarn flaws, scratches, tears, wrinkles, coating/WR defects;
+ (b) Stains/Shading: Oil stains, dye marks, severe color shading vs. approved sample;
+ (c) Cutting/Dimensions: Out of tolerance on 79×95cm or 79×75cm pieces, out-of-squareness, frayed edges (any defect on a cut piece counts as 1 full defective NR).
+2. 클레임 기한 연장 (견적서 7일 조항 수정): 견적송장(PI) 하단의 '수령 후 7일 이내 클레임 제기' 조항에도 불구하고, 국제 해상 운송 및 통관·입고 검수 소요 기간을 고려하여 "갑"의 품질 클레임 제기 기한은 한국 내 지정 창고 입고일로부터 [ 30 ]일 이내로 한다. 단, 원단을 재단·가공하기 전 상태에서 발견된 하자에 한한다.
+2. Extended Claim Period (Amending PI's 7-Day Clause): Notwithstanding the '7 days from receipt' clause on the PI, considering international shipping and customs clearance, Party A's claim period shall be within [ 30 ] days after arrival at Party A's warehouse in Korea, provided the fabric has not been cut or processed by Party A.
+3. 하자 통지 및 승인 절차: "갑"이 기간 내 불량 사진·영상 및 검수 보고서를 이메일로 통지하면, "을"은 수령 후 [ 5 ]영업일 이내에 서면 회신하여야 하며, 기한 내 이의 제기가 없을 경우 검수 결과를 승인한 것으로 본다.
+3. Defect Notice & Acceptance: Upon Party A's written notice with photo/video evidence and inspection report, Seller shall reply within [ 5 ] business days; failure to object constitutes full acceptance.
+제5조 (부적합 수량의 잔금 공제 및 정산) / Article 5 (Deduction of Defective Goods from Balance Payment)
+1. 잔금에서의 직접 공제: 제4조에 따라 확정된 부적합 원단(롤 원단 미터[ML] 또는 재단 원단 장수[NR])에 대해서는, 해당 부적합 수량에 계약 단가를 곱한 금액을 제2조 제3항의 '잔금(50%)'에서 전액 차감(공제)한 후 잔여 금액만을 최종 지급한다. (잔금 지급 기한은 클레임 정산 합의 완료일까지 자동 연장된다.)
+1. Direct Deduction from Balance: For confirmed defective goods (in ML for rolls or NR for cut pieces), Party A shall deduct the exact value (Defective Qty × Unit Price) directly from the 50% Balance payment and remit only the net remainder. (Balance due date shall be automatically extended until claim settlement is finalized.)
+【 잔금(50%) 최종 지급액 정산 공식 / Final 50% Balance Settlement Formula 】
+최종 잔금 지급액 = (실제 선적 수량 기준 총액 × 50%) - (부적합 수량 × 품목별 계약 단가) - (지체상금, 해당 시)
+Net Balance Payable = (Actual Shipped Value × 50%) - (Defective Qty × Contract Unit Price) - (Liquidated Damages, if any)
+2. 초과 불량 시 환급 및 폐기·반송: 부적합 금액 합계가 잔금(50%)을 초과할 경우 "을"은 청구일로부터 [ 5 ]영업일 이내에 초과분을 현금 환급(T/T)한다. 공제된 불량 원단은 "갑"이 자체 폐기하거나, "을"이 반송을 원할 경우 왕복 물류비 및 통관 제비용을 "을"이 전액 부담한다.
+2. Excess Refund & Disposal/Return: If defective value exceeds the 50% Balance, Seller shall refund the excess via T/T within [ 5 ] business days. Deducted defective goods may be scrapped by Party A, or returned at Seller's sole expense.
+제6조 (우선 효력, 준거법 및 분쟁 해결) / Article 6 (Precedence, Governing Law & Dispute Resolution)
+1. 우선 적용 효력: 본 계약서의 모든 조항은 견적송장(PI No. 99/2026/XX1) 하단의 이탈리아어·영문 부동문자 약관(7일 클레임 기한, 만기일 18/12/26 표기 등), 발주서(P/O), 상업송장(CI) 등 다른 모든 거래 서류의 내용에 우선하여 적용된다.
+1. Order of Precedence: The terms of this Agreement shall supersede and take precedence over all conflicting standard terms on PI No. 99/2026/XX1 (including the 7-day claim limit and 18/12/26 due date), P/O, CI, or other documents.
+2. 준거법 및 중재 (Governing Law & Arbitration): 본 계약은 국제물품매매계약에 관한 유엔협약(CISG) 및 대한민국 법(또는 중립국 법)을 준거법으로 한다. 본 계약과 관련하여 발생하는 모든 분쟁은 상호 우호적 협의로 해결하되, 해결되지 않을 경우 싱가포르국제중재센터(SIAC) 또는 대한상사중재원(KCAB)의 국제중재규칙에 따라 영어로 진행되는 중재에 의해 최종 해결한다.
+2. Governing Law & Arbitration: This Agreement shall be governed by the UN Convention on Contracts for the International Sale of Goods (CISG) and the laws of the Republic of Korea. Any dispute not amicably settled shall be finally resolved by arbitration in English under the rules of the Singapore International Arbitration Centre (SIAC) or Korean Commercial Arbitration Board (KCAB).
+3. 우선 언어 및 효력 발생: 본 계약서는 국·영문 병기 작성되었으며, 양 언어 간 해석상 차이가 있을 경우 영문본(English Version)을 우선으로 한다. 본 계약은 양 당사자의 권한 있는 서명권자가 서명한 스캔본(PDF) 또는 전자서명 교환에 의해 법적 효력을 가진다.
+3. Prevailing Language & Execution: This Agreement is executed in Korean and English; in case of any discrepancy, the English version shall prevail. This Agreement shall become legally binding upon exchange of signed scanned copies (PDF) or electronic signatures.
+계약 체결일 (Date of Execution): 2026년 11월 [      ]일 (November [      ], 2026)
+구매자 (Buyer) - "갑"
+공급자 (Seller) - "을"
+상호 (Company): GANADA CO. LTD
+등록번호 (VAT/Tax ID): 123-45-67890
+주소 (Address): 1F, 100, Saemple-ro, Seoul, Korea
+성명 / 직책 (Name / Title): ___________________________
+서명 (Authorized Signature): ___________________________
+상호 (Company): Tessitura Esempio s.r.l.
+등록번호 (VAT/Tax ID): IT12345678901
+주소 (Address): Via Esempio 1, Milano, Italy
+성명 / 직책 (Name / Title): ___________________________
+서명 (Authorized Signature): ___________________________

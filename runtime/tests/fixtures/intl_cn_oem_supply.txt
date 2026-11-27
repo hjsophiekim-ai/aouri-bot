@@ -1,0 +1,25 @@
+OEM 제품 공급 계약서
+OEM PRODUCT SUPPLY AGREEMENT
+구매자 (Buyer / 이하 "갑") | 공급자 (Supplier / 이하 "을")
+상호 (Company): 한결가구 주식회사
+주소 (Address): 서울특별시 중구 세종대로 100, 04500, Korea
+상호 (Company): Dongyang Furniture Manufacturing Co., Ltd.
+주소 (Address): No. 88 Industrial Road, Foshan, Guangdong, China
+본 계약서는 "갑"이 "을"에게 제조를 위탁하여 공급받는 사무용 의자(OEM 제품)의 사양, 대금, 인도 조건 및 품질 보증을 정하기 위해 체결한다. (This Agreement sets out the specifications, price, delivery terms and quality warranty for office chairs manufactured by Party B for Party A on an OEM basis.)
+제1조 (목적) / Article 1 (Purpose)
+1. 본 계약은 "을"이 "갑"의 사양에 따라 제조한 사무용 의자를 "갑"에게 공급하는 조건을 정한다. (This Agreement governs the supply by Party B to Party A of office chairs manufactured to Party A's specifications.)
+제2조 (대금 및 지급) / Article 2 (Price and Payment)
+1. 총 계약 금액은 USD 180,000.00으로 하며, "갑"은 선급금 30%를 발주 후 7일 이내에, 잔금 70%를 한국 내 지정 장소 인도 후 30일 이내에 전신송금(T/T)으로 지급한다.
+1. The total contract price is USD 180,000.00. Party A shall pay 30% Advance within seven (7) days after the purchase order and 70% Balance within thirty (30) days after delivery at the designated place in Korea by T/T.
+제3조 (인도 조건) / Article 3 (Delivery)
+1. 인도 조건은 DDP 서울 지정 창고, Incoterms 2020으로 한다. "을"은 발주일로부터 60일 이내에 인도를 완료하여야 한다.
+1. Delivery shall be made DDP Party A's designated warehouse in Seoul, Incoterms 2020. Party B shall complete delivery within sixty (60) days after the purchase order.
+제4조 (품질 보증) / Article 4 (Warranty)
+1. "을"은 인도일로부터 24개월간 제품의 재료 및 제조상 하자가 없음을 보증하며, 하자가 있는 제품은 "을"의 비용으로 교체한다.
+1. Party B warrants the Products against defects in materials and workmanship for twenty-four (24) months after delivery and shall replace any defective Product at its own cost.
+제5조 (준거법 및 중재) / Article 5 (Governing Law and Arbitration)
+1. 본 계약은 대한민국 법을 준거법으로 한다. 본 계약과 관련한 모든 분쟁은 중국국제경제무역중재위원회(CIETAC)의 중재규칙에 따라 상하이를 중재지로 하여 3인의 중재인이 영어로 진행하는 중재에 의하여 최종 해결한다.
+1. This Agreement shall be governed by the laws of the Republic of Korea. Any dispute arising out of this Agreement shall be finally resolved by arbitration administered by CIETAC under its Arbitration Rules, with the seat of arbitration in Shanghai, before three (3) arbitrators, in English.
+2. 본 계약은 국·영문으로 작성되며, 해석상 차이가 있을 경우 영문본이 우선한다.
+2. This Agreement is made in Korean and English; in case of any discrepancy, the English version shall prevail.
+계약 체결일 (Date of Execution): 2026년 12월 1일
