@@ -134,6 +134,14 @@ GROUP_ENTITIES: tuple[GroupEntity, ...] = (
         note="해외법인. 정확한 영문 법인명과 당사자성을 별도로 확인한다.",
     ),
     GroupEntity(
+        # 2026-11-09: 검토 신청서가 "시디즈 차이나"를 우리 계약 주체로 적었다(중국 매입·재판매 계약). 중문 등기 법인명은
+        # 계약서 서두에서 확인한다 — 여기에 추측해 적지 않는다.
+        key="sidiz_china", name="시디즈 차이나",
+        aliases=("시디즈차이나", "시디즈 중국", "SIDIZ China", "Sidiz China"),
+        kind=KIND_OVERSEAS, verify_legal_name=True,
+        note="해외법인. 계약서상 중문 등기 법인명·통일사회신용코드와 동일성을 확인한다.",
+    ),
+    GroupEntity(
         key="sidiz_america", name="시디즈 아메리카",
         aliases=("시디즈아메리카", "SIDIZ America", "Sidiz America"),
         kind=KIND_OVERSEAS, verify_legal_name=True,

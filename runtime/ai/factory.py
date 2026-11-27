@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from runtime.ai.cassette import maybe_wrap
 from runtime.ai.config import AIConfig, load_ai_config
 from runtime.ai.http_openai_compatible_provider import OpenAICompatibleHttpProvider
 from runtime.ai.mock_provider import MockAIProvider
@@ -32,6 +33,6 @@ def create_ai_provider(config: AIConfig | None = None) -> AIProvider:
         return MockAIProvider(label="mock")
     if provider == "anthropic":
         from runtime.ai.anthropic_provider import AnthropicProvider
-        return AnthropicProvider(api_key=cfg.api_key, model=cfg.model)
+        return maybe_wrap(AnthropicProvider(api_key=cfg.api_key, model=cfg.model))
     endpoint = cfg.endpoint or "https://api.openai.com/v1/chat/completions"
-    return OpenAICompatibleHttpProvider(api_key=cfg.api_key, endpoint=endpoint, model=cfg.model)
+    return maybe_wrap(OpenAICompatibleHttpProvider(api_key=cfg.api_key, endpoint=endpoint, model=cfg.model))

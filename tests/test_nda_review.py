@@ -1,5 +1,5 @@
 """
-Integration tests: Porsche Design GmbH x Fursys NDA
+Integration tests: Norden Design GmbH x Fursys NDA
 
 Before running:
   pip install pytest
@@ -19,8 +19,8 @@ CONFIDENTIALITY AGREEMENT
 
 between
 
-Porsche Design GmbH, Flugplatzstraße 29, 5700 Zell am See, Austria
-(hereinafter "PDG")
+Norden Design GmbH, Musterstraße 1, 5020 Salzburg, Austria
+(hereinafter "NDG")
 
 and
 

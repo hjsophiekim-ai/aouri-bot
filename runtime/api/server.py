@@ -2760,11 +2760,18 @@ def create_handler(service: RuleQueryService):
                         from runtime.review.deal_assessment import overlay_deal_rows as _overlay_deal_rows_docx
 
                         _user_coverage_docx = _overlay_deal_rows_docx(_user_coverage_docx, _deal_docx)
+                    # [거래 흐름 선검증의 요청별 답, 2026-11-09] 검토 파이프라인이 만든 같은 행을 싣는다.
+                    _flow_docx = clause_meta.get("deal_flow") if isinstance(clause_meta, dict) else None
+                    if isinstance(_flow_docx, dict) and _flow_docx.get("request_rows"):
+                        from runtime.review.deal_flow import overlay_rows as _overlay_flow_rows_docx
+
+                        _user_coverage_docx = _overlay_flow_rows_docx(_user_coverage_docx, _flow_docx)
                     _user_parse_notice_docx = str(
                         (_user_parse_meta_docx or {}).get("degraded_notice") or ""
                     )
-                    if _all_answered_docx(_user_coverage_docx):
-                        _user_parse_notice_docx = ""
+                    if _all_answered_docx(_user_coverage_docx) or (
+                            isinstance(_flow_docx, dict) and _flow_docx.get("request_rows")):
+                        _user_parse_notice_docx = ""   # 요청은 거래 흐름 단계가 항목별로 답했다
                     _unanswered_issues_docx = (
                         _check_issues_docx(_issue_answers_docx)
                         + _check_user_coverage_docx(_user_coverage_docx)
@@ -2940,6 +2947,25 @@ def create_handler(service: RuleQueryService):
                             build_business_brief_pdf as _brief_pdf,
                         )
 
+                        # 2026-11-03 지시 4·5항: 다운로드 검토의견서는 화면 검토의견서와 같은 단일 데이터(검토 결과·meta)로 만든다.
+                        # 이 경로가 다시 계산한 _docx_final 로 만들면 같은 조항의 등급·카드 순서가 화면과 달라졌다(6.5 화면 HIGH ↔ 다운로드 MEDIUM).
+                        if isinstance(clause_meta, dict) and isinstance(review_result, dict) \
+                                and isinstance(clause_meta.get("business_brief_sections"), list):
+                            from runtime.review.delivery_docs import brief_from_meta as _brief_from_meta
+
+                            _brief = _brief_from_meta(
+                                clause_results=review_result.get("clause_results") or [],
+                                meta=clause_meta,
+                                clauses=review_result.get("original_clauses") or original_clauses,
+                                contract_text=str(doc.get("text") or text or ""),
+                                answers=doc.get("answers") if isinstance(doc.get("answers"), dict) else answers,
+                                filename=str(((doc.get("input") or {}).get("filename")) or "") or (
+                                    str(filename) if isinstance(filename, str) else None),
+                            )
+                            doc_bytes = (_brief_pdf if _is_pdf else _brief_docx)(_brief)
+                            _binary_response(self, HTTPStatus.OK, doc_bytes, filename=f"aouribot_brief.{_out_ext}",
+                                             content_type=_out_content_type)
+                            return
                         _brief = _build_brief(
                             clause_results=_all_results,
                             high_issues=_docx_final.get("high_issues"),
@@ -2958,6 +2984,18 @@ def create_handler(service: RuleQueryService):
                             contract_text=text,
                             answers=answers,
                             filename=str(filename) if isinstance(filename, str) else None,
+                            # 화면 검토의견서와 같은 변경추적본 적용 결과·종합 권고·변환본 안내(검토 직후 meta 에 고정).
+                            apply_report=((clause_meta or {}).get("redline_apply_report")
+                                          if isinstance(clause_meta, dict) else None),
+                            overall_recommendation=str((clause_meta or {}).get("overall_recommendation") or "")
+                            if isinstance(clause_meta, dict) else "",
+                            source_note=str(((clause_meta or {}).get("tracked_source") or {}).get("notice") or "")
+                            if isinstance(clause_meta, dict) else "",
+                            # 계약 전체 상황별 검증 결과도 화면과 같은 값(검토 직후 meta 에 고정).
+                            deal_scenarios=((clause_meta or {}).get("deal_scenarios")
+                                            if isinstance(clause_meta, dict) and isinstance(clause_meta.get("deal_scenarios"), dict) else None),
+                            verification=((clause_meta or {}).get("verification_gate")
+                                          if isinstance(clause_meta, dict) and isinstance(clause_meta.get("verification_gate"), dict) else None),
                         )
                         doc_bytes = (_brief_pdf if _is_pdf else _brief_docx)(_brief)
                         _binary_response(self, HTTPStatus.OK, doc_bytes, filename=f"aouribot_brief.{_out_ext}",
@@ -2988,6 +3026,7 @@ def create_handler(service: RuleQueryService):
                             if isinstance(clause_meta, dict) else None
                         ),
                         deal_assessment=(clause_meta.get("deal_assessment") if isinstance(clause_meta, dict) else None),
+                        deal_flow=(clause_meta.get("deal_flow") if isinstance(clause_meta, dict) else None),
                     )
                 except Exception as exc:
                     _json_response(self, HTTPStatus.BAD_REQUEST, {"error": f"{_out_ext} generation failed", "detail": sanitize_error_message(str(exc))})
@@ -3203,55 +3242,20 @@ def create_handler(service: RuleQueryService):
                 _json_response(self, HTTPStatus.NOT_FOUND, {"error": str(exc)})
                 return
 
-            # 원본 DOCX bytes 확인
-            orig_b64 = doc.get("original_docx_b64")
-            if not orig_b64:
-                _json_response(self, HTTPStatus.BAD_REQUEST, {
-                    "error": "원본 DOCX가 세션에 없습니다. DOCX 파일로 업로드한 세션만 지원합니다.",
-                    "hint": "Upload a .docx file (not txt/pdf) to enable redline generation."
-                })
-                return
-            original_bytes = base64.b64decode(orig_b64)
-
             # 검토 결과 확인 (없으면 빠른 재실행)
             review_result = doc.get("review_result")
             if not (isinstance(review_result, dict) and isinstance(review_result.get("clause_results"), list)):
                 review_result = run_review_with_session(service, session_id)
 
-            clause_results = review_result.get("clause_results") or []
-            entity = str(doc.get("entity") or "퍼시스")
             filename_base = (doc.get("input") or {}).get("filename") or "contract"
             stem = filename_base.rsplit(".", 1)[0] if "." in filename_base else filename_base
 
-            # original_clauses 세션에서 조회 (정확한 단락 매칭용)
-            original_clauses: list[dict] = []
-            if isinstance(review_result, dict) and isinstance(review_result.get("original_clauses"), list):
-                original_clauses = review_result.get("original_clauses") or []
-            if not original_clauses and isinstance(doc.get("original_clauses"), list):
-                original_clauses = doc.get("original_clauses") or []
-
+            # 변경추적 기준 문서: DOCX 업로드는 원본, PDF·HWP 등은 검증된 추출 텍스트로 만든 DOCX 변환본(2026-11-02 지시 6항).
+            # 종전에는 PDF 세션이 400 으로 막혀 수정안을 반영한 Word 파일을 받을 수 없었다.
             try:
-                author = body.get("author") or "퍼시스법무"
-                from datetime import datetime, timezone
-                date_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                # docx_redline 엔진 우선 사용 (위치 기반 정확한 추적 변경)
-                if original_clauses:
-                    from runtime.review.docx_redline import build_redline_docx as _build_rdl
-                    redline_bytes, clean_bytes = _build_rdl(
-                        docx_bytes=original_bytes,
-                        original_clauses=original_clauses,
-                        clause_results=clause_results,
-                        author=author,
-                        date=date_str,
-                    )
-                else:
-                    # fallback: 패턴 기반 (original_clauses 없을 때)
-                    redline_bytes, clean_bytes = build_redline_from_analysis(
-                        original_bytes=original_bytes,
-                        clause_results=clause_results,
-                        author=author,
-                        date=date_str,
-                    )
+                from runtime.review.delivery_docs import DEFAULT_AUTHOR, build_tracked_docs
+
+                docs = build_tracked_docs(doc, review_result, author=str(body.get("author") or DEFAULT_AUTHOR))
             except Exception as exc:
                 from runtime.ai.safe import sanitize_error_message
                 _json_response(self, HTTPStatus.INTERNAL_SERVER_ERROR, {
@@ -3259,7 +3263,23 @@ def create_handler(service: RuleQueryService):
                     "detail": sanitize_error_message(str(exc))
                 })
                 return
+            if docs is None:
+                _json_response(self, HTTPStatus.BAD_REQUEST, {
+                    "error": "변경추적 기준 문서를 만들 수 없습니다 — 세션에 원본 DOCX도 추출 텍스트도 없습니다.",
+                })
+                return
+            redline_bytes, clean_bytes = docs["redline"], docs["clean"]
+            if docs["source"].converted:
+                stem = f"{stem}_DOCX변환본"
 
+            if want_clean and docs.get("final_blocked"):
+                # 검토서에 '수정 반영' 으로 보인 문구가 Word 재생성 후에도 들어가지 않았다 — 최종본(클린본)을 내보내지 않는다(2026-11-12).
+                # 변경추적본(검증 미통과 초안 표지)은 그대로 받을 수 있다.
+                _json_response(self, HTTPStatus.CONFLICT, {
+                    "error": "최종본 출력 차단 — 검토서의 수정 문구가 Word 수정본에 반영되지 않았습니다(제안만 있음·파일 미반영).",
+                    "items": docs.get("final_blocked_items") or [],
+                })
+                return
             if want_clean:
                 out_bytes = clean_bytes
                 out_name = f"clean_{stem}.docx"

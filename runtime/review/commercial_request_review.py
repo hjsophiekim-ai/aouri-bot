@@ -244,15 +244,27 @@ def _settlement(found: list[Any], *, model: Any, protections: list[Any]) -> tupl
                   "있습니다. 현행 유지가 적정합니다."), []
 
 
+def _is_korean_text(text: str) -> bool:
+    hangul = sum(1 for ch in text if "가" <= ch <= "힣")
+    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    return hangul > 0 and hangul * 2 >= latin
+
+
+_RX_FOREIGN_FORUM = _rx(r"외국|국제|중재|ICC|SIAC|독일|미국|영국|중국|싱가포르|홍콩|일본|[A-Za-z]{4,}\s+(?:court|law)")
+
+
 def _jurisdiction(found: list[Any], *, model: Any, protections: list[Any]) -> tuple[str, str, list[str]]:
     text = " ".join(_flat(_attr(c, "text")) for c in found)
+    if _RX_FOREIGN_FORUM.search(text):
+        return V_FACTS, ("외국 법원·중재 또는 외국법이 정해져 있어 국내 관할 기준으로 적정 여부를 판단할 수 없습니다. "
+                         "분쟁 시 절차 비용·언어·집행 가능성을 따로 검토해야 합니다."), []
     if re.search(r"서울중앙지방법원|합의관할", text):
         return V_OK, ("국내 법인 간 계약에서 서울중앙지방법원을 제1심 합의관할로 정해 두어 현행 유지가 적정합니다."), []
     if re.search(r"주소지|본점\s*소재지", text):
         return V_OK, ("상대방 주소지 관할법원으로 되어 있으나, 두 당사자 모두 서울 소재 국내 법인이어서 실제 "
                       "불이익은 크지 않습니다. 원하면 '서울중앙지방법원을 제1심 전속적 합의관할법원으로 한다'로 "
                       "정리할 수 있으나 필수 수정사항은 아닙니다."), []
-    return V_OK, "국내 법인 간 계약의 일반적인 관할 조항으로 현행 유지가 적정합니다.", []
+    return V_OK, "국내 법원을 관할로 정한 일반적인 관할 조항으로 현행 유지가 적정합니다.", []
 
 
 def _damages_cap(found: list[Any], *, model: Any, protections: list[Any]) -> tuple[str, str, list[str]]:
@@ -295,6 +307,11 @@ def review_commercial_requests(
         if topic is None:
             continue
         found = _find(topic, clauses)
+        # 이 분석기들은 국문 상거래 계약의 문형·결론(서울중앙지방법원, 국문 제안 문구)을 쓴다. 근거 조항을
+        # 못 찾았거나 국문이 아니면 답하지 않는다 — 실측(2026-11-02 Norden, 독일법·슈투트가르트 전속관할):
+        # 조항을 못 찾고도 "국내 법인 간 계약의 일반적인 관할 조항으로 현행 유지가 적정합니다" 로 답했다.
+        if not found or not _is_korean_text(" ".join(_attr(c, "text") for c in found)):
+            continue
         verdict, conclusion, proposed = _ANALYZERS[topic.key](found, model=model, protections=protections or [])
         out.append(RequestReview(
             question=q, topic=topic.key, verdict=verdict, clauses=_paths(found),

@@ -159,7 +159,16 @@ class ClauseIndex:
             return 1.0
         matcher = SequenceMatcher(None, needle, hay, autojunk=False)
         block = matcher.find_longest_match(0, len(needle), 0, len(hay))
-        return block.size / len(needle) if needle else 0.0
+        if not needle:
+            return 0.0
+        # 가장 긴 연속 일치만 세면 줄 끝 하이픈("construc-tion")·페이지 경계 하나로 진짜 인용이 반토막 점수가 된다
+        # (2026-11-02 Norden: 제9.9조 65%, 제16.8조 72% 로 실재 원문이 "가짜 인용" 이 됐다). 같은 자리 근처 창에서
+        # 의미 있는 길이(8자 이상)의 일치 조각을 모두 센다 — 지어낸 문장은 조각이 짧고 흩어져 여전히 낮다.
+        start = max(0, block.b - block.a - 40)
+        window = hay[start: start + len(needle) + 120]
+        local = SequenceMatcher(None, needle, window, autojunk=False)
+        matched = sum(b.size for b in local.get_matching_blocks() if b.size >= 8)
+        return max(block.size, matched) / len(needle)
 
     # ── 신설 조항 (지시 항목 2·6) ────────────────────────────────────────────
 

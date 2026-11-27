@@ -210,6 +210,8 @@ def build_legal_review_pdf(
     statute_gate_decisions: list[dict[str, Any]] | None = None,
     # [2026-10-30] 거래 전체 판단 — DOCX 와 같은 줄.
     deal_assessment: dict[str, Any] | None = None,
+    # [2026-11-09] 우리 역할·실제 거래 흐름·상황별 손실·숫자 재계산 — 조항 검토보다 먼저 보인다.
+    deal_flow: dict[str, Any] | None = None,
 ) -> bytes:
     """Generate a lawyer-grade contract review PDF.
 
@@ -258,6 +260,8 @@ def build_legal_review_pdf(
     _body(pdf, "표시 기준: HIGH/필수수정=빨간색 · MEDIUM/권장수정=주황색 · LOW/참고=파란색(기본 숨김)", size=9)
 
     from runtime.review.deal_report import deal_section_lines, request_row_lines, requests_complete
+    from runtime.review.deal_flow import section_lines as _flow_section_lines
+    _render_lines(pdf, _flow_section_lines(deal_flow))
     _render_lines(pdf, deal_section_lines(deal_assessment))
     _requests_done = requests_complete(user_review_coverage)
 

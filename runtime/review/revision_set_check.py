@@ -202,7 +202,9 @@ def check_revision_set(
         report["status"] = "SKIPPED_STRUCTURE_UNCERTAIN"
         return report
     last_article = max(int(a) for a in articles if a.isdigit())
-    body = str(contract_text or "")
+    # 추출 본문의 쪽 표지("[페이지 12]")가 문장 가운데 끼어 있으면, 쪽을 넘는 실재 문장이 "원문에 없음" 으로 보류됐다
+    # (2026-11-02 Norden 제9.9조·제16.8조·제9.2조 — 조항 원문에는 그대로 있는 문장).
+    body = re.sub(r"\[\s*페이지\s*\d+\s*\]", " ", str(contract_text or ""))
 
     edits = [(cr, cr["redline_instruction"]) for cr in clause_results
              if _live(cr) and isinstance(cr.get("redline_instruction"), dict)

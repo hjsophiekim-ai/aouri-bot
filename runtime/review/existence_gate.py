@@ -633,6 +633,16 @@ def enforce_existence_gate(
 
         # 가짜 인용만 문제라면 그 칸만 비운다 — 지적 자체는 살아 있다.
         fake_only = all(v["code"] == STATUS_FAKE_QUOTE for v in violations)
+        _ri_q = cr.get("redline_instruction") if isinstance(cr.get("redline_instruction"), dict) else {}
+        _target_q = str(_ri_q.get("target_text") or "").strip()
+        if fake_only and _target_q and _is_quote_claim(_target_q) and index.quote_exists(_target_q):
+            # 원문 칸의 인용은 어긋났지만 수정 대상 문장(target_text)은 계약서에 그대로 있다 — 그 문장으로 원문을 다시
+            # 잡는다. 비워 버리면 출력 필터가 원문 없는 지적을 버려, 실재 조항에 대한 HIGH 지적이 사라진다(2026-11-02).
+            cr["original_text"] = _target_q
+            cr["quote_regrounded"] = True
+            entry["remediation"] = "quote_regrounded_to_target"
+            kept.append(cr)
+            continue
         if fake_only:
             # 부재를 지적하는 항목이면 빈칸이 아니라 "없다" 고 적는다(지시 항목 6).
             # 빈칸으로 두면 출력 필터가 항목 자체를 버려 지적이 사라진다.

@@ -289,7 +289,8 @@ def _strip_retention(text: str, our_labels: tuple[str, ...] = ()) -> str:
     """소유권이 우리에게 남는다는 문장을 지운 본문."""
     out: list[str] = []
     ours = [re.escape(x) for x in our_labels if x]
-    rx_ours = re.compile(rf"(?:{'|'.join(ours)})\s*(?:에게|에)\s*귀속") if ours else None
+    # "소유권은 … 갑에게 이전된다"(갑=우리)도 소유권이 우리에게 오는 문장이다 — 우리가 먼저 넘기는 구조가 아니다(2026-11-09 실측).
+    rx_ours = re.compile(rf"(?:{'|'.join(ours)})\s*(?:에게|에)\s*(?:귀속|이전)") if ours else None
     for m in _RX_SENTENCE.finditer(text or ""):
         s = m.group(0)
         if "소유권" in s and (_RX_RETENTION.search(s) or (rx_ours and rx_ours.search(s))):

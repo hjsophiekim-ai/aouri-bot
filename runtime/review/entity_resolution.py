@@ -68,9 +68,17 @@ _RX_ORG_KO_PREFIX = re.compile(rf"{_CORP}\s*{_NAME}")
 _RX_ORG_KO_SUFFIX = re.compile(rf"(?<![가-힣A-Za-z0-9])[가-힣A-Za-z0-9&][가-힣A-Za-z0-9&·.\-]+\s*{_CORP}")
 _RX_ORG_EN = re.compile(
     r"\b[A-Z][A-Za-z0-9&.\-]*(?:\s+[A-Z][A-Za-z0-9&.\-]*)*,?\s+"
-    r"(?:Inc\.?|Co\.,?\s*Ltd\.?|Ltd\.?|LLC|GmbH|Corporation|Corp\.?|Limited)"
+    r"(?:Inc\.?|Co\.,?\s*Ltd\.?|Ltd\.?|LLC|GmbH|Corporation|Corp\.?|Limited"
+    r"|m\.\s?b\.\s?H\.?|AG\b|S\.A\.|B\.V\.|Pte\.?\s*Ltd\.?|S\.p\.A\.|PLC|SAS\b|K\.K\.)"
 )
-_RX_ALIAS = re.compile(r"이하\s*[“\"'‘]\s*([^”\"'’]{1,20}?)\s*[”\"'’]")
+_RX_ALIAS = re.compile(
+    r"이하\s*[“\"'‘]\s*([^”\"'’]{1,20}?)\s*[”\"'’]"
+    # 영문 서두: `… Austria, ["NDG"]`, `(the "Licensor")`, `(hereinafter referred to as "Customer")`
+    # — 국문 "이하" 만 읽어 영문 계약의 당사자 지도가 비었다(2026-11-02 Norden 실측).
+    r"|[\[(]\s*(?:hereinafter\s+(?:referred\s+to\s+as\s+)?|the\s+)?(?:the\s+)?[“\"'‘]\s*"
+    r"([A-Z][^”\"'’\])]{0,29}?)\s*[”\"'’]\s*[\])]",
+    re.IGNORECASE,
+)
 _RX_PLACEHOLDER = re.compile(r"_{3,}|○{2,}|\[\s*\]")
 #: 당사자란의 부가 정보 줄 — 이름 줄로 읽지 않는다.
 _RX_META_LINE = re.compile(r"^\s*(?:대표|주소|연락처|사업자|전화|담당|참여|회사명|성명|\(인\)|이하)")
@@ -304,7 +312,7 @@ def _extract_preamble_parties(preamble: str) -> list[PartyRecord]:
     for i, line in enumerate(lines):
         prev_end = 0
         for am in _RX_ALIAS.finditer(line):
-            label = am.group(1).strip()
+            label = (am.group(1) or am.group(2) or "").strip()
             # 인라인: "(이하" 앞의 이름 — **앞 약칭 뒤부터**만 본다. 줄 전체를 보면
             # "㈜비디앤에스(이하 “을”)는 “갑”의 광고주 [시디즈] (이하 “광고주”)" 의 광고주가
             # ㈜비디앤에스가 됐다(2026-10-07 브랜디드 콘텐츠 계약 실측).

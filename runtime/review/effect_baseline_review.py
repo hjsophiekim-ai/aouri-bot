@@ -295,6 +295,12 @@ from runtime.review.clause_direction import (  # noqa: E402
 )
 
 
+def _is_korean_clause(text: str) -> bool:
+    hangul = sum(1 for ch in text if "가" <= ch <= "힣")
+    latin = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    return hangul > 0 and hangul * 2 >= latin
+
+
 def _clause_attr(clause: Any, name: str) -> str:
     if isinstance(clause, dict):
         return str(clause.get(name) or "")
@@ -342,6 +348,12 @@ def run_effect_baseline_review(
         title = _clause_attr(clause, "title") or _clause_attr(clause, "clause_title")
         text = _clause_attr(clause, "text")
         if not text.strip():
+            continue
+        # 이 점검들의 근거는 한국법(저작권법 제45조 등)이고 보완 문구도 국문이다. 국문이 아닌 조항에 걸면
+        # 외국법 준거 계약에 한국법 결론을 붙이고, 영문 조항 뒤에 국문 문장을 끼워 넣는다 — 실측(2026-11-02
+        # Norden 디자인 라이선스): NDG 소유 디자인의 이용허락 조항(7.1)에 "2차적저작물작성권 포함, 매체·기간·
+        # 지역 제한 없음" 국문 문장이 붙었다. 영문 조항은 AI 조항 검토가 원문 언어로 다룬다.
+        if not _is_korean_clause(text):
             continue
         effects = classify_clause_effects(title=title, text=text)
 

@@ -11,6 +11,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+class _RliDisabled(Exception):
+    """수정안 무결성 게이트를 끈 실행(AOURIBOT_REDLINE_INTEGRITY=off) — 비교 증거용."""
+
 from runtime.ai.enhance import _try_json
 from runtime.ai.http_openai_compatible_provider import build_messages
 from runtime.ai.provider import AIProvider, AIRequest
@@ -59,7 +63,7 @@ CLAUSE_REVIEW_SYSTEM = (
     "각 원소 형식: clause_id / rewrite_reason / suggested_rewrite / changed_segments / "
     "risk_tier / must_fix / worst_case_scenario / negotiation_strategy\n"
     "- worst_case_scenario: 분쟁 발생 시 퍼시스가 직면할 최악의 구체적 상황 1~2문장 (null 허용)\n"
-    "- negotiation_strategy: PDG 또는 상대방과의 구체적 협상 전략 (null 허용)\n"
+    "- negotiation_strategy: NDG 또는 상대방과의 구체적 협상 전략 (null 허용)\n"
     "risk_tier와 must_fix는 입력값을 그대로 유지하라. 코드펜스/설명 문장 절대 금지."
 )
 
@@ -6072,14 +6076,27 @@ def build_clause_level_result(
     # 우리 약칭("알로소")을 넘긴다 — "소유권은 알로소에 귀속"은 소유권이 넘어가는
     # 문장이 아니다. 거래 원형은 선이행 보증 요구가 거래관행상 맞는지를 정한다.
     _our_party_for_chain = _entity_resolution.our_company
+    # [거래 흐름 선검증 — 우리 역할, 2026-11-09] 검토 신청서·서두·서명란을 대조해 이 계약에서 우리 호칭을 먼저 정한다.
+    # 당사자 지도가 비면(실측: 중문 법인명 계약) 선급금을 내고 소유권을 받는 우리를 '먼저 넘기는 쪽'으로 읽었다.
+    _flow_role_early = None
+    try:
+        from runtime.review import deal_flow as _dflow_early
+
+        _flow_role_early = _dflow_early.resolve_role(
+            str(text or ""), str(review_focus or "") if isinstance(review_focus, str) else "", str(entity or ""),
+            flow_hint={"price_payer": _dflow_early.extract_flow(
+                clauses, [p.label for p in _dflow_early.parse_parties(str(text or ""))], str(text or "")).price_payer})
+    except Exception as exc:  # noqa: BLE001 - 역할 선판정 실패는 기록만(아래 거래 흐름 단계가 다시 판단)
+        logger.warning("early role resolution failed: %s", exc)
     _effect_chains = _build_chains(
         text=str(text or ""),
         archetype=str(getattr(_legal_state, "transaction_type", "") or ""),
         our_labels=tuple(
             x for x in (
-                (_our_party_for_chain.label, _our_party_for_chain.brand_name,
-                 _our_party_for_chain.legal_entity_name)
-                if _our_party_for_chain is not None else ()
+                ((_our_party_for_chain.label, _our_party_for_chain.brand_name,
+                  _our_party_for_chain.legal_entity_name)
+                 if _our_party_for_chain is not None else ())
+                + ((_flow_role_early.our_label,) if _flow_role_early is not None and _flow_role_early.confirmed else ())
             ) if x
         ),
     )
@@ -9715,6 +9732,271 @@ def build_clause_level_result(
         logger.warning("contract isolation gate failed: %s", exc)
         meta["contract_isolation_gate"] = {"error": str(exc)}
 
+    # ── [조항 지목 요청 직접 검토] (2026-11-02 Norden 실측) ───────────────────────
+    # 담당자가 조항번호로 물은 요청은 그 조항 원문에 붙여 AI 가 직접 판단하고, 수정안은 코드가 검증한다. 앞의 게이트들이
+    # 영문 조항의 지적을 국문 기준으로 지워도 요청의 답·수정안이 사라지지 않게 마지막 단계(수정안 전부 반영 검증 직전)에 둔다.
+    if ai_provider is not None and isinstance(review_focus, str) and review_focus.strip():
+        try:
+            from runtime.review import requested_clause_review as _rcr
+
+            _rcr_reviews = _rcr.run_requested_clause_review(
+                provider=ai_provider, model=str(ai_model or ""), review_focus=review_focus,
+                clauses=clauses, contract_text=str(text or ""),
+                facts=_rcr.deal_facts(contract_text=str(text or ""), clauses=clauses,
+                                      parties=list(_entity_resolution.parties),
+                                      our_display=str(_entity_resolution.our_company_display() or entity or "")),
+                answers=answers if isinstance(answers, dict) else None,
+                questions=[q if isinstance(q, dict) else getattr(q, "__dict__", {}) for q in (asked_questions or [])],
+                clause_results=clause_results,
+                timeout_sec=float(ai_timeout_sec or 120.0),
+                max_tokens=max(3000, int(ai_max_tokens or 3000)),
+            )
+            if _rcr_reviews:
+                _rcr_findings = _rcr.to_findings(_rcr_reviews)
+                _rcr_superseded = _rcr.supersede_same_clause(clause_results, _rcr_findings)
+                clause_results.extend(_rcr_findings)
+                # 영문 등 국문이 아닌 계약: 요청 밖의 HIGH/MEDIUM 지적도 같은 방식(원문 대조·검증된 최소 수정안)으로 다시 본다.
+                # 국문 규칙·게이트를 거친 지적은 영문 조항에서 규칙 이름이 제목이 되고 "원문 + [추가 권고]" 로 같은 의무를 두 번 적는다.
+                if _rcr._is_latin(str(text or "")[:20000]):
+                    _fblocks = _rcr.finding_review_blocks(
+                        clause_results, covered_paths={f.get("display_path") for f in _rcr_findings})
+                    if _fblocks:
+                        _f_reviews = _rcr.run_requested_clause_review(
+                            provider=ai_provider, model=str(ai_model or ""), review_focus="", clauses=clauses,
+                            contract_text=str(text or ""),
+                            facts=_rcr.deal_facts(contract_text=str(text or ""), clauses=clauses,
+                                                  parties=list(_entity_resolution.parties),
+                                                  our_display=str(_entity_resolution.our_company_display() or entity or "")),
+                            answers=answers if isinstance(answers, dict) else None,
+                            clause_results=clause_results, blocks=_fblocks,
+                            timeout_sec=float(ai_timeout_sec or 120.0), max_tokens=max(3000, int(ai_max_tokens or 3000)),
+                        )
+                        _f_findings = _rcr.to_findings(_f_reviews)
+                        _rcr_superseded += _rcr.supersede_same_clause(clause_results, _f_findings)
+                        clause_results.extend(_f_findings)
+                        _rcr_findings += _f_findings
+                        _rcr_reviews += _f_reviews
+                # 계약 전체 쟁점을 한 번에 비교해 위험도·조치·요청 반영 상태를 조정한다(2026-11-02: 9건 중 8건 HIGH 부풀림).
+                _cal = _rcr.calibrate_reviews(
+                    ai_provider, model=str(ai_model or ""), reviews=_rcr_reviews,
+                    facts=_rcr.deal_facts(contract_text=str(text or ""), clauses=clauses,
+                                          parties=list(_entity_resolution.parties),
+                                          our_display=str(_entity_resolution.our_company_display() or entity or "")),
+                    timeout_sec=float(ai_timeout_sec or 120.0))
+                meta["requested_clause_calibration"] = _cal
+                # [계약 전체 상황별 검증] (2026-11-03) 요청마다 따로 만든 수정안을 모두 넣은 계약으로 책임 방향·조항 충돌·한도,
+                # 연장 요건, 종료 후 활동(로열티 대상·A/S·지역 제한)을 상황별로 계산한다. 문제는 관련 요청을 함께 AI 로 고치고,
+                # 그래도 의미가 뒤집히거나 충돌하는 수정안은 내보내지 않는다(보류).
+                _scn_changed = False
+                try:
+                    from runtime.review.scenario_gate import parties_from as _scn_parties, run_scenario_gate as _scn_gate
+
+                    _scn = _scn_gate(
+                        reviews=_rcr_reviews, clauses=clauses, contract_text=str(text or ""),
+                        parties=_scn_parties(_entity_resolution), request_text=str(review_focus or ""),
+                        answers_text=_rcr._answers_text(answers if isinstance(answers, dict) else None,
+                                                        [q if isinstance(q, dict) else getattr(q, "__dict__", {})
+                                                         for q in (asked_questions or [])]),
+                        provider=ai_provider, model=str(ai_model or ""),
+                        facts=_rcr.deal_facts(contract_text=str(text or ""), clauses=clauses,
+                                              parties=list(_entity_resolution.parties),
+                                              our_display=str(_entity_resolution.our_company_display() or entity or "")),
+                        timeout_sec=float(ai_timeout_sec or 150.0))
+                    meta["deal_scenarios"] = _scn
+                    _scn_changed = bool(_scn.get("repair_log") or _scn.get("held_by_gate") or _scn.get("problems"))
+                except Exception as _scn_exc:  # noqa: BLE001 - 검증 실패는 기록하고 검토 결과는 남긴다
+                    logger.warning("deal scenario gate failed: %s", _scn_exc, exc_info=True)
+                    meta["deal_scenarios"] = {"error": str(_scn_exc)}
+                if _cal.get("changed") or _scn_changed:
+                    _old_ids = {id(f) for f in _rcr_findings}
+                    clause_results[:] = [c for c in clause_results if id(c) not in _old_ids]
+                    _rcr_findings = _rcr.to_findings(_rcr_reviews)
+                    clause_results.extend(_rcr_findings)
+                meta["user_review_coverage"] = _rcr.merge_coverage(
+                    meta.get("user_review_coverage"), _rcr.coverage_rows(_rcr_reviews, _rcr_findings))
+                meta["requested_clause_review"] = _rcr.summary(_rcr_reviews, _rcr_findings, _rcr_superseded)
+                from runtime.review.output_filter import build_final_findings as _bff_rcr
+
+                meta["final_findings"] = _bff_rcr(
+                    clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+                )
+        except Exception as exc:  # noqa: BLE001 - 이 단계 실패가 검토 결과 전체를 막지 않는다(기록은 남긴다)
+            logger.warning("requested clause review failed: %s", exc, exc_info=True)
+            meta["requested_clause_review"] = {"error": str(exc)}
+
+    # ── [거래 흐름 선검증] (2026-11-09) ─────────────────────────────────────────────
+    # 우리 역할(신청서·서두·서명란 대조) → 실제 지급·인도·검수·소유권 흐름 → 상황별 손실 → 숫자 재계산 → 사실관계 대조
+    # (반대 전제의 수정안 삭제·재작성) → 검토 지침을 본문에서 메모로 분리 → 핵심 위험 조항+연결 조항 수정 문구 → 요청별 답.
+    # 필수 검증보다 먼저 둔다 — 검증이 확정된 우리 당사자로 방향을 보게 한다.
+    _deal_flow: dict[str, Any] = {}
+    try:
+        from runtime.review import deal_flow as _dflow
+        from runtime.review.requested_clause_review import _answers_text as _df_answers_text
+
+        _deal_flow = _dflow.run_deal_flow_stage(
+            text=str(text or ""), clauses=clauses, clause_results=clause_results,
+            request_text=str(review_focus or "") if isinstance(review_focus, str) else "",
+            answers_text=_df_answers_text(answers if isinstance(answers, dict) else None,
+                                          [q if isinstance(q, dict) else getattr(q, "__dict__", {}) for q in (asked_questions or [])]),
+            entity=str(entity or ""),
+        )
+        meta["deal_flow"] = _deal_flow
+        if _deal_flow.get("request_rows"):
+            meta["user_review_coverage"] = _dflow.overlay_rows(meta.get("user_review_coverage"), _deal_flow)
+        _df_role = _deal_flow.get("role") or {}
+        if _df_role.get("confirmed"):
+            _dcp = meta.get("detailed_contract_profile") if isinstance(meta.get("detailed_contract_profile"), dict) else None
+            if _dcp is not None:
+                _dcp["our_party"] = (f"{_df_role.get('our_contract_name') or _df_role.get('our_request_name')}"
+                                     f"({_df_role.get('our_label')}, {_df_role.get('our_role')})")
+                _dcp["counterparty"] = (f"{_df_role.get('counterparty_name') or '법인명 공란'}"
+                                        f"({_df_role.get('counterparty_label')}, {_df_role.get('counterparty_role')})")
+        # 지정 조항(예: "선급금 회수 리스크(제7조)")을 흐름 기반 답과 수정안이 다뤘으면 앞 단계의 '지정 조항 누락' 판정을 거둔다.
+        if str(meta.get("review_status") or "") == "REVIEW_FAILED_USER_FOCUS_DROPPED" and _deal_flow.get("request_rows"):
+            _answered_paths = {re.sub(r"\s", "", p) for r in _deal_flow["request_rows"]
+                               if str(r.get("judgment") or "").strip() and not r.get("held")
+                               for p in re.findall(r"제\s*\d+\s*조", str(r.get("original_user_text") or ""))}
+            _still = [x for x in (meta.get("user_focus_review") or []) if isinstance(x, dict) and x.get("missing")
+                      and re.sub(r"\s", "", str(x.get("target") or "")) not in _answered_paths]
+            if not _still:
+                for x in meta.get("user_focus_review") or []:
+                    if isinstance(x, dict) and x.get("missing"):
+                        x["missing"] = []
+                        x["answered_by"] = "deal_flow"
+                meta["review_status_superseded"] = {"was": meta.get("review_status"), "detail": meta.get("review_status_detail"),
+                                                    "by": "deal_flow 요청별 답"}
+                meta["review_status"] = ""
+                meta["review_status_detail"] = ""
+        from runtime.review.output_filter import build_final_findings as _bff_flow
+
+        meta["final_findings"] = _bff_flow(
+            clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - 실패를 통과로 처리하지 않는다(미해결로 남겨 최종본 표시를 막는다)
+        logger.warning("deal flow stage failed: %s", exc, exc_info=True)
+        meta["deal_flow"] = {"active": True, "error": str(exc),
+                             "unresolved": [{"category": "거래 흐름 검증 실행 실패", "detail": str(exc)[:200]}]}
+
+    # ── [수정안 무결성 게이트] (2026-11-13) ────────────────────────────────────────────
+    # 모든 수정안을 원문과 대조: 계약 언어·호칭, 기존 문구(하위 항목·예외·보증) 보존, 근거 없는 값, 변경 없는 수정, 상호 조항
+    # 오독, 부재 지적 재확인, HIGH 근거, 유리한 조항의 일반 룰 지적, 영문 신설 위치. 요청 주제별 답과 미확정 상업조건도 만든다.
+    try:
+        from runtime.review import redline_integrity as _rli
+        from runtime.review.requested_clause_review import _answers_text as _rli_answers_text
+
+        import os as _rli_os
+
+        if _rli_os.environ.get("AOURIBOT_REDLINE_INTEGRITY", "").lower() in ("0", "off", "false"):
+            raise _RliDisabled()   # 수정 전/후 비교 증거용 스위치 — 운영 기본값은 켜짐
+        _rli_role = (_deal_flow or {}).get("role") or {}
+        _rli_ours = [x for x in [_rli_role.get("our_label")] if x] if _rli_role.get("status") == "확정" else []
+        _rli_theirs = [x for x in [_rli_role.get("counterparty_label")] if x] if _rli_ours else []
+        meta["redline_integrity"] = _rli.run(
+            clause_results=clause_results,
+            clauses=[{"display_path": str(getattr(c, "display_path", "") or (c.get("display_path") if isinstance(c, dict) else "")),
+                      "text": str(getattr(c, "text", "") or (c.get("text") if isinstance(c, dict) else ""))} for c in clauses or []],
+            contract_text=str(text or ""), ours=_rli_ours, theirs=_rli_theirs,
+            our_kind=str(_rli_role.get("our_role_kind") or "") if _rli_ours else "",
+            request_text=str(review_focus or "") if isinstance(review_focus, str) else "",
+            answers_text=_rli_answers_text(answers if isinstance(answers, dict) else None,
+                                           [q if isinstance(q, dict) else getattr(q, "__dict__", {}) for q in (asked_questions or [])]),
+        )
+        if meta["redline_integrity"].get("request_rows"):
+            from runtime.review import deal_flow as _rli_df
+
+            meta["user_review_coverage"] = _rli_df.overlay_rows(meta.get("user_review_coverage"),
+                                                                {"request_rows": meta["redline_integrity"]["request_rows"]})
+            if str(meta.get("review_status") or "").startswith("REVIEW_FAILED_USER_FOCUS"):
+                meta["review_status_superseded"] = {"was": meta.get("review_status"), "by": "redline_integrity 요청 주제별 답"}
+                meta["review_status"] = ""
+                meta["review_status_detail"] = ""
+        if meta["redline_integrity"].get("actions") or meta["redline_integrity"].get("added_findings"):
+            executive_summary = generate_executive_summary(clause_results, clause_conflicts)
+            from runtime.review.output_filter import build_final_findings as _bff_rli
+
+            meta["final_findings"] = _bff_rli(
+                clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+            )
+    except _RliDisabled:
+        meta["redline_integrity"] = {"disabled": True}
+    except Exception as exc:  # noqa: BLE001 - 실패는 미해결로 남긴다(통과로 처리하지 않는다)
+        logger.warning("redline integrity failed: %s", exc, exc_info=True)
+        meta["redline_integrity"] = {"error": str(exc)}
+        _dfu = meta.get("deal_flow") if isinstance(meta.get("deal_flow"), dict) else None
+        if _dfu is not None:
+            _dfu.setdefault("unresolved", []).append({"category": "수정안 무결성 검사 실행 실패", "detail": str(exc)[:200]})
+
+    # ── [필수 검증 단계 — 우리 관점·문구 의미·계약 전체 완결성] (2026-11-03) ─────────────
+    # 모든 계약에 적용. 마지막까지 남은 수정안 전부를 넣은 같은 버전으로 효과·근거·설명 방향·충돌·공백·상황별 결과를 검증하고,
+    # 실패하면 AI 재작성(있으면) → 근거 없는·역전된 수정안 제거 → 재검증. 남은 문제가 있으면 '검증 미통과 초안' 으로 출력을 제한한다.
+    try:
+        from runtime.review import verification_gate as _vg
+        from runtime.review.scenario_gate import parties_from as _vg_parties_from
+
+        _vg_p = _vg_parties_from(_entity_resolution)
+        _vg_ours = list(dict.fromkeys([*_vg_p.ours, *[x for x in [str(getattr(party, "our_label", "") or "")] if x and len(x) <= 40]]))
+        _vg_theirs = list(dict.fromkeys([*_vg_p.theirs, *[x for x in [str(getattr(party, "counterparty_label", "") or "")] if x and len(x) <= 40]]))
+        _vg_ours = [x for x in _vg_ours if x not in _vg_theirs] or _vg_ours
+        # 우리 당사자 확정 여부 — 당사자 지도에 '우리 회사' 표시가 있거나 우리 정의어가 원문에 실제로 쓰였을 때만. 기본값 이름으로
+        # 채운 경우 방향 검증을 통과로 내지 않는다(2026-11-03 hold-out 라이선스: 우리=Licensee 인데 상대방으로 읽힘).
+        _vg_confirmed = any(getattr(_p, "is_our_company", False) for _p in getattr(_entity_resolution, "parties", []) or []) or bool(
+            str(getattr(party, "our_label", "") or "") and str(getattr(party, "our_label", "")) in str(text or ""))
+        _df_r = (_deal_flow or {}).get("role") or {}
+        if _df_r.get("confirmed") and _df_r.get("our_label") and _df_r.get("counterparty_label"):
+            # 거래 흐름 단계가 신청서·서두·서명란으로 확정한 호칭이 우선한다
+            _vg_ours = list(dict.fromkeys([_df_r["our_label"], *[x for x in _vg_ours if x != _df_r["counterparty_label"]]]))
+            _vg_theirs = list(dict.fromkeys([_df_r["counterparty_label"], *[x for x in _vg_theirs if x != _df_r["our_label"]]]))
+            _vg_confirmed = True
+        elif _df_r.get("status") == "자료 충돌 — 역할 판단 보류":
+            _vg_confirmed = False   # 실제 자료가 충돌하면 방향 검증을 통과로 내지 않는다(자료 부족만으로는 기존 판단 유지)
+        _vg_parties = _vg.Parties(ours=_vg_ours, theirs=_vg_theirs, confirmed=_vg_confirmed)
+        _vg_lm = (meta.get("contract_legal_map") or {}).get("fields") if isinstance(meta.get("contract_legal_map"), dict) else {}
+        _vg_lm = _vg_lm if isinstance(_vg_lm, dict) else {}
+        from runtime.review.requested_clause_review import _answers_text as _vg_answers_text, deal_facts as _vg_deal_facts
+
+        _vg_answers = _vg_answers_text(answers if isinstance(answers, dict) else None,
+                                       [q if isinstance(q, dict) else getattr(q, "__dict__", {}) for q in (asked_questions or [])])
+        _vg_res = _vg.run_verification_gate(
+            clause_results=clause_results, clauses=clauses, parties=_vg_parties, contract_text=str(text or ""),
+            request_text=str(review_focus or "") if isinstance(review_focus, str) else "", answers_text=_vg_answers,
+            basis_fields={
+                "our_name": str(_entity_resolution.our_company_display() or entity or ""),
+                "our_role": str(getattr(party, "our_role", "") or _vg_lm.get("our_role_direction") or ""),
+                "counterparty_name": str(getattr(party, "counterparty_label", "") or ""),
+                "counterparty_role": str(getattr(party, "counterparty_role", "") or ""),
+                "purpose": str(_vg_lm.get("contract_purpose") or ""),
+                "payment_flow": str(_vg_lm.get("payment_flow") or ""),
+            },
+            provider=ai_provider, model=str(ai_model or ""),
+            facts=_vg_deal_facts(contract_text=str(text or ""), clauses=clauses, parties=list(_entity_resolution.parties),
+                                 our_display=str(_entity_resolution.our_company_display() or entity or "")),
+            timeout_sec=float(ai_timeout_sec or 150.0), max_tokens=max(3000, int(ai_max_tokens or 3000)),
+        )
+        if isinstance(meta.get("deal_scenarios"), dict):
+            meta["deal_scenarios_request_stage"] = meta["deal_scenarios"]
+        meta["deal_scenarios"] = _vg_res["scenario_result"]
+        meta["verification_gate"] = _vg.compact(_vg_res)
+        _vg.apply_external(meta)   # 거래 흐름 선검증의 미해결(자료 충돌·재검사 실패)도 같은 효력
+        if meta["verification_gate"].get("status") == _vg.STATUS_FAIL:
+            _vg_res["status"] = _vg.STATUS_FAIL
+            _vg_res["unresolved"] = meta["verification_gate"].get("unresolved") or _vg_res.get("unresolved") or []
+        if _vg_res["status"] == _vg.STATUS_FAIL and str(meta.get("overall_recommendation") or "") in ("SIGN_AS_IS", "SIGN_WITH_MINOR_CHANGES"):
+            # 검증 미통과 초안에는 서명 가능 판정을 두지 않는다 — 내부 분석본도 같은 판단(지시 6항)
+            meta["overall_recommendation_before_verification"] = meta.get("overall_recommendation")
+            meta["overall_recommendation"] = "NEGOTIATE_BEFORE_SIGNING"
+            meta["recommendation_reason"] = (f"필수 검증 미통과 초안 — 미해결 {len(_vg_res['unresolved'])}건. "
+                                             + str(meta.get("recommendation_reason") or "")).strip()
+        if _vg_res.get("removed_edits") or _vg_res.get("rewritten_edits"):
+            from runtime.review.output_filter import build_final_findings as _bff_vg
+
+            meta["final_findings"] = _bff_vg(
+                clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+            )
+    except Exception as exc:  # noqa: BLE001 - 검증 자체가 실패하면 통과로 처리하지 않는다(미통과 초안)
+        logger.warning("verification gate failed: %s", exc, exc_info=True)
+        meta["verification_gate"] = {"status": "검증 미통과 초안", "error": str(exc),
+                                     "unresolved": [{"category": "검증 실행 실패", "paths": "", "detail": "필수 검증을 실행하지 못함 — 법무 확인 필요"}]}
+
     # ── [수정안 전부 반영 검증] (2026-10-21 지시 3항) ─────────────────────────────
     # 모든 수정안을 함께 넣었을 때의 조 번호·항 위치·참조·기존 보호를 본다. 마지막 단계에 두는
     # 이유: 앞 게이트들이 위치를 정정·재앵커한 뒤라야 실제로 넣을 위치가 확정된다.
@@ -9758,6 +10040,26 @@ def build_clause_level_result(
                 meta["review_status"] = _DEAL_INCOMPLETE
                 meta["review_status_detail"] = "실질 답이 없는 요청: " + "; ".join(meta["review_completion"]["unanswered"][:5])
 
+        # [수정안 무결성 — 최종 재검사] 핵심 위험 되살림 등 뒤 단계가 되살리거나 새로 만든 수정안도 같은 기준으로 본다
+        # (2026-11-13 실측: 용역계약 제2조 원문을 "1. / 2." 로 비운 수정안이 무결성 게이트 뒤에 되살아나 Word 에 들어감).
+        _rli_meta = meta.get("redline_integrity") if isinstance(meta.get("redline_integrity"), dict) else {}
+        if _rli_meta and not _rli_meta.get("disabled") and not _rli_meta.get("error"):
+            from runtime.review import redline_integrity as _rli2
+
+            _rli_final = _rli2.run(
+                clause_results=clause_results,
+                clauses=[{"display_path": str(getattr(c, "display_path", "") or (c.get("display_path") if isinstance(c, dict) else "")),
+                          "text": str(getattr(c, "text", "") or (c.get("text") if isinstance(c, dict) else ""))} for c in clauses or []],
+                contract_text=str(text or ""), ours=list(_rli_meta.get("ours") or []), theirs=list(_rli_meta.get("theirs") or []),
+                request_text=str(review_focus or "") if isinstance(review_focus, str) else "",
+            )
+            if _rli_final.get("actions"):
+                _rli_meta["final_pass_actions"] = _rli_final["actions"]
+                from runtime.review.output_filter import build_final_findings as _bff_rli2
+
+                meta["final_findings"] = _bff_rli2(
+                    clause_results, contract_type_code=str(_canonical_profile.contract_type or ""), include_low=False,
+                )
         meta["revision_set_check"] = _check_revision_set(
             clause_results, clause_index=_clause_index, contract_text=str(text or ""),
         )
@@ -9775,18 +10077,11 @@ def build_clause_level_result(
 
     # [사업팀 전달본, 2026-10-30] 화면 기본 패널용 — 다운로드와 같은 함수·같은 최종 데이터로 만든다.
     try:
-        from runtime.review.business_brief import brief_sections as _brief_sections, build_business_brief as _build_brief
+        from runtime.review.business_brief import brief_sections as _brief_sections
+        from runtime.review.delivery_docs import brief_from_meta as _brief_from_meta
 
-        _ff_brief = meta.get("final_findings") if isinstance(meta.get("final_findings"), dict) else {}
-        _brief_obj = _build_brief(
-            clause_results=clause_results,
-            high_issues=_ff_brief.get("high_issues"),
-            medium_issues=_ff_brief.get("medium_issues"),
-            user_review_coverage=meta.get("user_review_coverage"),
-            deal_assessment=meta.get("deal_assessment"),
-            revision_set_check=meta.get("revision_set_check") if isinstance(meta.get("revision_set_check"), dict) else None,
-            clauses=clauses,
-            contract_text=str(text or ""),
+        _brief_obj = _brief_from_meta(
+            clause_results=clause_results, meta=meta, clauses=clauses, contract_text=str(text or ""),
             answers=answers if isinstance(answers, dict) else None,
         )
         meta["business_brief"] = _brief_obj.to_dict()

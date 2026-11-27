@@ -570,6 +570,12 @@ _RX_SIGNATURE_BLOCK_START = re.compile(
 )
 
 
+_RX_BARE_DATE_LINE = re.compile(r"^\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일\s*$")
+#: 날짜 줄 뒤에 이런 줄이 있으면 아직 조문 안이다 — 항 번호(3.2, ①, 제2항), 표 행(3차, 합계).
+_RX_CLAUSE_CONTENT_LINE = re.compile(
+    r"^(?:\d+\.\d+\s|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|제\s*\d+\s*항|\d+\s*(?:차|회차)\s*$|합\s*계\s*$)")
+
+
 def _appendix_title(m: "re.Match[str]") -> str:
     if m.group(4):
         return "부칙"
@@ -601,7 +607,7 @@ def _split_trailing_appendix_and_signature(
     clause_body: list[str] = []
     sections: list[tuple[str, list[str]]] = []
     mode = "body"
-    for line in body_lines:
+    for k, line in enumerate(body_lines):
         l = (line or "").strip()
         m = _RX_APPENDIX_HEAD.match(l) if l else None
         if m:
@@ -609,6 +615,12 @@ def _split_trailing_appendix_and_signature(
             mode = "appendix"
             continue
         if l and _RX_SIGNATURE_BLOCK_START.match(l):
+            # 날짜만 있는 줄은 표의 칸(차수별 출고 예정일 등)일 수도 있다 — 뒤에 항 번호·표 행이 이어지면 서명란이 아니다
+            # (2026-11-09 실측: 상품 구매 계약서 제3조 표의 "2026년 11월 30일" 에서 3차·합계·3.2·3.3 이 통째로 버려졌다).
+            if mode == "body" and _RX_BARE_DATE_LINE.match(l) and any(
+                    _RX_CLAUSE_CONTENT_LINE.match((x or "").strip()) for x in body_lines[k + 1:]):
+                clause_body.append(line)
+                continue
             mode = "signature"
             continue
         if mode == "body":
@@ -838,7 +850,9 @@ def _parse_en_paragraph_start(line: str, article_number: str) -> tuple[str, str]
     l = (line or "").strip()
     if not l:
         return None
-    m = re.match(r"^(\d{1,3})\.(\d{1,2})\s+(.*)$", l)
+    # "2.1. Projectphase" (뒤 마침표), "6. 1 References" (PDF 조판이 낸 점 뒤 공백)도 같은 항이다 —
+    # 놓치면 제6.1조·제6.3조가 색인에서 사라지고 앞 항 본문에 흡수된다(2026-11-02 Norden 계약 실측).
+    m = re.match(r"^(\d{1,3})\.\s?(\d{1,2})\.?\s+(.*)$", l)
     if not m:
         return None
     if m.group(1) != article_number:

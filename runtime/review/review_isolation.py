@@ -179,13 +179,20 @@ def _candidate_terms(text: str) -> set[str]:
     return out
 
 
-def _finding_text(cr: dict[str, Any]) -> str:
-    keys = (
-        "issue_title", "clause_title", "problem", "rewrite_reason",
-        "legal_business_reason", "suggested_rewrite", "proposed_revision",
-        "recommendation_text", "negotiation_position",
-    )
+_ANALYSIS_KEYS = ("issue_title", "clause_title", "problem", "rewrite_reason", "legal_business_reason",
+                  "negotiation_position")
+_DRAFT_KEYS = ("suggested_rewrite", "proposed_revision", "recommendation_text")
+
+
+def _finding_text(cr: dict[str, Any], *, analysis_only: bool = False) -> str:
+    keys = _ANALYSIS_KEYS if analysis_only else _ANALYSIS_KEYS + _DRAFT_KEYS
     return "\n".join(str(cr.get(k) or "") for k in keys)
+
+
+def _is_latin_document(text: str) -> bool:
+    latin = sum(1 for ch in text[:20000] if ch.isascii() and ch.isalpha())
+    hangul = sum(1 for ch in text[:20000] if "가" <= ch <= "힣")
+    return latin > 0 and latin >= 3 * max(1, hangul)
 
 
 def _normalize(s: str) -> str:
@@ -207,12 +214,19 @@ def detect_contamination(
     반환: 오염 항목 목록 [{clause_id, display_path, terms}]
     """
     haystack = _normalize(contract_text) + _normalize("\n".join(extra_texts or []))
+    # 영문 계약: 영문 수정 문안은 원문에 없던 낱말("Notwithstanding", "Seoul")을 당연히 쓴다 — 문안이 아니라 분석 문장의
+    # **여러 낱말 고유명**(다른 계약의 당사자·계약명)만 본다. 종전에는 제13.3조 wind-down 문안이 "Wind" 때문에, 제16.8조
+    # 중재 대안이 "Seoul"·"English" 때문에 통째로 지워졌다(2026-11-02 Norden 실측).
+    latin_doc = _is_latin_document(contract_text or "")
     out: list[dict[str, Any]] = []
     for cr in (clause_results or []):
         if not isinstance(cr, dict) or bool(cr.get("dedup_suppressed")):
             continue
+        terms = _candidate_terms(_finding_text(cr, analysis_only=latin_doc))
+        if latin_doc:
+            terms = {t for t in terms if len(t.split()) >= 2}
         leaked = sorted(
-            t for t in _candidate_terms(_finding_text(cr))
+            t for t in terms
             if _normalize(t) not in haystack
         )
         if leaked:

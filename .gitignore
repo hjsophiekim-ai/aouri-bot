@@ -25,3 +25,21 @@ runtime/tests/fixtures/nda_ai_sleep_collaboration.txt
 
 # 서버 supervisor 로그 (scripts/serve.ps1)
 logs/
+
+# 실데이터 검토 산출물 — 실제 계약·상대방 정보 포함, 커밋 금지
+reports_evidence/
+
+# 실데이터 fixture — 저장소 밖 로컬 폴더(~/aouribot-private-fixtures, AOURIBOT_PRIVATE_FIXTURES)에 둔다.
+# 실수로 다시 복사해 넣어도 커밋되지 않게 옛 경로를 막는다.
+runtime/tests/fixtures/caixi_purchase_*
+runtime/tests/fixtures/meal_voucher_*
+runtime/tests/fixtures/sidiz_supply_en/
+
+# 실제 상대방 이름이 들어간 시험·실데이터 전용 스크립트 — 로컬에서만 실행
+runtime/tests/test_deal_flow_caixi.py
+scripts/check_deal_flow.py
+scripts/make_pdg_variant.py
+scripts/check_pdg_acceptance.py
+scripts/run_pdg_case.sh
+scripts/run_final_set.sh
+scripts/run_verification_offline_set.sh

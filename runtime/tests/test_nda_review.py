@@ -13,8 +13,8 @@ PORSCHE_NDA_TEXT = """\
 NON-DISCLOSURE AGREEMENT
 
 This Non-Disclosure Agreement ("Agreement") is entered into between
-Porsche Design GmbH, a company incorporated under German law with its
-registered office at Porschestrasse 1, 70435 Stuttgart, Germany
+Norden Design GmbH, a company incorporated under German law with its
+registered office at Nordenstrasse 1, 70000 Stuttgart, Germany
 ("Disclosing Party"), and Fursys Inc. ("Receiving Party").
 
 1. Confidential Information
@@ -52,7 +52,7 @@ of the courts of Stuttgart, Germany.
 
 class TestNDAJurisdiction(unittest.TestCase):
     def test_porsche_nda_jurisdiction_classified_as_foreign(self) -> None:
-        """Porsche Design GmbH (German company) must NOT be domestic_korea."""
+        """Norden Design GmbH (German company) must NOT be domestic_korea."""
         jur = classify_jurisdiction_profile(text=PORSCHE_NDA_TEXT)
         self.assertNotEqual(
             jur.kind, "domestic_korea",

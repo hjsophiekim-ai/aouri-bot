@@ -46,9 +46,14 @@ class BriefRulesTest(unittest.TestCase):
                                     "edit_location": "제3조 제2항 교체"},
                                 problem="AI 자체 판단으로 보면 보장 수량이 예정으로 바뀐다. REVIEW_FAILED_X 상태.")])
         t = brief_text(b)
-        pos = [t.find(h) for h in ("1. 검토 결론", "2. 계약서 수정사항", "3. 계약 전 확인사항", "4. 사업부 결정사항", "별첨.")]
+        pos = [t.find(h) for h in ("1. 검토 결론", "2. 쟁점별 검토", "3. 계약 전 확인사항", "4. 사업부 결정사항", "5. 파일 안내")]
         self.assertTrue(all(p >= 0 for p in pos) and pos == sorted(pos), pos)
-        self.assertNotRegex(t, r"REVIEW_|KR-\d|\bHIGH\b|AI 자체")
+        # 위험도(HIGH/MEDIUM/LOW)는 쟁점 카드 머리에 싣는다(2026-11-02 지시 3·4항) — 내부 코드·처리 과정 표현은 여전히 금지.
+        self.assertNotRegex(t, r"REVIEW_|KR-\d|AI 자체")
+        self.assertIn("[HIGH · 필수수정]", t)
+        self.assertIn("수정 전: 협의하여 변경한다.", t)
+        self.assertIn("수정 후: 협의하여 변경한다. 다만, 보장 수량은 변경할 수 없다.", t)
+        self.assertIn("[+ 다만, 보장 수량은 변경할 수 없다.+]", t)
         self.assertIn("문장 추가", t)  # 원문 뒤에 덧붙는 문장만 보인다
         self.assertEqual(b.verdict, "조건부 진행 가능")
 
@@ -82,7 +87,7 @@ class BriefRulesTest(unittest.TestCase):
         b = self._brief(issues + issues, user_review_coverage=cov)
         self.assertEqual(len(b.revisions), 1)
         self.assertEqual([r.index for r in b.requests], ["1", "2"])  # 답이 없는 요청도 빠지지 않는다
-        self.assertEqual(b.requests[0].items, ["수정 1"])
+        self.assertEqual(b.requests[0].items, ["쟁점 1"])
 
     def test_request_with_proposed_sentence_keeps_the_sentence(self) -> None:
         cov = [{"issue_id": "answer_subcontracting", "normalized_issue": "제3자 수행 통제", "matched_finding_ids": [],
@@ -95,7 +100,7 @@ class BriefRulesTest(unittest.TestCase):
         self.assertNotIn("아래 한 문장", t)
         self.assertIn("상대방이 업무를 제3자에게 수행하게 하는 경우에도", t)
         self.assertEqual(b.appendix[0].mode, "선택 시 추가")
-        self.assertEqual(b.requests[0].items, ["결정 1"])
+        self.assertEqual(b.requests[0].items, ["쟁점 1"])
 
     def test_answer_scoped_decision_is_not_blanket_acceptance(self) -> None:
         deal = {"active": True, "core_risks": [], "protections": [

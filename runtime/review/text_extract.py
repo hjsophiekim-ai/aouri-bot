@@ -693,6 +693,73 @@ class PdfExtractionResult:
     margin_annotations: list[str] = dc_field(default_factory=list)
 
 
+_RX_PAGE_NO_LINE = re.compile(
+    r"^\s*(?:seite|page|p\.)?\s*[-–]?\s*\d{1,4}\s*(?:von|of|/)\s*\d{1,4}\s*[-–]?\s*$"
+    r"|^\s*[-–]\s*\d{1,4}\s*[-–]\s*$",
+    re.IGNORECASE,
+)
+_RUNNING_ZONE = 6  # 페이지 위·아래 몇 줄을 머리글·바닥글 후보로 보는가
+
+
+def _running_key(line: str) -> str:
+    flat = re.sub(r"\s+", " ", line.strip().lower())
+    # 조항 번호로 시작하는 줄은 숫자까지 같아야 같은 줄이다 — 숫자를 지우고 비교하면 "5.1 Customer shall …",
+    # "6.1 Customer shall …" 처럼 문형이 같은 조항 첫 줄이 머리글로 오인돼 지워진다.
+    if re.match(r"^(?:\d{1,3}(?:\.\s?\d{1,3})*\.?\s|제\s*\d+\s*조|article\s+\d)", flat):
+        return flat
+    return re.sub(r"\d+", "#", flat)
+
+
+def strip_running_headers(pages: list[str]) -> tuple[list[str], list[str]]:
+    """PDF 페이지마다 되풀이되는 머리글·바닥글(당사자명·문서명·"Seite 2 von 15")을 떼어낸다.
+
+    PDF 텍스트는 머리글이 페이지 경계마다 본문 한가운데 끼어든다 — 실제 사례(Norden 디자인 계약,
+    2026-11-02): 제9.2조·제16.8조 원문 중간에 "Norden Design Gesellschaft m.b.H / Sidiz Inc. …
+    Seite 11 von 15" 가 들어가, AI 가 정확히 인용한 원문이 "계약서에 없는 문장"으로 지워졌다.
+    위·아래 몇 줄 안에서 페이지 절반 이상(최소 3쪽)에 같은 모양(숫자 무시)으로 나오는 줄만 지운다 —
+    본문 문장은 페이지마다 같은 자리에 되풀이되지 않는다.
+    """
+    if len(pages) < 3:
+        return pages, []
+    split = [p.splitlines() for p in pages]
+    counts: dict[str, int] = {}
+    for lines in split:
+        nonblank = [i for i, ln in enumerate(lines) if ln.strip()]
+        zone = set(nonblank[:_RUNNING_ZONE] + nonblank[-_RUNNING_ZONE:])
+        seen = {_running_key(lines[i]) for i in zone}
+        for k in seen:
+            counts[k] = counts.get(k, 0) + 1
+    need = max(3, (len(pages) + 1) // 2)
+    running = {k for k, n in counts.items() if n >= need and k}
+    removed: list[str] = []
+    out: list[str] = []
+    for lines in split:
+        nonblank = [i for i, ln in enumerate(lines) if ln.strip()]
+        zone = set(nonblank[:_RUNNING_ZONE] + nonblank[-_RUNNING_ZONE:])
+        keep: list[str] = []
+        for i, ln in enumerate(lines):
+            if i in zone and (_running_key(ln) in running or _RX_PAGE_NO_LINE.match(ln)):
+                removed.append(ln.strip())
+                continue
+            keep.append(ln)
+        out.append("\n".join(keep))
+    return out, removed
+
+
+_RX_LINE_HYPHEN = re.compile(
+    r"([A-Za-z]{2,})-[ \t]*\n(\s*\[페이지 \d+\]\s*\n)?[ \t]*([a-z]+[.,;:)\]]*)[ \t]*")
+
+
+def join_line_hyphenation(text: str) -> str:
+    """PDF 조판이 줄 끝에서 자른 영어 낱말("construc-\\ntion.")을 이어 붙인다. 줄 구조(조항 번호 줄)는 그대로 둔다.
+
+    잘린 낱말이 그대로 남으면 AI 가 인용한 원문("construction")과 계약서 원문("construc- tion")이 달라 인용 검증·수정
+    위치 대조가 실패한다(2026-11-02 Norden 제16.8조).
+    """
+    # 페이지를 넘어 잘린 낱말은 앞 페이지 끝에서 잇고 페이지 표지는 그 뒤에 둔다.
+    return _RX_LINE_HYPHEN.sub(lambda m: f"{m.group(1)}{m.group(3)}\n{(m.group(2) or '').lstrip(chr(10))}", text or "")
+
+
 def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
     """PDF 텍스트를 추출하되, 글자 수가 0이 아니라는 것만으로 성공 판정을
     내리지 않는다. pdfplumber → pymupdf 순으로 시도하고 각 결과를
@@ -724,25 +791,28 @@ def extract_pdf_text_with_quality(file_path: Path) -> PdfExtractionResult:
         import pdfplumber
         texts: list[str] = []
         margin_annotations.clear()
+        raw_pages: list[str] = []
         with pdfplumber.open(str(file_path)) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
+            for page in pdf.pages:
                 t, note = split_margin_annotations(page)
                 if note and note.strip():
                     margin_annotations.append(note.strip())
-                if t and t.strip():
-                    texts.append(f"[페이지 {page_num}]\n{t.strip()}")
-        return "\n\n".join(texts)
+                raw_pages.append(t or "")
+        for page_num, t in enumerate(strip_running_headers(raw_pages)[0], 1):
+            if t and t.strip():
+                texts.append(f"[페이지 {page_num}]\n{t.strip()}")
+        return join_line_hyphenation("\n\n".join(texts))
 
     def _pymupdf() -> str:
         import fitz
         doc = fitz.open(str(file_path))
         try:
             fitz_texts: list[str] = []
-            for page_num, page in enumerate(doc, 1):
-                t = page.get_text()
+            raw_pages = [page.get_text() or "" for page in doc]
+            for page_num, t in enumerate(strip_running_headers(raw_pages)[0], 1):
                 if t and t.strip():
                     fitz_texts.append(f"[페이지 {page_num}]\n{t.strip()}")
-            return "\n\n".join(fitz_texts)
+            return join_line_hyphenation("\n\n".join(fitz_texts))
         finally:
             doc.close()
 

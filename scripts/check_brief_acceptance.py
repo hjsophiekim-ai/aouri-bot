@@ -16,9 +16,10 @@ sys.path.insert(0, str(ROOT))
 
 from runtime.review.business_brief import undecided_terms  # noqa: E402
 
-SECTIONS = ("1. 검토 결론", "2. 계약서 수정사항", "3. 계약 전 확인사항", "4. 사업부 결정사항", "별첨. 수정 위치와 완성 문구")
+# 2026-11-02: 위험도순 쟁점 카드(수정 전·후·변경 표시 포함) 구성으로 바뀌었다.
+SECTIONS = ("1. 검토 결론", "2. 쟁점별 검토", "3. 계약 전 확인사항", "4. 사업부 결정사항", "5. 파일 안내")
 RX_INTERNAL = re.compile(
-    r"REVIEW_[A-Z_]+|STATUS_[A-Z_]+|\bKR-\d|\bEN-\d|\bclr_|\bdeal_|\bfnd_|\beb_|\bcounsel_|\bHIGH\b|\bMEDIUM\b|\bLOW\b"
+    r"REVIEW_[A-Z_]+|STATUS_[A-Z_]+|\bKR-\d|\bEN-\d|\bclr_|\bdeal_|\bfnd_|\beb_|\bcounsel_"
     r"|AI\s*자체|자동\s*검증|게이트|에이전트|finding|triage"
 )
 
@@ -108,12 +109,24 @@ def main() -> None:
         {"internal_live": live_ids, "core_risks": core_ids, "missing_in_brief": missing,
          "requests": req_idx, "requests_missing": req_missing, "item_numbers_missing_in_file": nos_missing})
 
-    # B4 반복
-    body = "\n".join(sec.get(h, "") for h in SECTIONS[:4])
+    # B4 반복 — 수정 전·후·변경 표시는 같은 원문을 보여 주는 칸이라 비교에서 뺀다.
+    body_lines: list[str] = []
+    skip_block = False
+    for ln in "\n".join(sec.get(h, "") for h in SECTIONS[:4]).splitlines():
+        st = ln.strip()
+        if st in ("수정 전", "수정 후") or st.startswith("변경 표시"):
+            skip_block = True
+            continue
+        if skip_block and ln.startswith("    "):
+            continue
+        skip_block = False
+        body_lines.append(ln)
+    body = "\n".join(body_lines)
     sents = [s.strip() for s in re.split(r"(?<=[.다])\s+|\n", body) if len(s.strip()) >= 30]
     seen: dict[str, int] = {}
     for s in sents:
-        k = _norm(re.sub(r"^(?:현재|문제|할 일|선택에 따라 남는 위험|남는 위험|정할 것|결정 내용|함께 확인)\s*:\s*", "", s))
+        k = _norm(re.sub(r"^(?:현재|문제|할 일|현재 조건|우리에게 생길 위험|필요한 조치|선택에 따라 남는 위험|남는 위험|정할 것"
+                         r"|결정 내용|함께 확인)\s*:\s*", "", s))
         seen[k] = seen.get(k, 0) + 1
     dups = [k for k, n in seen.items() if n > 1]
     multi_explained = [i for i, v in trace.items() if len([n for n in v if not n.startswith("결정")]) > 1]
@@ -121,15 +134,19 @@ def main() -> None:
 
     # B5 행동·미확정
     lacks = []
-    for it in ui_brief.get("revisions") or []:
-        if f"{it['no']} " in brief_docx and "할 일:" not in brief_docx.split(it["no"] + " ", 1)[1][:1500]:
+    s2_txt = sec.get(SECTIONS[1], "")
+    for it in ui_brief.get("cards") or []:
+        blk = s2_txt.split(it["no"] + " ", 1)[1] if it["no"] + " " in s2_txt else ""
+        if "필요한 조치:" not in re.split(r"\n쟁점 \d+ ", blk, maxsplit=1)[0]:
             lacks.append(it["no"])
-    for it in ui_brief.get("checks") or []:
-        blk = brief_docx.split(it["no"] + " ", 1)[1][:2500] if it["no"] + " " in brief_docx else ""
-        if "누가:" not in blk or "언제까지:" not in blk:
-            lacks.append(it["no"])
+    for ln in sec.get(SECTIONS[2], "").splitlines():
+        if ln.strip().startswith("□") and ("누가:" not in ln or "언제까지:" not in ln):
+            lacks.append(ln.strip()[:40])
+    s4_txt = sec.get(SECTIONS[3], "")
     for it in ui_brief.get("decisions") or []:
-        blk = brief_docx.split(it["no"] + " ", 1)[1][:800] if it["no"] + " " in brief_docx else ""
+        if str(it.get("no")).startswith("쟁점"):
+            continue
+        blk = s4_txt.split(it["no"] + " ", 1)[1][:800] if it["no"] + " " in s4_txt else ""
         if "정할 것:" not in blk and "결정 내용:" not in blk:
             lacks.append(it["no"])
     und_missing = []
@@ -142,6 +159,10 @@ def main() -> None:
 
     # B6 내부 코드·처리 과정
     hits = sorted({m.group(0) for m in RX_INTERNAL.finditer(brief_docx + "\n" + brief_pdf)})
+    # 위험도 표기(HIGH/MEDIUM/LOW)는 쟁점 카드 머리에서만 쓴다(2026-11-02 지시 3·4항).
+    hits += sorted({ln.strip()[:60] for ln in (brief_docx + "\n" + brief_pdf).splitlines()
+                    if re.search(r"\b(?:HIGH|MEDIUM|LOW)\b", ln)
+                    and not re.match(r"^\s*쟁점 \d+ \[(?:HIGH|MEDIUM|LOW) ·", ln)})
     put("B6_no_internal_codes", not hits, {"hits": hits})
 
     # B7 무관한 법률 근거 (원인 단계: 검토 데이터의 조문)
@@ -200,8 +221,19 @@ def main() -> None:
          "user_explicit_acceptance": explicit, "answer_misattributed": misattributed})
 
     # B9 수정 문구 완전·위치·전체 반영
-    appx = sec.get(SECTIONS[4], "")
-    trunc = [ln for ln in appx.splitlines() if re.search(r"…|\.\.\.", ln) and not ln.startswith("현재 문구")]
+    appx = sec.get(SECTIONS[1], "")
+    _al = appx.splitlines()
+    # 수정 후 완성 문구가 말줄임으로 잘렸는가(수정 전 원문 자체의 "…" 는 원문이다).
+    trunc, _in_after = [], False
+    for ln in _al:
+        st = ln.strip()
+        if st in ("수정 전", "수정 후") or st.startswith("변경 표시"):
+            _in_after = st == "수정 후"
+            continue
+        if _in_after and ln.startswith("    ") and re.search(r"…|\.\.\.", ln):
+            trunc.append(st[:120])
+        elif not ln.startswith("    "):
+            _in_after = False
     loc_bad, not_applied = [], []
     for e in ui_brief.get("appendix") or []:
         m = re.search(r"제\s*(\d+)\s*조", e.get("location") or "")
@@ -220,11 +252,15 @@ def main() -> None:
          "clean_docx": "checked" if clean is not None else "N/A — PDF 원본은 수정본 생성 미지원(문구 위치·완전성만 판정)"})
 
     # B10 화면 = 다운로드, 내부와 핵심 판단 일치
-    ui_lines = [r[1] for _h, rows in ui_secs for r in rows]
+    ui_lines = []
+    for _h, rows in ui_secs:
+        for r in rows:
+            # 변경 표시 줄은 조각을 이어 붙인 글자로 비교한다(파일에는 색·취소선이 입혀진 같은 글자가 있다).
+            ui_lines.append("".join(t for _o, t in json.loads(r[1] or "[]")) if r[0] == "d" else r[1])
     file_norm = _norm(brief_docx)
     ui_missing = [ln for ln in ui_lines if _norm(ln) not in file_norm]
     must_internal = sorted(str(it.get("clause_id")) for it in ff.get("high_issues") or [])
-    must_brief = sorted(i for i in must_internal if any(n.startswith(("수정", "확인")) for n in trace.get(i, [])))
+    must_brief = sorted(i for i in must_internal if any(n.startswith(("쟁점", "수정", "확인")) for n in trace.get(i, [])))
     verdict = ui_brief.get("verdict") or ""
     verdict_ok = (not must_internal) or not verdict.startswith("진행 가능")
     put("B10_internal_brief_consistent", not ui_missing and must_internal == must_brief and verdict_ok,
@@ -245,7 +281,7 @@ def main() -> None:
 
     # B13 분량(참고)
     pages = _pdf_pages(run / "10_brief.pdf")
-    body_pages = next((i + 1 for i, t in enumerate(pages) if "별첨. 수정 위치" in t), len(pages))
+    body_pages = next((i + 1 for i, t in enumerate(pages) if "5. 파일 안내" in t), len(pages))
     res["B13_length_info"] = {"pass": None, "evidence": {"pdf_pages_total": len(pages), "body_ends_on_page": body_pages,
                                                          "internal_report_chars": len(internal), "brief_chars": len(brief_docx)}}
 

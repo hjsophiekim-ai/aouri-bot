@@ -86,7 +86,13 @@ def infer_contract_profile(*, contract_type: str, text: str, canonical_type_code
         )
 
     ct_pref_privacy = (("개인정보" in ct) and ("처리위탁" in ct or "DPA" in ct or "dpa" in ct.lower()))
-    ct_pref_dealer = any(k in ct for k in ("대리점", "유통")) or any(k in low for k in ("dealer", "distributor"))
+    # 라벨(ct)만 본다 — 본문 전체(low)의 "dealer" 는 "dealer supply price"(로열티 산정 기준) 같은 낱말에도
+    # 걸려, 디자인 라이선스 계약을 대리점 계약으로 만들었다(2026-11-02 Norden 실측).
+    ct_pref_dealer = any(k in ct for k in ("대리점", "유통")) or any(k in ct.lower() for k in ("dealer", "distributor"))
+    # canonical 분류기가 이미 대리점·유통이 아닌 유형으로 확정했으면 본문 낱말로 대리점 프로필을 만들지 않는다.
+    _canon = (canonical_type_code or "").lower()
+    canonical_not_dealer = bool(_canon) and not any(
+        k in _canon for k in ("dealer", "consign", "distribut", "agency", "sales"))
     ct_pref_ops = any(k in ct for k in ("운영대행", "위탁운영", "운영위탁", "공간운영", "매장운영", "서비스위탁", "관리용역", "운영용역"))
 
     if ct_pref_privacy:
@@ -116,7 +122,8 @@ def infer_contract_profile(*, contract_type: str, text: str, canonical_type_code
     # unrelated "인력 채용·배치·평가 자율성" (personnel/HR management)
     # boilerplate finding onto that contract's 관할조항 (jurisdiction
     # clause) via the article==14 dealer-template branch below.
-    is_dealer = has_any(["대리점", "위탁판매", "위탁거래", "consignment", "dealer", "distributor"])
+    is_dealer = (not canonical_not_dealer) and has_any(
+        ["대리점", "위탁판매", "위탁거래", "consignment", "dealer", "distributor"])
     if is_dealer:
         ev.append("dealer_token_weak")
         return ContractProfile(profile="dealer_consignment", evidence=ev)

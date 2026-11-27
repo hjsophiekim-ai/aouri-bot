@@ -402,6 +402,11 @@ def run_review_with_session(
         ]
         doc["original_clauses"] = original_clauses
     result["original_clauses"] = original_clauses
+    # 변경추적본을 한 번 만들어 수정안이 실제로 들어갔는지(적용·보류) 남기고, 그 결과로 화면 검토의견서를 다시 만든다 —
+    # 화면이 "반영" 이라고 한 수정안이 Word 파일에 없는 일이 없게(2026-11-02 지시 3·6항).
+    from runtime.review.delivery_docs import finalize_review_meta
+
+    finalize_review_meta(doc, result)
     meta_ai = (bundle.meta.get("ai") if isinstance(bundle.meta, dict) else None) if isinstance(bundle.meta, dict) else None
     ai_enabled = bool(ai_provider) and is_ai_enabled(cfg)
     ai_used = bool(isinstance(meta_ai, dict) and meta_ai.get("used"))

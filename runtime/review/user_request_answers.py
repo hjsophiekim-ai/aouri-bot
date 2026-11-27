@@ -33,6 +33,8 @@
 from __future__ import annotations
 
 import re
+
+from runtime.review.clause_label import clause_path_relation
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -471,6 +473,32 @@ def _find_clauses(
     return by_title[:limit]
 
 
+_RX_CITED_PATH = re.compile(
+    r"제\s*\d{1,4}(?:\s*\.\s*\d{1,3})?\s*조(?:\s*제?\s*\d{1,3}\s*항)?(?:\s*제?\s*\d{1,3}\s*호)?"
+    r"|(?:Article|Section|Clause)\s+\d{1,4}(?:\.\d{1,3}){0,2}",
+    re.IGNORECASE,
+)
+
+
+def _cited_clauses(question: str, clauses: list[Any] | None) -> list[str]:
+    """질문이 번호로 지목한 조항의 실제 경로들(정확히 같은 항 우선, 없으면 그 조의 항들)."""
+    cites = [m.group(0) for m in _RX_CITED_PATH.finditer(question or "")]
+    if not cites:
+        return []
+    exact: list[str] = []
+    inside: list[str] = []
+    for c in clauses or []:
+        path = _clause_path(c)
+        if not path:
+            continue
+        rels = {clause_path_relation(w, path) for w in cites}
+        if "exact" in rels and path not in exact:
+            exact.append(path)
+        elif "inside" in rels and path not in inside:
+            inside.append(path)
+    return exact or inside
+
+
 def answer_requests(
     *,
     review_focus: str,
@@ -498,7 +526,29 @@ def answer_requests(
         topic = next(
             (t for t in REQUEST_TOPICS if t.question_rx.search(question)), None,
         )
-        found = _find_clauses(topic, clauses) if topic else []
+        # 사용자가 조항번호를 지목했으면 그 조항이 먼저다 — 주제 낱말로 찾은 조항은 보조다.
+        # 실측(2026-11-02 Norden): "제13.3조(계약 종료 후 후속 조치)" 가 낱말 검색으로 제15.2조(제재 준수)에
+        # 연결돼 "현재 문언으로 커버됩니다" 로 답변됐다.
+        cited = _cited_clauses(question, clauses)
+        found = cited or (_find_clauses(topic, clauses) if topic else [])
+        if cited:
+            cited_related = [
+                cr for cr in open_findings
+                if any(clause_path_relation(p, str(cr.get("display_path") or "")) for p in cited)
+            ]
+            if cited_related:
+                out.append(RequestAnswer(
+                    index=index, question=question, verdict=VERDICT_SUPPLEMENT,
+                    topic=(topic.key if topic else ""), clauses=cited,
+                    rewrite_needed=True,
+                    related_finding_ids=[str(r.get("clause_id") or "") for r in cited_related[:5]],
+                    reason=(
+                        "관련 조항은 있으나 보완이 필요한 점이 확인되었습니다: "
+                        + "; ".join(_norm(r.get("issue_title") or r.get("clause_title"))
+                                    for r in cited_related[:3])
+                    ),
+                ))
+                continue
 
         # 다른 언어본을 실제로 받지 않았으면 일치 여부는 판단할 수 없다.
         if _RX_MULTILINGUAL_TOPIC.search(question) and not other_language_versions_available:

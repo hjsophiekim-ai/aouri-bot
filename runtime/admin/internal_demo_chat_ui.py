@@ -193,6 +193,48 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
     .clauseTagRow { display:flex; align-items:center; gap: 6px; flex-wrap: wrap; }
     .lawList { margin-top: 8px; color: var(--muted); font-size: 12px; }
 
+    /* [계약 조항 좌우 비교, 2026-11-02] meta.change_set(변경추적본에서 읽은 같은 데이터)을 그린다. */
+    .csTop { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fff; }
+    .csVerdict { font-weight: 900; font-size: 15px; }
+    .csCounts { display:flex; gap:6px; flex-wrap:wrap; margin: 8px 0; }
+    .csCnt { font-size: 12px; font-weight: 800; padding: 4px 10px; border-radius: 999px; border: 1.5px solid var(--line); }
+    .csWarn { margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; font-size: 12px; white-space: pre-wrap; }
+    .csWarn.draft { background: #fef2f2; border-color: #fca5a5; color: #991b1b; font-weight: 800; }
+    .csSecTitle { font-weight: 900; margin: 16px 0 6px 0; font-size: 14px; }
+    .csCard { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #fff; margin-bottom: 12px; }
+    .csCard.high { border-left: 5px solid #c00000; }
+    .csHead { display:flex; gap:6px; align-items:center; flex-wrap: wrap; }
+    .csHead .csClause { font-weight: 900; }
+    .csIssue { color: #374151; font-size: 13px; margin-top: 4px; }
+    .csGrid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .csCol { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; background: #fafafa; min-width: 0; }
+    .csLbl { font-size: 12px; font-weight: 800; color: #374151; margin-bottom: 6px; display:flex; justify-content: space-between; align-items:center; gap: 6px; flex-wrap: wrap; }
+    .csText { white-space: pre-wrap; word-break: break-word; line-height: 1.6; font-size: 13px; color: #111827; }
+    .csText del { color: #c00000; text-decoration: line-through; text-decoration-thickness: 2px; }
+    .csText ins { color: #c00000; text-decoration: underline; text-decoration-thickness: 2px; }
+    .csText .chg { background: #fef9c3; }
+    .csMk { font-size: 10px; font-weight: 900; border-radius: 4px; padding: 0 3px; margin: 0 2px; vertical-align: 1px; text-decoration: none; display: inline-block; }
+    .csMk.d { background: #fee2e2; color: #991b1b; }
+    .csMk.a { background: #c00000; color: #fff; }
+    .csCtxBtn { border: 1px dashed #9ca3af; background: #fff; color: #4b5563; border-radius: 6px; font-size: 11px; padding: 0 6px; cursor: pointer; margin: 0 2px; }
+    .csSeg { display:inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .csSeg button { border: 0; background: #fff; font-size: 11px; padding: 3px 8px; cursor: pointer; }
+    .csSeg button.on { background: #111827; color: #fff; }
+    .csWhy { margin-top: 10px; display:grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; }
+    .csWhy > div { background: #f8fafc; border-radius: 10px; padding: 8px 10px; }
+    .csWhy b { display:block; font-size: 12px; margin-bottom: 4px; }
+    .csWhy ul { margin: 0; padding-left: 18px; }
+    .csUnd { margin-top: 8px; font-size: 12px; color: #991b1b; font-weight: 700; }
+    .csReq { font-size: 13px; border-collapse: collapse; width: 100%; }
+    .csReq td { border-top: 1px solid #e5e7eb; padding: 6px 4px; vertical-align: top; }
+    .csSt { font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 999px; white-space: nowrap; display:inline-block; }
+    .csSt.s0 { background:#dcfce7; color:#166534; } .csSt.s1 { background:#fef9c3; color:#854d0e; }
+    .csSt.s2 { background:#fee2e2; color:#991b1b; } .csSt.s3 { background:#e0e7ff; color:#3730a3; }
+    .csConf li { margin-bottom: 6px; font-size: 13px; }
+    @media (max-width: 760px) {
+      .csGrid, .csWhy { grid-template-columns: 1fr; }
+    }
+
     .composer {
       padding: 12px 14px;
       border-top: 1px solid var(--line);
@@ -350,10 +392,35 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
               <div class="meta" id="resultAnalyzeHint"></div>
             </div>
 
-            <div style="margin-top:12px;" id="briefPanelWrap" hidden>
-              <div class="badge" style="margin-bottom:8px;">검토 결과 (사업팀 전달본)</div>
-              <div id="briefPanel" style="font-size:13px;line-height:1.6;"></div>
+            <div style="margin-top:12px;" id="csPanel" hidden>
+              <div class="csTop">
+                <div class="csVerdict" id="csVerdict">-</div>
+                <div class="csCounts" id="csCounts"></div>
+                <div class="row" style="gap:8px;">
+                  <button class="btn btnPrimary" id="btnCsRedline" onclick="downloadTracked('redline')">변경추적본 다운로드</button>
+                  <button class="btn btnPrimary" id="btnCsClean" onclick="downloadTracked('clean')">클린본 다운로드</button>
+                </div>
+                <div id="csWarns"></div>
+              </div>
+              <div id="csRequests"></div>
+              <div class="csSecTitle" id="csHighTitle">HIGH · 필수 수정</div>
+              <div id="csHigh"></div>
+              <details id="csOtherWrap" style="margin-top:8px;">
+                <summary class="csSecTitle" style="cursor:pointer;" id="csOtherTitle">MEDIUM · LOW 수정 제안</summary>
+                <div id="csOther" style="margin-top:8px;"></div>
+              </details>
+              <details id="csHeldWrap" style="margin-top:8px;" hidden>
+                <summary class="csSecTitle" style="cursor:pointer;color:#9a3412;" id="csHeldTitle">자동 적용 보류(원문 위치 미확정)</summary>
+                <div id="csHeld" style="margin-top:8px;"></div>
+              </details>
+              <div class="csSecTitle">수정하지 않는 확인사항</div>
+              <ul class="csConf" id="csConfirm"></ul>
             </div>
+
+            <details style="margin-top:12px;" id="briefPanelWrap" hidden>
+              <summary style="cursor:pointer;user-select:none;font-weight:600;">상세 검토의견서 (사업팀 전달본 — 요청 답변·쟁점·확인사항 전체)</summary>
+              <div id="briefPanel" style="font-size:13px;line-height:1.6;margin-top:8px;"></div>
+            </details>
 
             <details id="internalDetail" style="margin-top:12px;">
               <summary style="cursor:pointer;user-select:none;font-weight:600;">법무 상세 분석 (내부용 — 근거·법률 검토·자동 검증 기록)</summary>
@@ -390,8 +457,10 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
             </details>
 
             <div class="row" style="margin-top:12px; justify-content:flex-end;">
-              <button class="btn btnPrimary" id="btnConfirmRevision" onclick="confirmRevision('docx', 'brief')">검토 결과 다운로드(.docx)</button>
-              <button class="btn btnPrimary" id="btnConfirmRevisionPdf" onclick="confirmRevision('pdf', 'brief')">검토 결과 다운로드(.pdf)</button>
+              <button class="btn btnPrimary" id="btnConfirmRevision" onclick="confirmRevision('docx', 'brief')">검토의견서(.docx)</button>
+              <button class="btn btnPrimary" id="btnConfirmRevisionPdf" onclick="confirmRevision('pdf', 'brief')">검토의견서(.pdf)</button>
+              <button class="btn btnPrimary" id="btnTrackedDocx" onclick="downloadTracked('redline')">계약서 변경추적본(.docx)</button>
+              <button class="btn btnSecondary" id="btnCleanDocx" onclick="downloadTracked('clean')">계약서 클린본(.docx)</button>
               <button class="btn btnSecondary" id="btnConfirmDraft" onclick="confirmDraft()">초안 작성 확정</button>
             </div>
             <div class="meta" id="confirmNote"></div>
@@ -1658,10 +1727,193 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       renderClauseList(itemsAll);
       renderDealPanel(meta0);
       renderBriefPanel(meta0);
+      renderChangeSet(meta0);
       renderDealerRentalReflectedSection(itemsAll, ctx.contract_type);
     }
 
-    // [사업팀 전달본, 2026-10-30] 다운로드와 같은 줄(clause_meta.business_brief_sections)을 그대로 그린다.
+    // [계약 조항 좌우 비교, 2026-11-02] clause_meta.change_set — 변경추적본에서 읽은 조항 범위별 조각(= 유지, - 삭제, + 추가)을
+    // 그대로 그린다. 왼쪽은 원본 조항, 오른쪽은 같은 범위의 변경 표시(빨간 취소선+[삭제] / 빨간 밑줄+[추가]) 또는 수정 후 완성문.
+    var _csSeq = 0;
+    function csEsc(s) { return escapeHtml(String(s == null ? '' : s)); }
+    function csToggleCtx(id) {
+      const s = document.getElementById(id + 's'); const f = document.getElementById(id + 'f');
+      if (!s || !f) return;
+      const open = f.hidden; f.hidden = !open; s.hidden = open;
+    }
+    function csCtx(text, pos) {
+      const t = String(text || '');
+      if (t.length <= 260) return csEsc(t);
+      _csSeq += 1;
+      const id = 'csctx' + _csSeq;
+      const keep = 110;
+      const head = (pos === 'first') ? '' : t.slice(0, keep);
+      const tail = (pos === 'last') ? '' : t.slice(-keep);
+      const hidden = t.length - head.length - tail.length;
+      const btn = `<button class="csCtxBtn" onclick="csToggleCtx('${id}')">⋯ 변경 없는 문맥 ${hidden}자 펼치기</button>`;
+      const fold = `<button class="csCtxBtn" onclick="csToggleCtx('${id}')">접기</button>`;
+      return `<span id="${id}s">${csEsc(head)}${btn}${csEsc(tail)}</span><span id="${id}f" hidden>${csEsc(t)}${fold}</span>`;
+    }
+    function csPos(i, n) { return (i === 0) ? 'first' : ((i === n - 1) ? 'last' : 'mid'); }
+    function csLeftHtml(segs) {
+      return segs.map(function (sg, i) {
+        const op = String(sg[0]); const t = String(sg[1] || '');
+        if (op === '=') return csCtx(t, csPos(i, segs.length));
+        if (op === '-') return '<span class="chg">' + csEsc(t) + '</span>';
+        return '<span class="csMk a" title="오른쪽에 추가되는 위치">추가 위치</span>';
+      }).join('');
+    }
+    function csMarkedHtml(segs) {
+      return segs.map(function (sg, i) {
+        const op = String(sg[0]); const t = String(sg[1] || '');
+        if (op === '=') return csCtx(t, csPos(i, segs.length));
+        if (op === '-') return '<span class="csMk d">삭제</span><del>' + csEsc(t) + '</del>';
+        return '<span class="csMk a">추가</span><ins>' + csEsc(t) + '</ins>';
+      }).join('');
+    }
+    function csView(cid, mode) {
+      const m = document.getElementById(cid + '_marked'); const c = document.getElementById(cid + '_clean');
+      const bm = document.getElementById(cid + '_bm'); const bc = document.getElementById(cid + '_bc');
+      if (!m || !c) return;
+      m.hidden = (mode !== 'marked'); c.hidden = (mode === 'marked');
+      if (bm) bm.className = (mode === 'marked') ? 'on' : '';
+      if (bc) bc.className = (mode === 'marked') ? '' : 'on';
+    }
+    function csTag(risk) {
+      const r = String(risk || '').toUpperCase();
+      return r === 'HIGH' ? 'tagHigh' : (r === 'MEDIUM' ? 'tagMedium' : 'tagLow');
+    }
+    function csUniq(arr) { const o = []; for (const x of arr) { if (x && o.indexOf(x) < 0) o.push(x); } return o; }
+    function csCard(c) {
+      const fs = Array.isArray(c.findings) ? c.findings : [];
+      const segs = Array.isArray(c.segments) ? c.segments : [];
+      const cid = 'cs_' + c.id;
+      const risk = String(c.risk || '').toUpperCase();
+      const title = csEsc((c.paths || []).join(', ')) + (c.clause_title ? ' · ' + csEsc(c.clause_title) : '');
+      const issues = csUniq(fs.map(f => f.issue_title)).map(csEsc).join(' / ');
+      const why = csUniq(fs.map(f => f.why)).map(x => '<div>' + csEsc(x) + '</div>').join('');
+      const change = csUniq(fs.map(f => f.change)).map(x => '<div style="color:#4b5563;font-size:12px;margin-top:4px;">수정 내용: ' + csEsc(x) + '</div>').join('');
+      const todo = csUniq([].concat.apply([], fs.map(f => f.todo || []))).map(x => '<li>' + csEsc(x) + '</li>').join('')
+        + csUniq([].concat.apply([], fs.map(f => f.gaps || []))).map(x => '<li style="color:#9a3412;"><b>⚠ 법무 추가 검토:</b> ' + csEsc(x) + '</li>').join('');
+      const und = Array.isArray(c.undecided) && c.undecided.length
+        ? '<div class="csUnd">미확정 조건(서명 전 확정 필요): ' + csEsc(c.undecided.map(u => String(u).split(' — ')[0]).join(', ')) + '</div>' : '';
+      const after = csEsc(String(c.after || ''));
+      return `<div class="csCard ${risk === 'HIGH' ? 'high' : ''}" id="${cid}">
+        <div class="csHead"><span class="clauseTag ${csTag(risk)}">${csEsc(risk)}</span><span class="clauseTag">${csEsc(c.action || '')}</span>
+          <span class="csClause">${title}</span></div>
+        <div class="csIssue">${issues}</div>
+        <div class="csGrid">
+          <div class="csCol"><div class="csLbl">원본 계약서 조항<span style="font-weight:400;color:#6b7280;">노란 바탕 = 바뀌는 부분</span></div>
+            <div class="csText">${csLeftHtml(segs)}</div></div>
+          <div class="csCol"><div class="csLbl"><span>같은 조항 · 수정본</span>
+            <span class="csSeg"><button id="${cid}_bm" class="on" onclick="csView('${cid}','marked')">변경 표시</button><button id="${cid}_bc" onclick="csView('${cid}','clean')">수정 후 완성문</button></span></div>
+            <div class="csText" id="${cid}_marked">${csMarkedHtml(segs)}</div>
+            <div class="csText" id="${cid}_clean" hidden>${after}<div style="margin-top:6px;"><button class="btn btnSecondary" style="padding:0 6px;font-size:11px;" data-copy="${after}" onclick="copyBriefText(this)">복사</button></div></div>
+          </div>
+        </div>
+        <div class="csWhy"><div><b>왜 수정하는지</b>${why}${change}</div><div><b>사업팀이 할 일</b><ul>${todo}</ul></div></div>
+        ${und}
+      </div>`;
+    }
+    function renderChangeSet(meta0) {
+      const panel = document.getElementById('csPanel');
+      if (!panel) return;
+      const cs = (meta0 && meta0.change_set && typeof meta0.change_set === 'object') ? meta0.change_set : null;
+      const deep = (typeof analyzeState === 'undefined') || !analyzeState || analyzeState.deepDone === true;
+      const briefWrap = document.getElementById('briefPanelWrap');
+      if (!cs || !deep) {
+        panel.hidden = true;
+        if (briefWrap && cs === null && deep) briefWrap.open = true;
+        return;
+      }
+      _csSeq = 0;
+      const cards = Array.isArray(cs.cards) ? cs.cards : [];
+      const counts = cs.counts || {};
+      document.getElementById('csVerdict').innerText = String(cs.verdict || '검토 결과');
+      document.getElementById('csCounts').innerHTML = ['HIGH', 'MEDIUM', 'LOW'].map(function (k) {
+        return '<span class="csCnt clauseTag ' + csTag(k) + '">' + k + ' ' + Number(counts[k] || 0) + '건</span>';
+      }).join('') + '<span class="csCnt">변경 조항 ' + cards.length + '개</span>';
+      const warns = Array.isArray(cs.warnings) ? cs.warnings : [];
+      const src = cs.source || {};
+      const wl = warns.map(function (w) {
+        return '<div class="csWarn ' + (String(w).indexOf('협상 초안') === 0 ? 'draft' : '') + '">' + csEsc(w) + '</div>';
+      });
+      if (src.converted && src.notice) wl.push('<div class="csWarn">' + csEsc(src.notice) + '</div>');
+      document.getElementById('csWarns').innerHTML = wl.join('');
+      const top = cards.filter(c => String(c.risk).toUpperCase() === 'HIGH' || c.action === '필수 수정');
+      const rest = cards.filter(c => top.indexOf(c) < 0);
+      document.getElementById('csHigh').innerHTML = top.length ? top.map(csCard).join('')
+        : '<div class="meta" style="font-size:13px;">HIGH · 필수 수정 사항은 없습니다.' + (rest.length ? ' 협상 권고 ' + rest.length + '건은 아래에서 펼쳐 볼 수 있습니다.' : '') + '</div>';
+      document.getElementById('csOtherTitle').innerText = 'MEDIUM · LOW 수정 제안 (' + rest.length + '건) — 펼쳐 보기';
+      document.getElementById('csOther').innerHTML = rest.length ? rest.map(csCard).join('') : '<div class="meta">없음</div>';
+      const held = Array.isArray(cs.held) ? cs.held : [];
+      const hw = document.getElementById('csHeldWrap');
+      hw.hidden = held.length === 0;
+      document.getElementById('csHeldTitle').innerText = '자동 적용 보류 ' + held.length + '건 — 원문 위치를 확정하지 못해 파일에는 현재 문구 유지';
+      document.getElementById('csHeld').innerHTML = held.map(function (h) {
+        return '<div class="csCard"><div class="csHead"><span class="clauseTag ' + csTag(h.risk) + '">' + csEsc(h.risk) + '</span><span class="clauseTag">' + csEsc(h.action)
+          + '</span><span class="csClause">' + csEsc(h.path) + '</span></div><div class="csIssue">' + csEsc(h.issue_title) + '</div>'
+          + '<div class="csWarn">보류 사유: ' + csEsc(h.reason) + '</div>'
+          + '<div class="csWhy"><div><b>왜 수정하는지</b>' + csEsc(h.why) + '</div><div><b>사업팀이 할 일</b><ul>' + (h.todo || []).map(x => '<li>' + csEsc(x) + '</li>').join('') + '<li>법무가 수정 위치를 확정한 뒤 반영</li></ul></div></div></div>';
+      }).join('');
+      const conf = Array.isArray(cs.confirmations) ? cs.confirmations : [];
+      document.getElementById('csConfirm').innerHTML = conf.length ? conf.map(function (c) {
+        return '<li><span class="clauseTag ' + csTag(c.risk) + '">' + csEsc(c.risk) + '</span> <span class="clauseTag">' + csEsc(c.action) + '</span> <b>'
+          + csEsc(c.path) + '</b> ' + csEsc(c.issue_title) + (c.why ? '<div style="color:#4b5563;">' + csEsc(c.why) + '</div>' : '')
+          + ((c.todo || []).length ? '<div>할 일: ' + (c.todo || []).map(csEsc).join(' / ') + '</div>' : '') + '<div class="meta">계약 문구 변경 없음</div></li>';
+      }).join('') : '<li class="meta">없음</li>';
+      const reqs = Array.isArray(cs.requests) ? cs.requests : [];
+      const stc = { '반영됨': 's0', '부분 반영': 's1', '미반영': 's2', '사업 판단 필요': 's3' };
+      document.getElementById('csRequests').innerHTML = reqs.length ? '<div class="csSecTitle">요청사항 답변</div><table class="csReq">' + reqs.map(function (r) {
+        const links = cards.filter(c => (c.findings || []).some(f => (r.finding_ids || []).indexOf(f.finding_id) >= 0))
+          .map(c => `<a href="#cs_${c.id}" onclick="csOpen('cs_${c.id}')">${csEsc((c.paths || []).join(', '))}</a>`).join(', ');
+        return '<tr><td style="white-space:nowrap;">' + csEsc(r.index) + '</td><td><span class="csSt ' + (stc[r.status] || 's3') + '">' + csEsc(r.status || '-') + '</span></td><td><b>'
+          + csEsc(r.request) + '</b><div>' + csEsc(r.answer) + '</div><div class="meta">근거 조항: ' + csEsc((r.paths || []).join(', ') || '확인 필요') + (links ? ' · 수정: ' + links : '') + '</div></td></tr>';
+      }).join('') + '</table>' : '';
+      panel.hidden = false;
+      if (briefWrap) briefWrap.open = false;
+    }
+    function csOpen(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const det = el.closest('details');
+      if (det) det.open = true;
+    }
+
+    // [검토의견서, 2026-11-02] 다운로드와 같은 줄(clause_meta.business_brief_sections)을 그대로 그린다.
+    // b=수정 전 원문, a=수정 후 완성 문구, d=변경 표시([[op,text]] — 빨간 취소선=삭제, 빨간 밑줄=추가, 검정=유지).
+    // 긴 문구는 접어 두되 전체 열람·복사가 가능하다(자르지 않는다).
+    function briefLongBlock(label, raw) {
+      const tx = escapeHtml(String(raw || ''));
+      const head = '<div style="font-weight:600;font-size:12px;color:#374151;margin:6px 0 2px 12px;">' + label
+        + ' <button class="btn btnSecondary" style="padding:0 6px;font-size:11px;" data-copy="' + tx + '" onclick="copyBriefText(this)">복사</button></div>';
+      const body = '<div style="white-space:pre-wrap;margin-left:24px;">' + tx + '</div>';
+      if (String(raw || '').length <= 400) return head + body;
+      return head + '<details style="margin-left:24px;"><summary style="cursor:pointer;color:#5b7086;">'
+        + escapeHtml(String(raw).slice(0, 200)) + ' (전체 보기)</summary>' + body + '</details>';
+    }
+    function briefDiffBlock(json) {
+      let segs = [];
+      try { segs = JSON.parse(String(json || '[]')); } catch (_) { segs = []; }
+      const parts = segs.map(function (sg) {
+        const op = String(sg[0] || '='); const t = escapeHtml(String(sg[1] || ''));
+        if (op === '-') return '<span style="color:#c00000;text-decoration:line-through;">' + t + '</span>';
+        if (op === '+') return '<span style="color:#c00000;text-decoration:underline;">' + t + '</span>';
+        return '<span style="color:#111827;">' + t + '</span>';
+      });
+      const total = segs.reduce(function (n, sg) { return n + String(sg[1] || '').length; }, 0);
+      const head = '<div style="font-weight:600;font-size:12px;color:#374151;margin:6px 0 2px 12px;">변경 표시 (빨간 취소선 = 삭제, 빨간 밑줄 = 추가)</div>';
+      const body = '<div style="white-space:pre-wrap;margin-left:24px;border-left:3px solid #c00000;padding-left:8px;">' + parts.join('') + '</div>';
+      if (total <= 600) return head + body;
+      return head + '<details open><summary style="cursor:pointer;color:#5b7086;margin-left:24px;">접기/펼치기</summary>' + body + '</details>';
+    }
+    function copyBriefText(btn) {
+      const ta = document.createElement('textarea');
+      ta.innerHTML = btn.getAttribute('data-copy') || '';
+      const plain = ta.value;
+      if (navigator.clipboard) { navigator.clipboard.writeText(plain); }
+      btn.innerText = '복사됨';
+      setTimeout(function () { btn.innerText = '복사'; }, 1500);
+    }
     function renderBriefPanel(meta0) {
       const wrap = document.getElementById('briefPanelWrap');
       const el = document.getElementById('briefPanel');
@@ -1669,16 +1921,27 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       if (!wrap || !el) return;
       const secs = (meta0 && Array.isArray(meta0.business_brief_sections)) ? meta0.business_brief_sections : null;
       if (!secs || secs.length === 0) { wrap.hidden = true; el.innerHTML = ''; if (det) det.open = true; return; }
+      // 1차(규칙만) 결과로 검토의견서를 그리지 않는다 — 요청 답변·수정안은 정밀 검토(조항 지목 요청 직접 검토)가 정한다.
+      // 1차 결과를 보여 주면 "해당 조항 없음"·"현재 문언으로 커버" 같은 미확정 답이 결론처럼 보인다(2026-11-02 실측).
+      if (typeof analyzeState !== 'undefined' && analyzeState && analyzeState.deepDone !== true) {
+        el.innerHTML = '<div style="color:#5b7086;">정밀 검토가 끝나면 검토의견서(요청 답변·쟁점별 수정 전/후)가 여기에 표시됩니다.</div>';
+        wrap.hidden = false;
+        return;
+      }
       const out = [];
       for (const sec of secs) {
-        out.push('<div style="font-weight:700;margin:12px 0 4px 0;">' + escapeHtml(String(sec[0] || '')) + '</div>');
+        out.push('<div style="font-weight:700;margin:14px 0 4px 0;font-size:15px;">' + escapeHtml(String(sec[0] || '')) + '</div>');
         for (const row of (sec[1] || [])) {
           const st = String(row[0] || 'p');
-          const tx = escapeHtml(String(row[1] || ''));
-          const alert = (tx.indexOf('법무 추가 확인 중') >= 0 || tx.indexOf('미확정') === 0);
-          if (st === 'h') out.push('<div style="font-weight:600;margin-top:6px;">' + tx + '</div>');
+          const raw = String(row[1] || '');
+          const tx = escapeHtml(raw);
+          const alert = (tx.indexOf('법무 추가 확인 중') >= 0 || tx.indexOf('미확정') === 0 || tx.indexOf('변경추적본 자동') === 0);
+          if (st === 'h') out.push('<div style="font-weight:700;margin-top:12px;padding-top:8px;border-top:1px solid #e5e7eb;">' + tx + '</div>');
           else if (st === 'k') out.push('<div style="font-weight:600;color:' + (alert ? 'var(--danger)' : 'inherit') + ';">' + tx + '</div>');
           else if (st === 'm') out.push('<div style="color:#5b7086;font-size:12px;margin-left:12px;">' + tx + '</div>');
+          else if (st === 'b') out.push(briefLongBlock('수정 전', raw));
+          else if (st === 'a') out.push(briefLongBlock('수정 후', raw));
+          else if (st === 'd') out.push(briefDiffBlock(raw));
           else if (st === 't') out.push('<div style="white-space:pre-wrap;color:#b45309;margin-left:24px;">' + tx + '</div>');
           else out.push('<div style="margin-left:' + (tx.indexOf('□') === 0 ? '12' : '0') + 'px;">' + tx + '</div>');
         }
@@ -1686,6 +1949,36 @@ INTERNAL_DEMO_CHAT_HTML = """<!doctype html>
       el.innerHTML = out.join('');
       wrap.hidden = false;
       if (det) det.open = false;
+    }
+
+    // [계약서 변경추적본·클린본, 2026-11-02] 원본 DOCX(또는 PDF 를 검증해 만든 DOCX 변환본)에 같은 수정안을 넣은 파일.
+    async function downloadTracked(kind) {
+      const clean = (kind === 'clean');
+      const label = clean ? '클린본' : '변경추적본';
+      const note = document.getElementById('confirmNote');
+      if (!ctx.session_id) { note.innerText = '세션이 없어 계약서 파일을 만들 수 없습니다.'; return; }
+      note.innerText = label + '을 만드는 중입니다...';
+      try {
+        const res = await fetch(clean ? '/api/revision/download_clean' : '/api/revision/download_redline', {
+          method: 'POST', headers: {'Content-Type': 'application/json; charset=utf-8'},
+          body: JSON.stringify({ session_id: ctx.session_id })
+        });
+        if (!res.ok) {
+          let msg = label + ' 생성 실패 (status ' + res.status + ')';
+          try { const ej = await res.json(); if (ej && ej.error) msg += ': ' + ej.error; } catch (_) {}
+          note.innerText = msg; return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = clean ? 'contract_clean.docx' : 'contract_tracked_changes.docx';
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        note.innerText = label + ' 다운로드를 시작했어요.';
+      } catch (e) {
+        note.innerText = label + ' 생성 실패';
+      }
     }
 
     // [거래 전체 판단 · 요청 답변, 2026-10-30] DOCX/PDF 의 0-1·0-3절과 같은 데이터(clause_meta)를 그린다.

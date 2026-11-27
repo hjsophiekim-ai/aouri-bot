@@ -37,6 +37,7 @@ from typing import Any
 from runtime.ai.enhance import _try_json
 from runtime.ai.http_openai_compatible_provider import build_messages
 from runtime.ai.provider import AIProvider, AIRequest
+from runtime.review.clause_label import clause_path_relation
 from runtime.review.senior_counsel_pass import (
     TOPIC_UNKNOWN,
     classify_topic,
@@ -639,16 +640,27 @@ def link_clauses_to_issues(
         scores: dict[str, float] = {}
 
         if issue.cited_clause_paths:
-            wanted = {p.replace(" ", "") for p in issue.cited_clause_paths}
+            # 번호로 비교한다 — "제6.5조"(사용자) 와 "Article 6.5"(영문 계약) 는 같은 조항이다.
+            # 정확히 같은 조항이 있으면 그것만, 없으면 지목 범위 안의 하위 항(제13조 → 13.1~13.3),
+            # 그것도 없으면 지목 항을 품은 상위 조항을 쓴다. 숫자 접두어("1"↔"13.1")로는 잇지 않는다.
+            by_rel: dict[str, list[str]] = {"exact": [], "inside": [], "contains": []}
             for c in chunks:
-                dp = str(_clause_attr(c, "display_path") or "").replace(" ", "")
-                if not dp:
+                dp = str(_clause_attr(c, "display_path") or "")
+                cid = str(_clause_attr(c, "clause_id") or "")
+                if not dp or not cid:
                     continue
-                if any(dp == w or dp.startswith(w) or w.startswith(dp) for w in wanted):
-                    cid = str(_clause_attr(c, "clause_id") or "")
-                    if cid and cid not in linked:
-                        linked.append(cid)
-                        scores[cid] = 10.0  # 사용자가 직접 지목한 조항이 최우선 anchor
+                rels = {clause_path_relation(w, dp) for w in issue.cited_clause_paths}
+                for rel in ("exact", "inside", "contains"):
+                    if rel in rels:
+                        by_rel[rel].append(cid)
+                        break
+            for rel in ("exact", "inside", "contains"):
+                if by_rel[rel]:
+                    for cid in by_rel[rel]:
+                        if cid not in linked:
+                            linked.append(cid)
+                            scores[cid] = 10.0  # 사용자가 직접 지목한 조항이 최우선 anchor
+                    break
 
         if not linked and bodies:
             # 검색어는 쟁점 문장 전체가 아니라 retrieval용으로 뽑힌
@@ -877,15 +889,15 @@ def build_user_request_coverage(
             # finding을 이 질문의 답으로 삼으면 안 된다.
             if _topic_conflict(cr):
                 return None
-            if dp and any(dp.startswith(w) or w.startswith(dp) for w in cited_norm):
+            if dp and any(clause_path_relation(w, dp) for w in issue.cited_clause_paths):
                 return (0, 10.0)
             if cid in issue.relevant_clause_ids:
                 return (1, issue.clause_link_scores.get(cid, 1.0))
             if dp:
                 for w, sc in path_score.items():
-                    if dp.startswith(w) or w.startswith(dp):
+                    if clause_path_relation(w, dp):
                         return (1, sc)
-                if any(dp.startswith(w) or w.startswith(dp) for w in linked_norm):
+                if any(clause_path_relation(w, dp) for w in linked_norm):
                     return (1, 1.0)
             # 키워드 매칭은 AI가 의미 정규화한 쟁점에서만 허용한다 — fallback
             # 경로의 원시 토큰으로 매칭하면 "공동 브랜드 사용" 요청이 "공동

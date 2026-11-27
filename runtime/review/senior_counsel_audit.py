@@ -573,6 +573,12 @@ def _semantic_ok(cr: dict[str, Any], index: list[ClauseRef], audit: _Audit) -> b
         return True
     topics = _title_topics(cr)
     original = str(cr.get("original_text") or "")
+    # 주제어 대조는 국문 문형이다. 영문 조항에 국문 주제어가 없는 것은 "다른 조항 얘기" 의 증거가 아니다 — 판단하지 못하는
+    # 것으로 지우지 않는다(2026-11-02 Norden: 제10.1조 제3자 권리침해 면책, 제9.x조 책임제한 지적이 전부 여기서 지워졌다).
+    _latin = sum(1 for ch in original if ch.isascii() and ch.isalpha())
+    _hangul = sum(1 for ch in original if "가" <= ch <= "힣")
+    if _latin > 3 * max(1, _hangul):
+        return True
     if not topics or not original.strip() or any(t.key in ("tax", "notice") for t in topics):
         return True
     # 제목이 여러 주제를 말하면("무과실 하자 손해배상") 그중 하나라도 조항에 있으면 된다.

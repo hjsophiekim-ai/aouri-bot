@@ -103,6 +103,11 @@ _ROW_FIELDS = (("judgment", "판단"), ("basis", "근거"), ("existing_protectio
 
 def request_row_lines(r: dict[str, Any]) -> list[Line]:
     """거래 판단이 답한 요청 한 건 — 판단/근거/기존 보호/남은 위험/필요 조치."""
+    if r.get("answer_format") == "flow":
+        # 거래 흐름 선검증의 답(2026-11-09): 근거 조항 → 원문상 결론 → 수정 또는 유지 이유 → 추가 확인사항
+        from runtime.review.deal_flow import request_row_lines as _flow_lines
+
+        return _flow_lines(r)
     text = _s(r.get("original_user_text"))
     head, *details = text.split("\n")
     tone = {"수정 필요": "high", "사실관계 추가확인": "medium", "적정": "low"}.get(_s(r.get("review_status")), "")
@@ -143,7 +148,12 @@ def requests_complete(coverage: list[dict[str, Any]] | None) -> bool:
     rows = [r for r in coverage or [] if isinstance(r, dict) and r.get("source") == "deal_request"]
     if not rows:
         return True
-    return all(r.get("substantive", True) and all(_s(r.get(k)) for k, _ in _ROW_FIELDS) for r in rows)
+    def _done(r: dict[str, Any]) -> bool:
+        if r.get("answer_format") == "flow":
+            return all(_s(r.get(k)) for k in ("basis", "judgment", "required_action"))
+        return bool(r.get("substantive", True)) and all(_s(r.get(k)) for k, _ in _ROW_FIELDS)
+
+    return all(_done(r) for r in rows)
 
 
 def _won(v: Any) -> str:

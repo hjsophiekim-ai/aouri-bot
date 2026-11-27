@@ -306,6 +306,15 @@ def _clause_identity_key(issue: ReviewIssue) -> tuple[str, str, str] | None:
     return (issue.article_number, issue.paragraph_number, issue.item_number)
 
 
+_RX_REQUEST_FINDING = re.compile(r"^rq(\d+)(?:_\d+)?_")
+
+
+def _request_key(clause_id: str | None) -> str:
+    """조항 지목 요청 검토 finding(rq{요청번호}_{수정번호}_…)의 요청 키 — 아니면 ""."""
+    m = _RX_REQUEST_FINDING.match(str(clause_id or ""))
+    return f"rq:{m.group(1)}" if m else ""
+
+
 def _merge_same_clause_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
     """Merge findings anchored on the exact same (article, paragraph, item)
     identity into one representative.
@@ -338,8 +347,12 @@ def _merge_same_clause_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
         # 흡수돼 사라졌다(2026-10-01 실측).
         # 거래 재구성 package(sp_ 협찬·tx_ 연구)와 상호참조 지적(xref_)도 같다 — 위치가 같다는 이유로 다른 지적
         # (예: 같은 항의 개인정보 기본점검)에 합쳐져 "대가로 받은 라이선스의 별도 승인 충돌" 이 사라졌다(2026-10-21).
+        # 조항 지목 요청 검토(rq*)는 요청마다 원문 대조로 따로 판단·검증한 쟁점이다 — 같은 항에 붙은 다른 요청의 지적
+        # (4.1 의 'dealer supply price 정의' 와 'wind-down 기간 로열티')을 합치면 한 쟁점이 검토의견서에서 사라진다(2026-11-03).
+        # 같은 요청의 여러 수정은 아래 deduplicate_issues 가 요청 단위로 묶는다.
         if issue.is_counsel_agent or issue.is_construction_checklist \
-                or str(issue.clause_id or "").startswith(("ac_", "sp_", "tx_", "xref_", "deal_")):
+                or str(issue.clause_id or "").startswith(("ac_", "sp_", "tx_", "xref_", "deal_")) \
+                or _request_key(issue.clause_id):
             standalone.append(issue)
             continue
         key = _clause_identity_key(issue)
@@ -398,7 +411,9 @@ def deduplicate_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
     _SEV_ORDER = {"HIGH": 2, "MEDIUM": 1, "LOW": 0}
 
     for issue in issues:
-        key = issue.issue_title.strip()
+        # 조항 지목 요청 검토는 요청 하나가 쟁점 하나 — 제목이 같아도 다른 요청과 합치지 않고, 같은 요청의 여러 수정
+        # (13.3 신설 + 4.1 로열티 존속)은 한 쟁점으로 묶는다. 대표는 같은 등급이면 먼저 나온 것(요청이 지목한 조항).
+        key = _request_key(issue.clause_id) or issue.issue_title.strip()
         if key not in seen:
             seen[key] = issue
         else:
